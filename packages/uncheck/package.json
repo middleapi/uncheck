@@ -1,0 +1,47 @@
+{
+  "name": "uncheck",
+  "type": "module",
+  "version": "0.0.1",
+  "description": "Internal types and utilities shared across the Standard Server ecosystem",
+  "license": "MIT",
+  "funding": [
+    "https://github.com/sponsors/dinwwwh",
+    "https://opencollective.com/middleapi"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/middleapi/uncheck.git",
+    "directory": "packages/uncheck"
+  },
+  "keywords": [
+    "uncheck",
+    "unified check command",
+    "oxc",
+    "oxlint",
+    "oxfmt",
+    "tsc",
+    "typecheck"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "exports": {
+      "./package.json": "./package.json",
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      }
+    }
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "type:check": "tsc -b"
+  }
+}
