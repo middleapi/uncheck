@@ -17,7 +17,7 @@ interface Sponsor {
   /** Tagline, present on sponsors that bought an ad slot. */
   description?: string
   /** Brand tint behind the ad card, both themes required together. */
-  background?: { light: string, dark: string }
+  background?: { light: string; dark: string }
   /** 1-based ad-grid position the sponsor bought. */
   slot?: number
   [key: string]: unknown
@@ -44,8 +44,7 @@ async function findReadmes(dir: string): Promise<string[]> {
       }
 
       subdirPromises.push(findReadmes(fullPath))
-    }
-    else if (entry.isFile() && entry.name === README_FILE_NAME) {
+    } else if (entry.isFile() && entry.name === README_FILE_NAME) {
       result.push(fullPath)
     }
   }
@@ -65,7 +64,7 @@ function escapeHtml(value: string): string {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;')
+    .replaceAll("'", '&#39;')
 }
 
 function getTierImageSizeAndColumns(tierLevel: number, tierLevels: number[]): [columns: number, imageSize: number] {
@@ -94,7 +93,9 @@ function buildSlotCards(slotSponsors: Sponsor[]): string[] {
     const description = escapeHtml(sponsor.description ?? '')
 
     lines.push('  <tr>')
-    lines.push(`   <td width="2000"><a href="${escapeHtml(sponsor.link)}" target="_blank" rel="${relAttribute(sponsor)}" title="${description}"><img src="${escapeHtml(sponsor.avatar)}" width="64" align="left" hspace="12" alt="${name}"/><b>${name}</b></a><br /><sub>${description}</sub></td>`)
+    lines.push(
+      `   <td width="2000"><a href="${escapeHtml(sponsor.link)}" target="_blank" rel="${relAttribute(sponsor)}" title="${description}"><img src="${escapeHtml(sponsor.avatar)}" width="64" align="left" hspace="12" alt="${name}"/><b>${name}</b></a><br /><sub>${description}</sub></td>`,
+    )
     lines.push('  </tr>')
   }
 
@@ -110,9 +111,7 @@ function buildSponsorsSection(sponsors: Sponsor[]): string {
 
   // Slot sponsors are featured as cards up top; the tier tables below carry
   // everyone else so nobody appears twice.
-  const slotSponsors = activeSponsors
-    .filter(sponsor => sponsor.slot !== undefined)
-    .sort((a, b) => a.slot! - b.slot!)
+  const slotSponsors = activeSponsors.filter(sponsor => sponsor.slot !== undefined).sort((a, b) => a.slot! - b.slot!)
   const tieredSponsors = activeSponsors.filter(sponsor => sponsor.slot === undefined)
 
   const groupedSponsors = new Map<number, Sponsor[]>()
@@ -164,7 +163,9 @@ function buildSponsorsSection(sponsors: Sponsor[]): string {
       const displayName = sponsor.name ?? sponsor.login
       const escapedName = escapeHtml(displayName)
 
-      lines.push(`   <td align="center"><a href="${escapeHtml(href)}" target="_blank" rel="${relAttribute(sponsor)}" title="${escapedName}"><img src="${escapeHtml(sponsor.avatar)}" width="${imageSize}" alt="${escapedName}"/><br />${escapedName}</a></td>`)
+      lines.push(
+        `   <td align="center"><a href="${escapeHtml(href)}" target="_blank" rel="${relAttribute(sponsor)}" title="${escapedName}"><img src="${escapeHtml(sponsor.avatar)}" width="${imageSize}" alt="${escapedName}"/><br />${escapedName}</a></td>`,
+      )
 
       const isRowEnd = (index + 1) % columns === 0
       const isLast = index === tierSponsors.length - 1
@@ -215,13 +216,11 @@ async function main(): Promise<void> {
   }
 
   // Links arrive with their tracking params already baked in upstream.
-  const sponsors = await response.json() as Sponsor[]
+  const sponsors = (await response.json()) as Sponsor[]
   const readmeFiles = await findReadmes(ROOT_DIR)
   const replacement = buildSponsorsSection(sponsors)
 
-  const readmeContents = await Promise.all(
-    readmeFiles.map(readmePath => readFile(readmePath, 'utf8')),
-  )
+  const readmeContents = await Promise.all(readmeFiles.map(readmePath => readFile(readmePath, 'utf8')))
 
   const writePromises: Promise<void>[] = []
   let updatedCount = 0
@@ -239,7 +238,7 @@ async function main(): Promise<void> {
   console.log(`Updated sponsors section in ${updatedCount} README files.`)
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(error)
   process.exitCode = 1
 })

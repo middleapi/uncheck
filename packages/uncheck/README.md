@@ -5,7 +5,7 @@
       <img alt="codecov" src="https://codecov.io/gh/middleapi/uncheck/branch/main/graph/badge.svg">
   </a>
   <a href="https://www.npmjs.com/package/uncheck">
-    <img alt="weekly downloads" src="https://img.shields.io/npm/dw/%40standard-server%2Fshared?logo=npm" />
+    <img alt="weekly downloads" src="https://img.shields.io/npm/dw/uncheck?logo=npm" />
   </a>
   <a href="https://app.codspeed.io/middleapi/uncheck?utm_source=badge">
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed" />
@@ -22,6 +22,53 @@
 </div>
 
 `uncheck` is a single command that lints, formats, and type checks your project. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types — and runs them together, so humans and coding agents have one command to remember instead of three.
+
+## Usage
+
+```sh
+npm i -D uncheck
+
+npx uncheck                 # oxlint, oxfmt --check and tsc for the whole project
+npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
+npx uncheck src/app         # forward paths or globs to oxlint and oxfmt, like you would call them directly
+npx uncheck --tsc=false     # skip a step; --oxlint, --oxfmt and --tsc are auto-detected by default
+npx uncheck --oxlint        # require a step: fail when it cannot run instead of skipping it
+```
+
+Steps run in order and every step runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any step fails.
+
+| Step     | Runs when                             | Command                                                        |
+| -------- | ------------------------------------- | -------------------------------------------------------------- |
+| `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [paths...]`                                    |
+| `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [paths...]`, or `oxfmt [paths...]` with `--fix` |
+| `tsc`    | at least one `tsconfig.json` is found | `tsc -b` for projects using references, `tsc -p` for the rest  |
+
+Tools are resolved from `node_modules` the way Node does, so the versions your project already depends on are used. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped.
+
+### Typecheck in monorepos
+
+Every `tsconfig.json` in the project is discovered (through `git ls-files`, so ignored folders are skipped) and its `references` are followed recursively to build the project graph:
+
+- Projects that use `references`, or are referenced, are built with `tsc -b` on the roots of that graph. `tsc` builds the referenced projects first, in dependency order, exactly like running `tsc -b` in each package.
+- Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p`.
+- Circular references are reported as an error.
+
+When paths are given, `tsc` runs only the projects it would actually check for them. A file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. A directory, or the static prefix of a glob, selects the projects whose inputs can live under it. Files `tsc` never checks, such as Markdown or CSS, select no project.
+
+## Agent hooks
+
+```sh
+npx uncheck hooks                          # pick agents interactively
+npx uncheck hooks claude cursor            # or name them: claude, codebuddy, cursor, windsurf, copilot
+```
+
+This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. After every file the agent edits, the hook runs:
+
+```sh
+uncheck --fix --hook
+```
+
+through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). `--hook` reads the agent's payload from stdin, applies lint fixes and formatting to the edited files, typechecks the projects containing them, and prints the report on stderr. When problems remain, they are handed back to the agent as additional context so it can fix them right away (Claude Code and CodeBuddy), while the exit code stays 0 so no agent treats findings as a broken hook.
 
 ## Sponsors
 
