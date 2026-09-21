@@ -30,7 +30,6 @@
   "type": "module",
   "sideEffects": false,
   "scripts": {
-    "prepare": "unbuild --stub",
     "prepack": "unbuild"
   },
   "devDependencies": {
