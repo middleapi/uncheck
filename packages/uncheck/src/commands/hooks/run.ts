@@ -1,19 +1,18 @@
 import { stripVTControlCharacters } from 'node:util'
 import { Console, Effect, Predicate, Stdio, Stream } from 'effect'
-import { CliError, Command } from 'effect/unstable/cli'
+import { Command } from 'effect/unstable/cli'
 import { listChangedFiles } from '../../files'
-import { StopBlocked } from '../../errors'
-import { cwdFlag, fixFlag, requireFlag, runChecks, skipFlag } from '../uncheck'
+import { StopBlocked, userError } from '../../errors'
+import { cwdFlag, fixFlag, onlyFlag, requireFlag, runChecks, skipFlag } from '../uncheck'
 
 export const run = Command.make(
   'run',
-  { cwd: cwdFlag, fix: fixFlag, required: requireFlag, skipped: skipFlag },
+  { cwd: cwdFlag, fix: fixFlag, only: onlyFlag, required: requireFlag, skipped: skipFlag },
   Effect.fn(function* ({ cwd, ...settings }) {
     const stdio = yield* Stdio.Stdio
 
     if (yield* stdio.stdinIsTerminal) {
-      const userMessage = '`uncheck hooks run` expects the agent hook payload as JSON on stdin'
-      return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+      return yield* userError('`uncheck hooks run` expects the agent hook payload as JSON on stdin')
     }
 
     const payload = yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(

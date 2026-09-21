@@ -6,7 +6,7 @@ import { Argument, CliError, Command, Flag } from 'effect/unstable/cli'
 import { oxfmt } from '../checks/oxfmt'
 import { oxlint } from '../checks/oxlint'
 import { tsc } from '../checks/tsc'
-import { CheckFailed } from '../errors'
+import { CheckFailed, userError } from '../errors'
 import { listProjectFiles, resolvePaths } from '../files'
 import { bold, dim, green, red } from '../style'
 import { execute } from '../tool'
@@ -35,12 +35,57 @@ export const skipFlag = Flag.Literals('skip', CHECK_NAMES).pipe(
   Flag.withDescription('Skip a check even when it could run. Repeatable'),
 )
 
-export interface RunSettings {
-  readonly cwd: string
-  readonly fix: boolean
+export const onlyFlag = Flag.Literals('only', CHECK_NAMES).pipe(
+  Flag.atLeast(0),
+  Flag.withDescription('Run only this check and skip the others, for example the fast ones in a hook. Repeatable'),
+)
+
+export interface CheckSelection {
+  readonly only: ReadonlyArray<CheckName>
   readonly required: ReadonlyArray<CheckName>
   readonly skipped: ReadonlyArray<CheckName>
+}
+
+export interface RunSettings extends CheckSelection {
+  readonly cwd: string
+  readonly fix: boolean
   readonly allowUnmatched: boolean
+}
+
+export function selectionArgs({ only, required, skipped }: CheckSelection): ReadonlyArray<string> {
+  return [
+    ...only.map(name => `--only=${name}`),
+    ...required.map(name => `--require=${name}`),
+    ...skipped.map(name => `--skip=${name}`),
+  ]
+}
+
+export function validateSelection({
+  only,
+  required,
+  skipped,
+}: CheckSelection): Effect.Effect<void, CliError.UserError> {
+  const requiredButSkipped = required.find(name => skipped.includes(name))
+
+  if (requiredButSkipped !== undefined) {
+    return userError(`--require=${requiredButSkipped} and --skip=${requiredButSkipped} contradict each other.`)
+  }
+
+  const onlyButSkipped = only.find(name => skipped.includes(name))
+
+  if (onlyButSkipped !== undefined) {
+    return userError(`--only=${onlyButSkipped} and --skip=${onlyButSkipped} contradict each other.`)
+  }
+
+  const requiredButNotOnly = only.length > 0 ? required.find(name => !only.includes(name)) : undefined
+
+  if (requiredButNotOnly !== undefined) {
+    const onlyFlags = only.map(name => `--only=${name}`).join(' ')
+
+    return userError(`--require=${requiredButNotOnly} and ${onlyFlags} contradict each other.`)
+  }
+
+  return Effect.void
 }
 
 type CheckPlan =
@@ -48,13 +93,9 @@ type CheckPlan =
   | (CheckOutcome & { readonly status: 'skipped' | 'failed'; readonly reason: string })
 
 export const runChecks = Effect.fn(function* (paths: ReadonlyArray<string>, settings: RunSettings) {
-  const { fix, required, skipped, allowUnmatched } = settings
-  const contradiction = required.find(name => skipped.includes(name))
+  const { fix, only, required, skipped, allowUnmatched } = settings
 
-  if (contradiction !== undefined) {
-    const userMessage = `--require=${contradiction} and --skip=${contradiction} contradict each other.`
-    return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
-  }
+  yield* validateSelection(settings)
 
   const cwd = path.resolve(settings.cwd)
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
@@ -67,8 +108,9 @@ export const runChecks = Effect.fn(function* (paths: ReadonlyArray<string>, sett
     const resolved = yield* resolvePaths(paths, cwd, projectFiles)
 
     if (resolved.unmatched.length > 0 && !allowUnmatched) {
-      const userMessage = `No files match ${resolved.unmatched.join(', ')}. Pass --no-error-on-unmatched-pattern to run with whatever matched.`
-      return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+      return yield* userError(
+        `No files match ${resolved.unmatched.join(', ')}. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
+      )
     }
 
     if (resolved.files.length === 0) {
@@ -80,19 +122,25 @@ export const runChecks = Effect.fn(function* (paths: ReadonlyArray<string>, sett
   }
 
   const plans = yield* Effect.all(
-    CHECKS.map(({ name, plan }) =>
-      skipped.includes(name)
-        ? Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: `disabled with --skip=${name}` })
-        : plan({ cwd, fix, files, projectFiles }).pipe(
-            Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
-            Effect.catchTag('NothingToCheck', ({ reason }) =>
-              Effect.succeed<CheckPlan>({ name, status: required.includes(name) ? 'failed' : 'skipped', reason }),
-            ),
-            Effect.catchTag('CannotCheck', ({ reason }) =>
-              Effect.succeed<CheckPlan>({ name, status: 'failed', reason }),
-            ),
-          ),
-    ),
+    CHECKS.map(({ name, plan }) => {
+      const exclusion = skipped.includes(name)
+        ? `disabled with --skip=${name}`
+        : only.length > 0 && !only.includes(name)
+          ? 'not selected by --only'
+          : undefined
+
+      if (exclusion !== undefined) {
+        return Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: exclusion })
+      }
+
+      return plan({ cwd, fix, files, projectFiles }).pipe(
+        Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
+        Effect.catchTag('NothingToCheck', ({ reason }) =>
+          Effect.succeed<CheckPlan>({ name, status: required.includes(name) ? 'failed' : 'skipped', reason }),
+        ),
+        Effect.catchTag('CannotCheck', ({ reason }) => Effect.succeed<CheckPlan>({ name, status: 'failed', reason })),
+      )
+    }),
     { concurrency: 'unbounded' },
   )
 
@@ -173,6 +221,7 @@ export const uncheck = Command.make(
       Flag.withDefault(false),
       Flag.withDescription('Run with whatever matched instead of failing when a given path or pattern matches no file'),
     ),
+    only: onlyFlag,
     required: requireFlag,
     skipped: skipFlag,
     paths: Argument.String('paths').pipe(
