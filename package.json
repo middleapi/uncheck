@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "prepare": "simple-git-hooks",
-    "check": "uncheck",
-    "check:fix": "uncheck --fix",
+    "check": "pnpm exec --filter=./packages/uncheck unbuild --stub && uncheck",
+    "fix": "pnpm run check --fix",
     "test": "pnpm run -r test && vitest run",
     "test:coverage": "pnpm run -r test && vitest run --coverage",
     "bench": "vitest bench --run",
