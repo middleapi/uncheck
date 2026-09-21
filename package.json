@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "prepare": "simple-git-hooks && pnpm -r run build --stub",
+    "prepare": "simple-git-hooks",
     "check": "uncheck",
     "check:fix": "uncheck --fix",
     "test": "pnpm run -r test && vitest run",

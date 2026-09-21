@@ -30,14 +30,13 @@
   "type": "module",
   "sideEffects": false,
   "scripts": {
-    "build": "unbuild"
-  },
-  "dependencies": {
-    "@effect/platform-node": "^4.0.0-rc.116",
-    "effect": "^4.0.0-rc.116",
-    "jsonc-parser": "^3.3.1"
+    "prepare": "unbuild --stub",
+    "prepack": "unbuild"
   },
   "devDependencies": {
+    "@effect/platform-node": "^4.0.0-rc.116",
+    "effect": "^4.0.0-rc.116",
+    "jsonc-parser": "^3.3.1",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
     "typescript": "^7.0.2"
