@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { NodeServices } from '@effect/platform-node'
 import { Effect } from 'effect'
-import { fixture } from './__tests__/fixture'
-import { listProjectFiles, resolvePaths } from './files'
+import { fixture } from './fixture'
+import { listProjectFiles, resolvePaths } from '../src/files'
 
 const project = {
   '.gitignore': 'node_modules\ndist\n',

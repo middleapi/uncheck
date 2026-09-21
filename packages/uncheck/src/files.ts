@@ -1,6 +1,6 @@
 import type { PlatformError } from 'effect'
 import { posix } from 'node:path'
-import { Effect, FileSystem, Path, Stream } from 'effect'
+import { Effect, FileSystem, Path, Predicate, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
 export type ProjectFiles = Effect.Effect<
@@ -26,7 +26,7 @@ export function listProjectFiles(cwd: string): ProjectFiles {
 /**
  * The files changed since the last commit, relative to `cwd`: modified or staged tracked files plus
  * untracked ones, ignored files excluded. `undefined` outside a git repository or before the first
- * commit, which callers treat as "the whole project".
+ * commit, which callers treat as "everything under `cwd`".
  */
 export function listChangedFiles(
   cwd: string,
@@ -41,167 +41,157 @@ export function listChangedFiles(
 }
 
 export interface ResolvedPaths {
-  /** Matched files, relative to `cwd`, sorted and unique. */
   readonly files: ReadonlyArray<string>
-  /** Patterns that matched nothing. */
   readonly unmatched: ReadonlyArray<string>
 }
 
-/**
- * Turns the given paths into the project files they name, so every tool checks the same files.
- *
- * A file must exist, a directory expands to the project files below it, a glob is matched against
- * the project files, and `!pattern` drops matches. Files deleted from the working tree are dropped.
- */
-export function resolvePaths(
+/** Turns the given paths into the project files they name, so every tool checks the same files. */
+export const resolvePaths = Effect.fn(function* (
   patterns: ReadonlyArray<string>,
   cwd: string,
   projectFiles: ProjectFiles,
-): Effect.Effect<
-  ResolvedPaths,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const relative = (pattern: string) => toPosix(path.relative(cwd, path.resolve(cwd, pattern)))
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const relative = (pattern: string) => path.relative(cwd, path.resolve(cwd, pattern)).replaceAll('\\', '/')
 
-    const matched = new Set<string>()
-    const unmatched: string[] = []
-    let universe: ReadonlyArray<string> | undefined
+  const matched = new Set<string>()
+  const unmatched: string[] = []
+  let universe: ReadonlyArray<string> | undefined
 
-    for (const pattern of patterns) {
-      if (pattern.startsWith('!')) {
-        continue
-      }
-
-      const target = relative(pattern)
-
-      if (GLOB_CHARACTERS.test(target)) {
-        universe ??= yield* projectFiles
-        const hits = universe.filter(file => posix.matchesGlob(file, target))
-
-        if (hits.length === 0) {
-          unmatched.push(pattern)
-        }
-
-        for (const hit of hits) {
-          matched.add(hit)
-        }
-
-        continue
-      }
-
-      const kind = yield* fs.stat(path.resolve(cwd, pattern)).pipe(
-        Effect.map(info => info.type),
-        Effect.orElseSucceed(() => undefined),
-      )
-
-      if (kind === 'File') {
-        matched.add(target)
-        continue
-      }
-
-      if (kind === 'Directory') {
-        universe ??= yield* projectFiles
-        const inside = target === '' ? universe : universe.filter(file => file.startsWith(`${target}/`))
-
-        if (inside.length > 0) {
-          for (const file of inside) {
-            matched.add(file)
-          }
-
-          continue
-        }
-      }
-
-      unmatched.push(pattern)
+  for (const pattern of patterns) {
+    if (pattern.startsWith('!')) {
+      continue
     }
 
-    const excludes = patterns.filter(pattern => pattern.startsWith('!')).map(pattern => relative(pattern.slice(1)))
-    const excluded = (file: string) =>
-      excludes.some(exclude => file === exclude || file.startsWith(`${exclude}/`) || posix.matchesGlob(file, exclude))
+    const target = relative(pattern)
 
-    const files = yield* Effect.filter(
-      [...matched].filter(file => !excluded(file)),
-      file => fs.exists(path.resolve(cwd, file)).pipe(Effect.orElseSucceed(() => false)),
-      { concurrency: 'unbounded' },
-    )
+    if (GLOB_CHARACTERS.test(target)) {
+      universe ??= yield* projectFiles
+      const hits = universe.filter(file => posix.matchesGlob(file, target))
 
-    return { files: files.sort(), unmatched }
-  })
-}
-
-/** Characters that make a pattern a glob rather than a plain path. */
-const GLOB_CHARACTERS = /[*?[\]{}()]/
-
-/** Runs a git command in `cwd` and returns its NUL-separated output as a list, failing with the exit code. */
-function git(
-  cwd: string,
-  args: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError | number, ChildProcessSpawner.ChildProcessSpawner> {
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-
-      const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd, stdin: 'ignore', stderr: 'ignore' }))
-
-      const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
-      const exitCode = yield* handle.exitCode
-
-      if (exitCode !== 0) {
-        return yield* Effect.fail(exitCode)
+      if (hits.length === 0) {
+        unmatched.push(pattern)
       }
 
-      return stdout.split('\0').filter(file => file !== '')
-    }),
+      for (const hit of hits) {
+        matched.add(hit)
+      }
+
+      continue
+    }
+
+    const kind = yield* fs.stat(path.resolve(cwd, pattern)).pipe(
+      Effect.map(info => info.type),
+      Effect.orElseSucceed(() => undefined),
+    )
+
+    if (kind === 'File') {
+      matched.add(target)
+      continue
+    }
+
+    if (kind === 'Directory') {
+      universe ??= yield* projectFiles
+      const inside = target === '' ? universe : universe.filter(file => file.startsWith(`${target}/`))
+
+      if (inside.length > 0) {
+        for (const file of inside) {
+          matched.add(file)
+        }
+
+        continue
+      }
+    }
+
+    unmatched.push(pattern)
+  }
+
+  const excludes = patterns.filter(pattern => pattern.startsWith('!')).map(pattern => relative(pattern.slice(1)))
+  const excluded = (file: string) =>
+    excludes.some(exclude => file === exclude || file.startsWith(`${exclude}/`) || posix.matchesGlob(file, exclude))
+
+  const files = yield* Effect.filter(
+    [...matched].filter(file => !excluded(file)),
+    file => fs.exists(path.resolve(cwd, file)).pipe(Effect.orElseSucceed(() => false)),
+    { concurrency: 'unbounded' },
   )
+
+  return { files: files.sort(), unmatched }
+})
+
+const GLOB_CHARACTERS = /[*?[\]{}()]/
+
+export function ancestors(path: Path.Path, from: string): string[] {
+  const dirs = [path.resolve(from)]
+
+  for (let parent = path.dirname(dirs[0]!); parent !== dirs[dirs.length - 1]; parent = path.dirname(parent)) {
+    dirs.push(parent)
+  }
+
+  return dirs
 }
 
-/** The folders `tsc` itself never looks into. Hidden entries are skipped as well. */
+export const readJson = Effect.fn(
+  function* (file: string) {
+    const fs = yield* FileSystem.FileSystem
+    const text = yield* fs.readFileString(file)
+    const value: unknown = yield* Effect.try(() => JSON.parse(text))
+
+    return Predicate.isObject(value) ? value : undefined
+  },
+  Effect.orElseSucceed(() => undefined),
+)
+
+const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+
+  const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd, stdin: 'ignore', stderr: 'ignore' }))
+
+  const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
+  const exitCode = yield* handle.exitCode
+
+  if (exitCode !== 0) {
+    return yield* Effect.fail(exitCode)
+  }
+
+  return stdout.split('\0').filter(file => file !== '')
+}, Effect.scoped)
+
+/** The folders `tsc` itself never looks into. */
 const SKIPPED_DIRECTORIES = new Set(['node_modules', 'bower_components', 'jspm_packages'])
 
-function walk(
-  cwd: string,
-): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const root = path.resolve(cwd)
-    const found: string[] = []
+const walk = Effect.fn(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = path.resolve(cwd)
+  const found: string[] = []
 
-    const visit = (dir: string): Effect.Effect<void, PlatformError.PlatformError> =>
-      fs
-        .readDirectory(dir)
-        .pipe(
-          Effect.flatMap(names =>
-            Effect.forEach(names, name => visitEntry(dir, name), { concurrency: 16, discard: true }),
-          ),
-        )
+  const visit = Effect.fn(function* (dir: string): Effect.fn.Return<void, PlatformError.PlatformError> {
+    const names = yield* fs.readDirectory(dir)
 
-    const visitEntry = (dir: string, name: string): Effect.Effect<void, PlatformError.PlatformError> =>
-      Effect.gen(function* () {
-        if (name.startsWith('.') || SKIPPED_DIRECTORIES.has(name)) {
-          return
-        }
-
-        const full = path.join(dir, name)
-        const info = yield* fs.stat(full).pipe(Effect.orElseSucceed(() => undefined))
-
-        if (info?.type === 'Directory') {
-          yield* visit(full)
-        } else if (info?.type === 'File') {
-          found.push(toPosix(path.relative(root, full)))
-        }
-      })
-
-    yield* visit(root)
-
-    return found
+    yield* Effect.forEach(names, name => visitEntry(dir, name), { concurrency: 16, discard: true })
   })
-}
 
-function toPosix(target: string): string {
-  return target.replaceAll('\\', '/')
-}
+  const visitEntry = Effect.fn(function* (
+    dir: string,
+    name: string,
+  ): Effect.fn.Return<void, PlatformError.PlatformError> {
+    if (name.startsWith('.') || SKIPPED_DIRECTORIES.has(name)) {
+      return
+    }
+
+    const full = path.join(dir, name)
+    const info = yield* fs.stat(full).pipe(Effect.orElseSucceed(() => undefined))
+
+    if (info?.type === 'Directory') {
+      yield* visit(full)
+    } else if (info?.type === 'File') {
+      found.push(path.relative(root, full).replaceAll('\\', '/'))
+    }
+  })
+
+  yield* visit(root)
+
+  return found
+})

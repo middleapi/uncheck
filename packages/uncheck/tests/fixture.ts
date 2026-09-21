@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 export const TOOLS = ['oxlint', 'oxfmt', 'typescript'] as const
 
-const packageNodeModules = fileURLToPath(new URL('../../node_modules', import.meta.url))
+const packageNodeModules = fileURLToPath(new URL('../node_modules', import.meta.url))
 const fixtures: string[] = []
 
 afterAll(() => {
@@ -17,7 +17,7 @@ afterAll(() => {
 /**
  * Creates a throwaway project in the OS temp dir. Objects are written as JSON, the requested tools
  * are symlinked into `node_modules` so they resolve like a regular install, and config files are
- * kept out of the format step so tests only see the formatting issues they put in.
+ * kept out of the format check so tests only see the formatting issues they put in.
  */
 export function fixture(
   files: Record<string, string | object>,

@@ -28,16 +28,17 @@
 ```sh
 npm i -D uncheck   # Node 22 or newer
 
-npx uncheck                 # oxlint, oxfmt --check and tsc for the whole project
+npx uncheck                 # oxlint, oxfmt --check and tsc for everything under the current directory
 npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
 npx uncheck src/app         # check some files: paths, directories, globs and !exclusions
-npx uncheck --tsc=false     # skip a step; --oxlint, --oxfmt and --tsc are auto-detected by default
-npx uncheck --oxlint        # require a step: fail when it cannot run instead of skipping it
+npx uncheck --skip=tsc      # skip a check that would otherwise run
+npx uncheck --require=oxfmt # require a check: fail when it cannot run instead of skipping it
+npx uncheck --cwd packages/app   # run in another directory, paths are relative to it
 ```
 
-Steps run in order and every step runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any step fails.
+Checks run in order and every check runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any check fails.
 
-| Step     | Runs when                             | Command                                                        |
+| Check    | Runs when                             | Command                                                        |
 | -------- | ------------------------------------- | -------------------------------------------------------------- |
 | `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [files...]`                                    |
 | `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
@@ -70,7 +71,7 @@ This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settin
 uncheck hooks run --fix
 ```
 
-through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It checks the files changed since the last commit (modified, staged and untracked, the whole project outside git) with every step, applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
+through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It runs every check on the files changed since the last commit (modified, staged and untracked, everything under the directory outside git), applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
 
 Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched.
 

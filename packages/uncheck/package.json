@@ -29,20 +29,6 @@
   ],
   "type": "module",
   "sideEffects": false,
-  "exports": {
-    "./package.json": "./package.json",
-    ".": "./src/index.ts"
-  },
-  "publishConfig": {
-    "exports": {
-      "./package.json": "./package.json",
-      ".": {
-        "types": "./dist/index.d.mts",
-        "import": "./dist/index.mjs",
-        "default": "./dist/index.mjs"
-      }
-    }
-  },
   "scripts": {
     "build": "unbuild"
   },

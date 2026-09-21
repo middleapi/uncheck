@@ -5,8 +5,9 @@ import { stripVTControlCharacters } from 'node:util'
 import { NodeServices } from '@effect/platform-node'
 import { Console, Effect, Stdio, Stream } from 'effect'
 import { Command } from 'effect/unstable/cli'
-import { fixture } from './__tests__/fixture'
-import { CheckFailed, command, UncheckOptions } from './index'
+import { fixture } from './fixture'
+import { uncheck } from '../src/commands/uncheck'
+import { CheckFailed } from '../src/errors'
 
 interface RunResult {
   readonly result: 'ok' | 'blocked' | CheckFailed
@@ -15,7 +16,10 @@ interface RunResult {
   readonly stderr: string
 }
 
+/** Runs the CLI in `cwd`; the flag goes after the subcommand names so it lands on the command that runs. */
 async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): Promise<RunResult> {
+  const verbs = args[0] === 'hooks' ? 2 : 0
+  const argv = [...args.slice(0, verbs), '--cwd', cwd, ...args.slice(verbs)]
   const stdout: string[] = []
   const stderr: string[] = []
 
@@ -29,11 +33,10 @@ async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): P
   })
 
   const result = await Effect.runPromise(
-    Command.runWith(command, { version: '0.0.0' })(args).pipe(
+    Command.runWith(uncheck, { version: '0.0.0' })(argv).pipe(
       Effect.map(() => 'ok' as const),
       Effect.catchTag('CheckFailed', error => Effect.succeed(error)),
       Effect.catchTag('StopBlocked', () => Effect.succeed('blocked' as const)),
-      Effect.provideService(UncheckOptions, { cwd }),
       Effect.provideService(Console.Console, capture),
       Effect.provide(Stdio.layerTest({ stdin: Stream.make(new TextEncoder().encode(stdin)) })),
       Effect.provide(NodeServices.layer),
@@ -162,8 +165,12 @@ describe('uncheck', { timeout: 120_000 }, () => {
 
     expect(scoped.result).toBe('ok')
     expect(scoped.stdout).not.toContain('no-var')
-    expect(scoped.stdout).toContain('▶ oxlint packages/app/src/index.ts packages/app/tsconfig.json\n')
-    expect(scoped.stdout).toContain('▶ oxfmt --check packages/app/src/index.ts packages/app/tsconfig.json\n')
+    expect(scoped.stdout).toContain(
+      '▶ oxlint --no-error-on-unmatched-pattern packages/app/src/index.ts packages/app/tsconfig.json\n',
+    )
+    expect(scoped.stdout).toContain(
+      '▶ oxfmt --check --no-error-on-unmatched-pattern packages/app/src/index.ts packages/app/tsconfig.json\n',
+    )
     // The root project's inputs (src, scripts) do not reach into packages/app, so only app is built.
     expect(scoped.stdout).toContain('▶ tsc -b packages/app/tsconfig.json\n✔ tsc')
     expect(scoped.stdout).not.toContain('tsc -p tsconfig.json')
@@ -171,20 +178,20 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const single = await run(dir, ['--fix', 'scripts/hello.ts'])
 
     expect(single.result).toBe('ok')
-    expect(single.stdout).toContain('▶ oxlint --fix scripts/hello.ts\n')
-    expect(single.stdout).toContain('▶ oxfmt scripts/hello.ts\n')
+    expect(single.stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern scripts/hello.ts\n')
+    expect(single.stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern scripts/hello.ts\n')
     expect(single.stdout).toContain('▶ tsc -p tsconfig.json\n')
     expect(single.stdout).not.toContain('tsc -b')
 
     const all = await run(dir, ['.'])
 
-    expect(all.stdout).toMatch(/▶ oxlint \[\d+ files\]\n/)
-    expect(all.stdout).toMatch(/▶ oxfmt --check \[\d+ files\]\n/)
+    expect(all.stdout).toMatch(/▶ oxlint --no-error-on-unmatched-pattern \[\d+ files\]\n/)
+    expect(all.stdout).toMatch(/▶ oxfmt --check --no-error-on-unmatched-pattern \[\d+ files\]\n/)
 
     const docs = await run(dir, ['README.md'])
 
     expect(docs.result).toBe('ok')
-    expect(docs.stdout).toContain('▶ oxlint README.md\n')
+    expect(docs.stdout).toContain('▶ oxlint --no-error-on-unmatched-pattern README.md\n')
     expect(docs.stdout).toContain('○ tsc skipped, no tsconfig.json covers the given files\n')
     expect(docs.stdout).toContain('✔ all checks passed (oxlint, oxfmt)')
   })
@@ -203,7 +210,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const lenient = await run(dir, ['--no-error-on-unmatched-pattern', 'src/index.ts', 'missing.ts'])
 
     expect(lenient.result).toBe('ok')
-    expect(lenient.stdout).toContain('▶ oxlint src/index.ts\n')
+    expect(lenient.stdout).toContain('▶ oxlint --no-error-on-unmatched-pattern src/index.ts\n')
 
     const nothing = await run(dir, ['--no-error-on-unmatched-pattern', 'missing.ts'])
 
@@ -276,8 +283,8 @@ describe('uncheck', { timeout: 120_000 }, () => {
   })
 })
 
-describe('uncheck step flags', { timeout: 120_000 }, () => {
-  it('skips a step with --<tool>=false and requires it with --<tool>', async () => {
+describe('uncheck check flags', { timeout: 120_000 }, () => {
+  it('skips a check with --skip and requires it with --require', async () => {
     const dir = fixture(
       {
         '.oxlintrc.json': oxlintrc,
@@ -287,24 +294,26 @@ describe('uncheck step flags', { timeout: 120_000 }, () => {
       ['oxlint', 'typescript'],
     )
 
-    const skipped = await run(dir, ['--tsc=false'])
+    const skipped = await run(dir, ['--skip=tsc'])
 
     expect(skipped.result).toBe('ok')
     expect(skipped.stdout).toContain('○ oxfmt skipped, not installed\n')
-    expect(skipped.stdout).toContain('○ tsc skipped, disabled with --tsc=false\n')
+    expect(skipped.stdout).toContain('○ tsc skipped, disabled with --skip=tsc\n')
     expect(skipped.stdout).toContain('✔ all checks passed (oxlint)')
 
-    const required = await run(dir, ['--oxfmt', '--tsc=false'])
+    const required = await run(dir, ['--require=oxfmt', '--skip=tsc'])
 
     expect(required.result).toBeInstanceOf(CheckFailed)
     expect(required.stdout).toContain('✘ oxfmt not installed\n')
     expect(required.stdout).toContain('✘ 1 of 2 checks failed: oxfmt')
 
-    const none = await run(dir, ['--no-oxlint', '--no-oxfmt', '--no-tsc'])
+    await expect(run(dir, ['--require=tsc', '--skip=tsc'])).rejects.toThrow(/--require=tsc and --skip=tsc/)
+
+    const none = await run(dir, ['--skip=oxlint', '--skip=oxfmt', '--skip=tsc'])
 
     expect(none.result).toBeInstanceOf(CheckFailed)
     expect(none.stdout).toContain(
-      'nothing to check: oxlint disabled with --oxlint=false, oxfmt disabled with --oxfmt=false, tsc disabled with --tsc=false',
+      'nothing to check: oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
     )
   })
 })
@@ -414,7 +423,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
 
     expect(claude.result).toBe('blocked')
     expect(claude.stdout).toBe('')
-    expect(claude.stderr).toContain('▶ oxlint --fix src/fresh.ts src/index.ts\n')
+    expect(claude.stderr).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/fresh.ts src/index.ts\n')
     expect(claude.stderr).toContain('▶ tsc -p tsconfig.json\n')
     expect(claude.stderr).toContain('TS2322')
     expect(claude.stderr).toContain('✘ 1 of 3 checks failed: tsc')
@@ -470,11 +479,11 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
 
     expect(ok.result).toBe('ok')
     expect(ok.stdout).toBe('')
-    expect(ok.stderr).toContain('▶ oxlint --fix src/other.ts\n')
+    expect(ok.stderr).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/other.ts\n')
     expect(ok.stderr).toContain('✔ all checks passed (oxlint, oxfmt, tsc)')
   })
 
-  it('checks the whole project outside a git repository', async () => {
+  it('checks everything under the directory outside a git repository', async () => {
     const dir = fixture(clean)
 
     const { result, stderr } = await run(dir, ['hooks', 'run'], '{}')
