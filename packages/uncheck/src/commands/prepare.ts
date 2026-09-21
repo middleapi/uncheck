@@ -3,7 +3,7 @@ import { Command, Flag } from 'effect/unstable/cli'
 import { userError } from '../errors'
 import { git } from '../git'
 import { detectExec, EXECS } from '../pm'
-import { bold, dim, green } from '../style'
+import { bold, dim, green, red } from '../style'
 import { cwdFlag, onlyFlag, requireFlag, selectionArgs, skipFlag, validateSelection } from './uncheck'
 
 const HOOK_COMMAND = 'uncheck staged'
@@ -82,22 +82,30 @@ export const prepare = Command.make(
     const line = inside === '' ? command : `cd "${inside}" && ${command}`
 
     const file = path.join(path.resolve(cwd, hooks!), 'pre-commit')
+    const relative = path.relative(cwd, file)
+    const shown = relative.startsWith('..') ? file : relative
     const existing = yield* fs.readFileString(file).pipe(Effect.option)
     const next = Option.isNone(existing) ? `${HEADER}${line}\n` : rewrite(existing.value, line, inside)
     const result = Option.isNone(existing) ? 'created' : next === existing.value ? 'unchanged' : 'updated'
 
-    if (result !== 'unchanged') {
-      yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-      yield* fs.writeFileString(file, next)
+    const refused = yield* Effect.gen(function* () {
+      if (result !== 'unchanged') {
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+        yield* fs.writeFileString(file, next)
+      }
+
+      yield* fs.chmod(file, 0o755)
+    }).pipe(
+      Effect.as(undefined),
+      Effect.catch(error => Effect.succeed(error.cause instanceof Error ? error.cause.message : error.message)),
+    )
+
+    // `prepare` runs on every install, so an unwritable hook says so rather than failing the install.
+    if (refused !== undefined) {
+      return yield* Console.log(`${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${refused}`)}`)
     }
 
-    yield* fs.chmod(file, 0o755)
-
-    const relative = path.relative(cwd, file)
-
-    yield* Console.log(
-      `${green('✔')} ${bold('pre-commit')} ${dim(`${relative.startsWith('..') ? file : relative} ${result}`)}`,
-    )
+    yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${result}`)}`)
     yield* Console.log('')
     yield* Console.log(
       `${dim('The hook runs')} ${bold(command)} ${dim('before every commit, `git commit --no-verify` skips it.')}`,

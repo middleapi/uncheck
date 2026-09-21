@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import { stripVTControlCharacters } from 'node:util'
@@ -688,6 +688,42 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   })
 })
 
+describe('uncheck staged in a package', { timeout: 120_000 }, () => {
+  it('checks and stages from inside a package, the way the hook of a monorepo does', async () => {
+    const dir = committed({
+      '.oxlintrc.json': oxlintrc,
+      'src/root.ts': 'export const root = 1;\n',
+      'packages/app/tsconfig.json': standaloneTsconfig,
+      'packages/app/src/index.ts': 'export const answer: number = 42;\n',
+    })
+
+    writeFileSync(join(dir, 'packages/app/src/index.ts'), 'export const   answer: number = 42\n')
+    writeFileSync(join(dir, 'src/root.ts'), 'export const   root = 11\n')
+    gitIn(dir, 'add', 'packages/app/src/index.ts', 'src/root.ts')
+
+    const { result, stdout } = await run(join(dir, 'packages/app'), ['staged', '--fix'])
+
+    expect(result).toBe('ok')
+    // Staged files outside the package are another line's business, so they are neither checked nor fixed.
+    expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe('export const answer: number = 42;\n')
+    expect(gitIn(dir, 'show', ':src/root.ts')).toBe('export const   root = 11\n')
+  })
+
+  it('reports what git refused to do instead of crashing', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    // A lock left behind by another git process makes every write to the index fail.
+    writeFileSync(join(dir, '.git/index.lock'), '')
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(/git .* failed:/)
+  })
+})
+
 describe('uncheck prepare', { timeout: 120_000 }, () => {
   const header = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
 
@@ -762,6 +798,26 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     const settled = await run(dir, ['prepare', '--pre-commit'])
 
     expect(settled.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+  })
+
+  it('takes the runner from the packageManager field and reports an unwritable hook', async () => {
+    const dir = fixture({ 'package.json': { packageManager: 'bun@1.2.0' } }, [])
+    gitIn(dir, 'init', '--quiet')
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('The hook runs bunx uncheck staged --fix before every commit')
+
+    const blocked = fixture({ 'package.json': '{}\n' }, [])
+    gitIn(blocked, 'init', '--quiet')
+    mkdirSync(join(blocked, '.git/hooks/pre-commit'), { recursive: true })
+
+    // A `prepare` script that fails would fail the install, so it reports and carries on.
+    const refused = await run(blocked, ['prepare', '--pre-commit'])
+
+    expect(refused.result).toBe('ok')
+    expect(refused.stdout).toContain('✘ pre-commit .git/hooks/pre-commit not written,')
   })
 
   it('adds itself to an existing hook, enters a nested project and does nothing outside git', async () => {
