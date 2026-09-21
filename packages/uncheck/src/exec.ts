@@ -1,45 +1,36 @@
 import type { PlatformError } from 'effect'
-import type { UncheckOptions } from './options'
-import type { Tool } from './tools'
+import type { StepCommand } from './step'
 import process from 'node:process'
-import { Effect, Stream, Terminal } from 'effect'
+import { Console, Effect, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { colors } from './ui'
 
 /**
- * Runs `tool` with `args` and resolves with its exit code.
- * A non-zero exit code is a normal result, not a failure.
+ * Runs a tool command in `cwd` and resolves with its exit code; a non-zero exit code is a normal
+ * result, not a failure. Output is piped and re-emitted line by line through `Console`, so it stays
+ * in order with everything else uncheck prints and can be captured in hook mode.
  */
-export function execTool(
-  tool: Tool,
-  args: ReadonlyArray<string>,
-  options: UncheckOptions,
-): Effect.Effect<number, PlatformError.PlatformError, ChildProcessSpawner.ChildProcessSpawner | Terminal.Terminal> {
-  const inherit = options.stdio === 'inherit'
+export function execCommand(
+  { bin, args, files = [] }: StepCommand,
+  cwd: string,
+): Effect.Effect<number, PlatformError.PlatformError, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
-  const command = ChildProcess.make(process.execPath, [tool.bin, ...args], {
-    cwd: options.cwd,
-    stdin: 'ignore',
-    stdout: inherit ? 'inherit' : 'pipe',
-    stderr: inherit ? 'inherit' : 'pipe',
-  })
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(process.execPath, [bin.entry, ...args, ...files], {
+          cwd,
+          stdin: 'ignore',
+          // A piped tool cannot see the terminal, so tell it when colors are wanted.
+          env: colors ? { FORCE_COLOR: '1' } : {},
+          extendEnv: true,
+        }),
+      )
 
-  return Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      yield* Stream.runForEach(Stream.splitLines(Stream.decodeText(handle.all)), text => Console.log(text))
 
-    if (inherit) {
-      return yield* spawner.exitCode(command)
-    }
-
-    const terminal = yield* Terminal.Terminal
-
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* spawner.spawn(command)
-
-        yield* Stream.runForEach(Stream.decodeText(handle.all), chunk => terminal.display(chunk))
-
-        return yield* handle.exitCode
-      }),
-    )
-  })
+      return yield* handle.exitCode
+    }),
+  )
 }

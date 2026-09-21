@@ -44,5 +44,8 @@
       "version": "12.5.1",
       "onFail": "download"
     }
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

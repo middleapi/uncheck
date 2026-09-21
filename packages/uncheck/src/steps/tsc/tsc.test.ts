@@ -1,6 +1,9 @@
-import type { TsProject } from './typecheck'
-import { Effect } from 'effect'
-import { CircularProjectReferences, planTypecheck } from './typecheck'
+import type { TsProject } from './index'
+import { join } from 'node:path'
+import { NodeFileSystem, NodePath } from '@effect/platform-node'
+import { Effect, Layer } from 'effect'
+import { fixture } from '../../__tests__/fixture'
+import { CircularProjectReferences, planTypecheck, selectTsconfigs } from './index'
 
 type Graph = Record<string, string[]>
 
@@ -109,5 +112,50 @@ describe('planTypecheck', () => {
         '/r/c/tsconfig.json': ['/r/b/tsconfig.json'],
       }).projects,
     ).toEqual(['/r/b/tsconfig.json', '/r/c/tsconfig.json'])
+  })
+})
+
+describe('selectTsconfigs', () => {
+  const layer = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)
+  const lib = { extends: '../../tsconfig.base.json', include: ['src'], exclude: ['**/*.test.*'] }
+  const entries = ['packages/a/tsconfig.json', 'packages/b/tsconfig.json', 'tsconfig.json']
+
+  function monorepo() {
+    return fixture(
+      {
+        'tsconfig.base.json': { compilerOptions: { strict: true } },
+        'tsconfig.json': { include: ['scripts', '*', '*/*/src/**/*.test.*', '*/*/*'] },
+        'packages/a/tsconfig.json': lib,
+        'packages/b/tsconfig.json': lib,
+      },
+      [],
+    )
+  }
+
+  function select(dir: string, files: string[]) {
+    return Effect.runPromise(
+      Effect.provide(
+        selectTsconfigs(
+          entries.map(entry => join(dir, entry)),
+          files.map(file => join(dir, file)),
+        ),
+        layer,
+      ),
+    ).then(selected => selected.map(entry => entry.slice(dir.length + 1)))
+  }
+
+  it('selects only the projects whose inputs contain a file', async () => {
+    const dir = monorepo()
+
+    expect(await select(dir, ['packages/a/src/index.ts'])).toEqual(['packages/a/tsconfig.json'])
+    // Tests are excluded by the package and picked up by the root instead.
+    expect(await select(dir, ['packages/a/src/index.test.ts'])).toEqual(['tsconfig.json'])
+    expect(await select(dir, ['packages/a/build.config.ts'])).toEqual(['tsconfig.json'])
+    expect(await select(dir, ['scripts/release.ts'])).toEqual(['tsconfig.json'])
+    expect(await select(dir, ['packages/a/src/index.ts', 'packages/b/src/index.ts'])).toEqual([
+      'packages/a/tsconfig.json',
+      'packages/b/tsconfig.json',
+    ])
+    expect(await select(dir, ['README.md', 'packages/a/styles.css'])).toEqual([])
   })
 })

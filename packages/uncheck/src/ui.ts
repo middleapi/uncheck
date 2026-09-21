@@ -1,43 +1,21 @@
-import type { PlatformError } from 'effect'
 import process from 'node:process'
 import { styleText } from 'node:util'
-import { Effect, Stdio, Terminal } from 'effect'
+import { Console } from 'effect'
 
-export interface Ui {
-  readonly line: (text: string) => Effect.Effect<void, PlatformError.PlatformError>
-  readonly bold: (text: string) => string
-  readonly dim: (text: string) => string
-  readonly red: (text: string) => string
-  readonly green: (text: string) => string
-}
+/** Whether output gets ANSI colors: `NO_COLOR` wins, then `FORCE_COLOR`, then whether stdout is a terminal. */
+export const colors =
+  !('NO_COLOR' in process.env) &&
+  ((process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== '0') || process.stdout.isTTY === true)
 
-export const makeUi: Effect.Effect<Ui, never, Stdio.Stdio | Terminal.Terminal> = Effect.gen(function* () {
-  const stdio = yield* Stdio.Stdio
-  const terminal = yield* Terminal.Terminal
-  const colors = yield* supportsColor(stdio)
+const paint = (style: Parameters<typeof styleText>[0]) => (text: string) =>
+  colors ? styleText(style, text, { validateStream: false }) : text
 
-  // Color support is decided here (from the Stdio service), so skip styleText's own stream check.
-  const paint = (style: Parameters<typeof styleText>[0]) => (text: string) =>
-    colors ? styleText(style, text, { validateStream: false }) : text
+export const bold = paint('bold')
+export const dim = paint('dim')
+export const red = paint('red')
+export const green = paint('green')
 
-  return {
-    // `display` resolves once the write completed, so a header never trails the tool output that follows it.
-    line: text => terminal.display(`${text}\n`),
-    bold: paint('bold'),
-    dim: paint('dim'),
-    red: paint('red'),
-    green: paint('green'),
-  }
-})
-
-function supportsColor(stdio: Stdio.Stdio): Effect.Effect<boolean> {
-  if ('NO_COLOR' in process.env) {
-    return Effect.succeed(false)
-  }
-
-  if (process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== '0') {
-    return Effect.succeed(true)
-  }
-
-  return stdio.stdoutIsTerminal
+/** Prints one line through the `Console` service, which hook mode and tests swap out to capture it. */
+export function line(text: string) {
+  return Console.log(text)
 }

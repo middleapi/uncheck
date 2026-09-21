@@ -71,5 +71,8 @@
     "typescript": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

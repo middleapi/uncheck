@@ -1,45 +1,41 @@
 import type { PlatformError } from 'effect'
-import { Effect, FileSystem, Option, Path, Stdio } from 'effect'
+import { stripVTControlCharacters } from 'node:util'
+import { Console, Data, Effect, FileSystem, Option, Path, Predicate, Stdio, Stream } from 'effect'
 import { Argument, CliError, Command, Prompt } from 'effect/unstable/cli'
 import { parse as parseJsonc } from 'jsonc-parser'
+import { fixFlag, runChecks, stepFlags } from './checks'
+import { listChangedFiles } from './files'
 import { UncheckOptions } from './options'
-import { makeUi } from './ui'
+import { ancestors, readJson } from './resolve'
+import { bold, dim, green, line } from './ui'
 
-export const HOOK_AGENTS = ['claude', 'codebuddy', 'cursor', 'windsurf', 'copilot'] as const
-
-export type HookAgent = (typeof HOOK_AGENTS)[number]
-
-export interface HookIntegration {
-  readonly id: HookAgent
+interface HookIntegration {
+  readonly id: string
   readonly name: string
   /** Config file the agent reads, relative to the project root. */
   readonly path: string
-  /** Hook config to write, or to merge into the existing file. */
+  /** Config for the hook that fires when the agent finishes a turn, written or merged into that file. */
   readonly content: (command: string) => Record<string, unknown>
 }
 
 function claudeStyle(command: string): Record<string, unknown> {
-  return {
-    hooks: {
-      PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command }] }],
-    },
-  }
+  return { hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }
 }
 
-export const HOOK_INTEGRATIONS: ReadonlyArray<HookIntegration> = [
+const HOOK_INTEGRATIONS = [
   { id: 'claude', name: 'Claude Code', path: '.claude/settings.json', content: claudeStyle },
   { id: 'codebuddy', name: 'CodeBuddy', path: '.codebuddy/settings.json', content: claudeStyle },
   {
     id: 'cursor',
     name: 'Cursor',
     path: '.cursor/hooks.json',
-    content: command => ({ version: 1, hooks: { afterFileEdit: [{ command }] } }),
+    content: command => ({ version: 1, hooks: { stop: [{ command }] } }),
   },
   {
     id: 'windsurf',
     name: 'Windsurf',
     path: '.windsurf/hooks.json',
-    content: command => ({ hooks: { post_write_code: [{ command, show_output: true }] } }),
+    content: command => ({ hooks: { post_cascade_response: [{ command, show_output: true }] } }),
   },
   {
     id: 'copilot',
@@ -47,13 +43,17 @@ export const HOOK_INTEGRATIONS: ReadonlyArray<HookIntegration> = [
     path: '.github/hooks/uncheck.json',
     content: command => ({
       version: 1,
-      hooks: { postToolUse: [{ type: 'command', bash: command, powershell: command }] },
+      hooks: { agentStop: [{ type: 'command', bash: command, powershell: command }] },
     }),
   },
-]
+] as const satisfies ReadonlyArray<HookIntegration>
 
-export const hooksCommand = Command.make(
-  'hooks',
+type HookAgent = (typeof HOOK_INTEGRATIONS)[number]['id']
+
+const HOOK_AGENTS = HOOK_INTEGRATIONS.map(integration => integration.id)
+
+const installCommand = Command.make(
+  'install',
   {
     agents: Argument.Literals('agents', HOOK_AGENTS).pipe(
       Argument.variadic(),
@@ -62,118 +62,201 @@ export const hooksCommand = Command.make(
   },
   ({ agents }) =>
     Effect.gen(function* () {
-      const options = yield* UncheckOptions
-      const ui = yield* makeUi
-      const selected = agents.length > 0 ? agents : yield* promptAgents
-      const command = yield* hookCommand(options.cwd)
+      const { cwd } = yield* UncheckOptions
+      const selected: ReadonlyArray<HookAgent> = agents.length > 0 ? agents : yield* promptAgents
+      const command = yield* hookCommand(cwd)
 
       for (const integration of HOOK_INTEGRATIONS) {
         if (!selected.includes(integration.id)) {
           continue
         }
 
-        const result = yield* installHook(integration, command, options.cwd)
+        const result = yield* installHook(integration, command, cwd)
 
-        yield* ui.line(`${ui.green('✔')} ${ui.bold(integration.name)} ${ui.dim(`${integration.path} ${result}`)}`)
+        yield* line(`${green('✔')} ${bold(integration.name)} ${dim(`${integration.path} ${result}`)}`)
       }
 
-      yield* ui.line('')
-      yield* ui.line(`${ui.dim('The hooks run')} ${ui.bold(command)} ${ui.dim('after every file the agent edits.')}`)
+      yield* line('')
+      yield* line(`${dim('The hook runs')} ${bold(command)} ${dim('whenever the agent finishes a turn.')}`)
     }),
+).pipe(Command.withDescription('Write the agent hook configs that run `uncheck hooks run` after every agent turn'))
+
+/** Raised when the agent must keep working; the entry point turns it into exit code 2. */
+export class StopBlocked extends Data.TaggedError('StopBlocked')<{}> {}
+
+const runCommand = Command.make('run', { fix: fixFlag, ...stepFlags }, ({ fix, ...flags }) =>
+  Effect.gen(function* () {
+    const options = yield* UncheckOptions
+    const stdio = yield* Stdio.Stdio
+    const path = yield* Path.Path
+
+    if (yield* stdio.stdinIsTerminal) {
+      const userMessage = '`uncheck hooks run` expects the agent hook payload as JSON on stdin'
+      return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+    }
+
+    const payload = yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(
+      Effect.flatMap(text => Effect.try(() => JSON.parse(text) as unknown)),
+      Effect.map(value => (Predicate.isObject(value) ? value : {})),
+      Effect.orElseSucceed((): Record<string, unknown> => ({})),
+    )
+
+    const cwd = path.resolve(options.cwd)
+    const changed = yield* listChangedFiles(cwd)
+
+    if (changed?.length === 0) {
+      return
+    }
+
+    const lines: string[] = []
+
+    const capture: Console.Console = Object.assign(Object.create(globalThis.console), {
+      log: (...parts: ReadonlyArray<unknown>) => {
+        lines.push(parts.join(' '))
+      },
+    })
+
+    const failed = yield* runChecks(changed ?? [], { fix, flags, allowUnmatched: true }).pipe(
+      Effect.map(() => false),
+      Effect.catchTag('CheckFailed', () => Effect.succeed(true)),
+      Effect.provideService(Console.Console, capture),
+    )
+
+    const report = stripVTControlCharacters(lines.join('\n'))
+
+    yield* Console.error(report)
+
+    if (!failed) {
+      return
+    }
+
+    const reason = `uncheck found problems, fix them before finishing:\n\n${report}`
+
+    yield* stopFeedback(payload, reason)
+  }),
 ).pipe(
   Command.withDescription(
-    'Set up agent hooks that run `uncheck --fix` on every file an AI agent edits and hand remaining problems back to it',
+    'Run as an agent stop hook: check the files changed since the last commit, report on stderr and send the agent back to fix what remains',
   ),
 )
+
+export const hooksCommand = Command.make('hooks').pipe(
+  Command.withDescription('Agent hooks: `install` writes the configs, `run` is what they execute'),
+  Command.withSubcommands([installCommand, runCommand]),
+)
+
+/**
+ * Sends the agent back to work in the way its family understands, at most once per turn.
+ *
+ * Claude Code and CodeBuddy block on exit code 2 with stderr as the message and mark the payload
+ * with `stop_hook_active` once they are already continuing. Cursor continues on a `followup_message`
+ * and counts its follow-ups in `loop_count`. Copilot continues on `decision: "block"` and also sets
+ * `stop_hook_active`. Anything else, such as Windsurf, only gets the report.
+ */
+export function stopFeedback(payload: Record<string, unknown>, reason: string) {
+  const agent = stopAgent(payload)
+  const alreadyContinued =
+    payload.stop_hook_active === true || (typeof payload.loop_count === 'number' && payload.loop_count > 0)
+
+  if (agent === undefined || alreadyContinued) {
+    return Effect.void
+  }
+
+  switch (agent) {
+    case 'claude':
+      return Effect.fail(new StopBlocked())
+    case 'cursor':
+      return Console.log(JSON.stringify({ followup_message: reason }))
+    case 'copilot':
+      return Console.log(JSON.stringify({ decision: 'block', reason }))
+  }
+}
+
+/** Which family of stop payload this is, judged by the fields each agent documents. */
+export function stopAgent(payload: Record<string, unknown>): 'claude' | 'cursor' | 'copilot' | undefined {
+  if (payload.hook_event_name === 'Stop') {
+    return 'claude'
+  }
+
+  if (payload.hook_event_name === 'stop') {
+    return 'cursor'
+  }
+
+  if (typeof payload.stopReason === 'string') {
+    return 'copilot'
+  }
+
+  return undefined
+}
 
 const promptAgents = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio
 
   if (!(yield* stdio.stdinIsTerminal)) {
-    const userMessage = `Pass the agents to configure, for example: uncheck hooks ${HOOK_AGENTS.join(' ')}`
+    const userMessage = `Pass the agents to configure, for example: uncheck hooks install ${HOOK_AGENTS.join(' ')}`
     return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
   }
 
   return yield* Prompt.run(
     Prompt.MultiSelect({
-      message: 'Which agents should run uncheck after editing files?',
+      message: 'Which agents should run uncheck when they finish a turn?',
       choices: HOOK_INTEGRATIONS.map(integration => ({ title: integration.name, value: integration.id })),
       min: 1,
     }),
   )
 })
 
-const PACKAGE_MANAGER_EXEC: Record<string, string> = {
+const EXEC_BY_PACKAGE_MANAGER: Readonly<Record<string, string>> = {
   pnpm: 'pnpm exec',
   yarn: 'yarn',
   bun: 'bunx',
   npm: 'npx',
 }
 
-const LOCKFILES: ReadonlyArray<readonly [file: string, packageManager: string]> = [
-  ['pnpm-lock.yaml', 'pnpm'],
+const EXEC_BY_LOCKFILE: ReadonlyArray<readonly [lockfile: string, exec: string]> = [
+  ['pnpm-lock.yaml', 'pnpm exec'],
   ['yarn.lock', 'yarn'],
-  ['bun.lock', 'bun'],
-  ['bun.lockb', 'bun'],
-  ['package-lock.json', 'npm'],
+  ['bun.lock', 'bunx'],
+  ['bun.lockb', 'bunx'],
+  ['package-lock.json', 'npx'],
 ]
 
 /** The hook command, invoking the project's own `uncheck` through the package manager in use. */
-export function hookCommand(cwd: string): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const exec = yield* detectPackageManager(cwd)
-
-    return `${PACKAGE_MANAGER_EXEC[exec] ?? PACKAGE_MANAGER_EXEC.npm} uncheck --fix --hook`
-  })
-}
-
-function detectPackageManager(cwd: string): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> {
+function hookCommand(cwd: string): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
-    let dir = path.resolve(cwd)
+    for (const dir of ancestors(path, cwd)) {
+      const manifest = yield* readJson<{ packageManager?: string }>(path.join(dir, 'package.json'))
+      const declared = EXEC_BY_PACKAGE_MANAGER[manifest?.packageManager?.split('@')[0] ?? '']
 
-    while (true) {
-      const manifest = yield* fs.readFileString(path.join(dir, 'package.json')).pipe(
-        Effect.map(text => JSON.parse(text) as { packageManager?: string }),
-        Effect.orElseSucceed(() => undefined),
+      if (declared !== undefined) {
+        return `${declared} uncheck hooks run --fix`
+      }
+
+      const lockfile = yield* Effect.findFirst(EXEC_BY_LOCKFILE, ([file]) =>
+        fs.exists(path.join(dir, file)).pipe(Effect.orElseSucceed(() => false)),
       )
 
-      const declared = manifest?.packageManager?.split('@')[0]
-
-      if (declared !== undefined && declared in PACKAGE_MANAGER_EXEC) {
-        return declared
+      if (Option.isSome(lockfile)) {
+        return `${lockfile.value[1]} uncheck hooks run --fix`
       }
-
-      for (const [file, packageManager] of LOCKFILES) {
-        if (yield* fs.exists(path.join(dir, file)).pipe(Effect.orElseSucceed(() => false))) {
-          return packageManager
-        }
-      }
-
-      const parent = path.dirname(dir)
-
-      if (parent === dir) {
-        return 'npm'
-      }
-
-      dir = parent
     }
+
+    return 'npx uncheck hooks run --fix'
   })
 }
-
-export type HookInstallResult = 'created' | 'updated' | 'unchanged'
 
 /**
  * Writes the agent's hook config, merging into an existing file so other hooks are kept.
  * A file that already mentions `uncheck` is left alone, which makes reruns safe.
  */
-export function installHook(
+function installHook(
   integration: HookIntegration,
   command: string,
   cwd: string,
-): Effect.Effect<HookInstallResult, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> {
+): Effect.Effect<'created' | 'updated' | 'unchanged', PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -193,7 +276,7 @@ export function installHook(
     }
 
     const current = parseJsonc(existing.value, undefined, { allowTrailingComma: true }) as unknown
-    const merged = mergeJson(isRecord(current) ? current : {}, addition)
+    const merged = mergeJson(Predicate.isObject(current) ? current : {}, addition)
 
     yield* fs.writeFileString(file, `${JSON.stringify(merged, null, 2)}\n`)
 
@@ -207,7 +290,7 @@ function mergeJson(base: unknown, addition: unknown): unknown {
     return [...base, ...addition]
   }
 
-  if (isRecord(base) && isRecord(addition)) {
+  if (Predicate.isObject(base) && Predicate.isObject(addition)) {
     const merged: Record<string, unknown> = { ...base }
 
     for (const [key, value] of Object.entries(addition)) {
@@ -218,42 +301,4 @@ function mergeJson(base: unknown, addition: unknown): unknown {
   }
 
   return addition
-}
-
-const PATH_KEYS = new Set(['file_path', 'filePath', 'notebook_path', 'notebookPath', 'path'])
-
-/**
- * Every file path mentioned in an agent hook payload. The agents disagree on the envelope
- * (`tool_input`, `tool_info`, `toolArgs`, or the top level) but all name the edited file with
- * one of a few keys, so the payload is searched recursively instead of per agent.
- */
-export function extractHookPaths(payload: unknown): string[] {
-  const found = new Set<string>()
-
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(visit)
-      return
-    }
-
-    if (!isRecord(value)) {
-      return
-    }
-
-    for (const [key, child] of Object.entries(value)) {
-      if (PATH_KEYS.has(key) && typeof child === 'string') {
-        found.add(child)
-      } else {
-        visit(child)
-      }
-    }
-  }
-
-  visit(payload)
-
-  return [...found]
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

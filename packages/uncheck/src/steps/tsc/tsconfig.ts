@@ -1,8 +1,10 @@
+import { posix } from 'node:path'
 import process from 'node:process'
-import { Effect, FileSystem, Option, Path } from 'effect'
+import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
+import { ancestors, readJson } from '../../resolve'
 
-export interface RawTsconfig {
+interface RawTsconfig {
   readonly extends?: unknown
   readonly files?: unknown
   readonly include?: unknown
@@ -12,16 +14,14 @@ export interface RawTsconfig {
 }
 
 /** Parses a config file as JSONC. Unreadable or malformed files read as empty and are left for `tsc` to report. */
-export function readTsconfig(configPath: string): Effect.Effect<RawTsconfig, never, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-
-    return yield* fs.readFileString(configPath).pipe(
+function readTsconfig(configPath: string): Effect.Effect<RawTsconfig, never, FileSystem.FileSystem> {
+  return Effect.flatMap(FileSystem.FileSystem, fs =>
+    fs.readFileString(configPath).pipe(
       Effect.map(text => parseJsonc(text, undefined, { allowTrailingComma: true }) as unknown),
-      Effect.map((value): RawTsconfig => (isRecord(value) ? value : {})),
+      Effect.map((value): RawTsconfig => (Predicate.isObject(value) ? value : {})),
       Effect.orElseSucceed((): RawTsconfig => ({})),
-    )
-  })
+    ),
+  )
 }
 
 /**
@@ -38,7 +38,7 @@ export function readReferences(
     const { references } = yield* readTsconfig(configPath)
 
     return (Array.isArray(references) ? references : []).flatMap((reference: unknown) => {
-      if (!isRecord(reference) || typeof reference.path !== 'string') {
+      if (!Predicate.isObject(reference) || typeof reference.path !== 'string') {
         return []
       }
 
@@ -53,8 +53,6 @@ export interface InputPattern {
   /** Absolute pattern with forward slashes. */
   readonly spec: string
   readonly regex: RegExp
-  /** Absolute directory before the first wildcard. */
-  readonly prefix: string
 }
 
 /** What `tsc` would take as input files for one project, with `extends` applied. */
@@ -110,7 +108,7 @@ export function loadTsconfigInputs(
         exclude = { dir, specs: raw.exclude }
       }
 
-      if (isRecord(raw.compilerOptions)) {
+      if (Predicate.isObject(raw.compilerOptions)) {
         const { compilerOptions } = raw
 
         if (typeof compilerOptions.allowJs === 'boolean') {
@@ -142,13 +140,9 @@ export function loadTsconfigInputs(
       files: resolve(files),
       include: includeSpecs.flatMap(spec => {
         const regex = compileGlob(spec, 'files')
-        return regex === undefined ? [] : [{ spec, regex, prefix: staticPrefixDir(spec) }]
+        return regex === undefined ? [] : [{ spec, regex }]
       }),
-      exclude: excludeSpecs.map(spec => ({
-        spec,
-        regex: compileGlob(spec, 'exclude')!,
-        prefix: staticPrefixDir(spec),
-      })),
+      exclude: excludeSpecs.map(spec => ({ spec, regex: compileGlob(spec, 'exclude')! })),
       extensions: new Set(allowJs ? [...TS_EXTENSIONS, ...JS_EXTENSIONS] : TS_EXTENSIONS),
     }
   })
@@ -175,25 +169,6 @@ export function includesFile(inputs: TsconfigInputs, file: string): boolean {
 
   // JSON files only come in through an `include` that names the extension explicitly.
   return inputs.include.some(pattern => pattern.regex.test(target) && (!json || pattern.spec.endsWith('.json')))
-}
-
-/** Whether some input of this config could live under `dir`, judged by where its patterns start. */
-export function coversDirectory(inputs: TsconfigInputs, dir: string): boolean {
-  const target = toPosix(dir)
-
-  // Exclude patterns match the files below a folder, so probe the folder as a prefix.
-  if (inputs.exclude.some(pattern => pattern.regex.test(`${target}/`))) {
-    return false
-  }
-
-  return (
-    inputs.files.some(file => file.startsWith(`${target}/`)) ||
-    inputs.include.some(pattern => overlaps(pattern.prefix, target))
-  )
-}
-
-function overlaps(a: string, b: string): boolean {
-  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 }
 
 interface ChainEntry {
@@ -249,53 +224,38 @@ function resolveExtends(
       )
 
     const firstFile = (candidates: ReadonlyArray<string>) =>
-      Effect.gen(function* () {
-        for (const candidate of candidates) {
-          if ((yield* kind(candidate)) === 'File') {
-            return Option.some(candidate)
-          }
-        }
-
-        return Option.none<string>()
-      })
+      Effect.findFirst(candidates, candidate => Effect.map(kind(candidate), type => type === 'File'))
 
     if (spec.startsWith('./') || spec.startsWith('../') || path.isAbsolute(spec)) {
       const target = path.resolve(dir, spec)
       return yield* firstFile([target, `${target}.json`])
     }
 
-    let current = dir
-
-    while (true) {
+    for (const current of ancestors(path, dir)) {
       const base = path.join(current, 'node_modules', spec)
-      const asFile = yield* firstFile([base, `${base}.json`])
+      const baseKind = yield* kind(base)
 
-      if (Option.isSome(asFile)) {
-        return asFile
+      if (baseKind === 'File') {
+        return Option.some(base)
       }
 
-      if ((yield* kind(base)) === 'Directory') {
-        const manifest = yield* fs.readFileString(path.join(base, 'package.json')).pipe(
-          Effect.map(text => JSON.parse(text) as { tsconfig?: unknown }),
-          Effect.orElseSucceed(() => ({}) as { tsconfig?: unknown }),
+      const candidates = [`${base}.json`]
+
+      if (baseKind === 'Directory') {
+        const manifest = yield* readJson<{ tsconfig?: unknown }>(path.join(base, 'package.json'))
+        candidates.push(
+          path.resolve(base, typeof manifest?.tsconfig === 'string' ? manifest.tsconfig : 'tsconfig.json'),
         )
-
-        const entry = typeof manifest.tsconfig === 'string' ? manifest.tsconfig : 'tsconfig.json'
-        const found = yield* firstFile([path.resolve(base, entry)])
-
-        if (Option.isSome(found)) {
-          return found
-        }
       }
 
-      const parent = path.dirname(current)
+      const found = yield* firstFile(candidates)
 
-      if (parent === current) {
-        return Option.none()
+      if (Option.isSome(found)) {
+        return found
       }
-
-      current = parent
     }
+
+    return Option.none()
   })
 }
 
@@ -366,26 +326,13 @@ function wildcards(component: string): string {
   )
 }
 
-function staticPrefixDir(spec: string): string {
-  const components = spec.split('/')
-  const firstWildcard = components.findIndex(component => /[*?]/.test(component))
-
-  return (firstWildcard === -1 ? components : components.slice(0, firstWildcard)).join('/')
-}
-
-function extensionOf(file: string): string {
-  const name = file.slice(file.lastIndexOf('/') + 1)
-  const dot = name.lastIndexOf('.')
-
-  return dot <= 0 ? '' : name.slice(dot).toLowerCase()
+/** The lower-cased extension of a file, `''` when there is none. */
+export function extensionOf(file: string): string {
+  return posix.extname(file).toLowerCase()
 }
 
 function toPosix(target: string): string {
   return target.replaceAll('\\', '/')
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isStringArray(value: unknown): value is ReadonlyArray<string> {

@@ -26,11 +26,11 @@
 ## Usage
 
 ```sh
-npm i -D uncheck
+npm i -D uncheck   # Node 22 or newer
 
 npx uncheck                 # oxlint, oxfmt --check and tsc for the whole project
 npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
-npx uncheck src/app         # forward paths or globs to oxlint and oxfmt, like you would call them directly
+npx uncheck src/app         # check some files: paths, directories, globs and !exclusions
 npx uncheck --tsc=false     # skip a step; --oxlint, --oxfmt and --tsc are auto-detected by default
 npx uncheck --oxlint        # require a step: fail when it cannot run instead of skipping it
 ```
@@ -39,9 +39,11 @@ Steps run in order and every step runs even if an earlier one fails, so one run 
 
 | Step     | Runs when                             | Command                                                        |
 | -------- | ------------------------------------- | -------------------------------------------------------------- |
-| `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [paths...]`                                    |
-| `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [paths...]`, or `oxfmt [paths...]` with `--fix` |
+| `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [files...]`                                    |
+| `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
 | `tsc`    | at least one `tsconfig.json` is found | `tsc -b` for projects using references, `tsc -p` for the rest  |
+
+Paths given on the command line are resolved by `uncheck` itself into one list of files that every tool receives, so tools never disagree about what a directory or glob means: a file must exist, a directory expands to the project files below it (ignored files stay out, like `git ls-files`), globs use the usual `**`/`*` syntax and `!pattern` excludes. A path that matches nothing fails the run, unless `--no-error-on-unmatched-pattern` is passed.
 
 Tools are resolved from `node_modules` the way Node does, so the versions your project already depends on are used. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped.
 
@@ -53,22 +55,24 @@ Every `tsconfig.json` in the project is discovered (through `git ls-files`, so i
 - Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p`.
 - Circular references are reported as an error.
 
-When paths are given, `tsc` runs only the projects it would actually check for them. A file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. A directory, or the static prefix of a glob, selects the projects whose inputs can live under it. Files `tsc` never checks, such as Markdown or CSS, select no project.
+When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
 
 ## Agent hooks
 
 ```sh
-npx uncheck hooks                          # pick agents interactively
-npx uncheck hooks claude cursor            # or name them: claude, codebuddy, cursor, windsurf, copilot
+npx uncheck hooks install                   # pick agents interactively
+npx uncheck hooks install claude cursor     # or name them: claude, codebuddy, cursor, windsurf, copilot
 ```
 
-This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. After every file the agent edits, the hook runs:
+This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. Whenever the agent finishes a turn, the hook runs:
 
 ```sh
-uncheck --fix --hook
+uncheck hooks run --fix
 ```
 
-through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). `--hook` reads the agent's payload from stdin, applies lint fixes and formatting to the edited files, typechecks the projects containing them, and prints the report on stderr. When problems remain, they are handed back to the agent as additional context so it can fix them right away (Claude Code and CodeBuddy), while the exit code stays 0 so no agent treats findings as a broken hook.
+through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It checks the files changed since the last commit (modified, staged and untracked, the whole project outside git) with every step, applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
+
+Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched.
 
 ## Sponsors
 

@@ -13,6 +13,12 @@ Command.run(command, { version: pkg.version }).pipe(
       process.exitCode = 1
     }),
   ),
+  // Exit code 2 is how Claude Code and CodeBuddy stop hooks send the agent back to work.
+  Effect.catchTag('StopBlocked', () =>
+    Effect.sync(() => {
+      process.exitCode = 2
+    }),
+  ),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 )
