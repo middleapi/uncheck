@@ -6,8 +6,11 @@ import { NodeServices } from '@effect/platform-node'
 import { Console, Effect, Stdio, Stream } from 'effect'
 import { Command } from 'effect/unstable/cli'
 import { fixture } from './fixture'
+import { hooks } from '../src/commands/hooks'
 import { uncheck } from '../src/commands/uncheck'
 import { CheckFailed } from '../src/errors'
+
+const cli = uncheck.pipe(Command.withSubcommands([hooks]))
 
 interface RunResult {
   readonly result: 'ok' | 'blocked' | CheckFailed
@@ -33,7 +36,7 @@ async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): P
   })
 
   const result = await Effect.runPromise(
-    Command.runWith(uncheck, { version: '0.0.0' })(argv).pipe(
+    Command.runWith(cli, { version: '0.0.0' })(argv).pipe(
       Effect.map(() => 'ok' as const),
       Effect.catchTag('CheckFailed', error => Effect.succeed(error)),
       Effect.catchTag('StopBlocked', () => Effect.succeed('blocked' as const)),

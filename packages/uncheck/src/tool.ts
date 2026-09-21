@@ -1,5 +1,9 @@
-import { Effect, Path, Predicate } from 'effect'
+import type { CheckCommand } from './types'
+import process from 'node:process'
+import { Console, Effect, Path, Predicate, Stream } from 'effect'
+import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { ancestors, readJson } from './files'
+import { colors } from './style'
 
 export interface Bin {
   readonly name: string
@@ -54,3 +58,22 @@ export function argvBatches(args: ReadonlyArray<string>): ReadonlyArray<Readonly
 
   return batches
 }
+
+/** Output goes through `Console` so it stays in order with uncheck's own lines and can be captured in hook mode. */
+export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckCommand, cwd: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+
+  const handle = yield* spawner.spawn(
+    ChildProcess.make(process.execPath, [bin.entry, ...args, ...files], {
+      cwd,
+      stdin: 'ignore',
+      // A piped tool cannot see the terminal, so tell it when colors are wanted.
+      env: colors ? { FORCE_COLOR: '1' } : {},
+      extendEnv: true,
+    }),
+  )
+
+  yield* Stream.runForEach(Stream.splitLines(Stream.decodeText(handle.all)), text => Console.log(text))
+
+  return yield* handle.exitCode
+}, Effect.scoped)

@@ -3,8 +3,7 @@ import { Console, Effect, Predicate, Stdio, Stream } from 'effect'
 import { CliError, Command } from 'effect/unstable/cli'
 import { listChangedFiles } from '../../files'
 import { StopBlocked } from '../../errors'
-import { runChecks } from '../../run'
-import { cwdFlag, fixFlag, requireFlag, skipFlag } from '../flags'
+import { cwdFlag, fixFlag, requireFlag, runChecks, skipFlag } from '../uncheck'
 
 export const run = Command.make(
   'run',

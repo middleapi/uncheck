@@ -3,7 +3,7 @@ import { Argument, CliError, Command, Prompt } from 'effect/unstable/cli'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { ancestors, readJson } from '../../files'
 import { bold, dim, green } from '../../style'
-import { cwdFlag } from '../flags'
+import { cwdFlag } from '../uncheck'
 
 const AGENTS = [
   {

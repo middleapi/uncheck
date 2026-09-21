@@ -38,11 +38,3 @@ export interface Check {
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
   >
 }
-
-export interface RunSettings {
-  readonly cwd: string
-  readonly fix: boolean
-  readonly required: ReadonlyArray<CheckName>
-  readonly skipped: ReadonlyArray<CheckName>
-  readonly allowUnmatched: boolean
-}
