@@ -1,7 +1,8 @@
 import type { PlatformError } from 'effect'
+import type { ChildProcessSpawner } from 'effect/unstable/process'
 import { posix } from 'node:path'
-import { Effect, FileSystem, Path, Predicate, Stream } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { Effect, FileSystem, Path, Predicate } from 'effect'
+import { gitPaths } from './git'
 
 export type ProjectFiles = Effect.Effect<
   ReadonlyArray<string>,
@@ -16,7 +17,7 @@ export type ProjectFiles = Effect.Effect<
  * configured, and falls back to a plain directory walk outside git repositories.
  */
 export function listProjectFiles(cwd: string): ProjectFiles {
-  return git(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
+  return gitPaths(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
     Effect.map(files => files.filter(file => !file.split('/').includes('node_modules'))),
     Effect.catch(() => walk(cwd)),
     Effect.map(files => [...files].sort()),
@@ -32,8 +33,8 @@ export function listChangedFiles(
   cwd: string,
 ): Effect.Effect<ReadonlyArray<string> | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.all([
-    git(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
-    git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+    gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
+    gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
   ]).pipe(
     Effect.map(([tracked, untracked]) => [...new Set([...tracked, ...untracked])].sort()),
     Effect.orElseSucceed(() => undefined),
@@ -66,21 +67,7 @@ export const resolvePaths = Effect.fn(function* (
 
     const target = relative(pattern)
 
-    if (GLOB_CHARACTERS.test(target)) {
-      universe ??= yield* projectFiles
-      const hits = universe.filter(file => posix.matchesGlob(file, target))
-
-      if (hits.length === 0) {
-        unmatched.push(pattern)
-      }
-
-      for (const hit of hits) {
-        matched.add(hit)
-      }
-
-      continue
-    }
-
+    // An existing path is taken as it is, so `app/[id].ts` names that file rather than a glob.
     const kind = yield* fs.stat(path.resolve(cwd, pattern)).pipe(
       Effect.map(info => info.type),
       Effect.orElseSucceed(() => undefined),
@@ -95,13 +82,30 @@ export const resolvePaths = Effect.fn(function* (
       universe ??= yield* projectFiles
       const inside = target === '' ? universe : universe.filter(file => file.startsWith(`${target}/`))
 
-      if (inside.length > 0) {
-        for (const file of inside) {
-          matched.add(file)
-        }
-
-        continue
+      for (const file of inside) {
+        matched.add(file)
       }
+
+      if (inside.length === 0) {
+        unmatched.push(pattern)
+      }
+
+      continue
+    }
+
+    if (GLOB_CHARACTERS.test(target)) {
+      universe ??= yield* projectFiles
+      const hits = universe.filter(file => posix.matchesGlob(file, target))
+
+      for (const hit of hits) {
+        matched.add(hit)
+      }
+
+      if (hits.length === 0) {
+        unmatched.push(pattern)
+      }
+
+      continue
     }
 
     unmatched.push(pattern)
@@ -142,21 +146,6 @@ export const readJson = Effect.fn(
   },
   Effect.orElseSucceed(() => undefined),
 )
-
-const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-
-  const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd, stdin: 'ignore', stderr: 'ignore' }))
-
-  const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
-  const exitCode = yield* handle.exitCode
-
-  if (exitCode !== 0) {
-    return yield* Effect.fail(exitCode)
-  }
-
-  return stdout.split('\0').filter(file => file !== '')
-}, Effect.scoped)
 
 /** The folders `tsc` itself never looks into. */
 const SKIPPED_DIRECTORIES = new Set(['node_modules', 'bower_components', 'jspm_packages'])

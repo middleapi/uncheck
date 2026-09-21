@@ -1,16 +1,20 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import process from 'node:process'
 import { stripVTControlCharacters } from 'node:util'
 import { NodeServices } from '@effect/platform-node'
 import { Console, Effect, Stdio, Stream } from 'effect'
 import { Command } from 'effect/unstable/cli'
 import { fixture } from './fixture'
 import { hooks } from '../src/commands/hooks'
+import { prepare } from '../src/commands/prepare'
+import { staged } from '../src/commands/staged'
 import { uncheck } from '../src/commands/uncheck'
 import { CheckFailed } from '../src/errors'
 
-const cli = uncheck.pipe(Command.withSubcommands([hooks]))
+const cli = uncheck.pipe(Command.withSubcommands([staged, prepare, hooks]))
+const SUBCOMMANDS = new Set(['staged', 'prepare', 'hooks', 'install', 'run'])
 
 interface RunResult {
   readonly result: 'ok' | 'blocked' | CheckFailed
@@ -21,7 +25,12 @@ interface RunResult {
 
 /** Runs the CLI in `cwd`; the flag goes after the subcommand names so it lands on the command that runs. */
 async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): Promise<RunResult> {
-  const verbs = args[0] === 'hooks' ? 2 : 0
+  let verbs = 0
+
+  while (SUBCOMMANDS.has(args[verbs] ?? '')) {
+    verbs++
+  }
+
   const argv = [...args.slice(0, verbs), '--cwd', cwd, ...args.slice(verbs)]
   const stdout: string[] = []
   const stderr: string[] = []
@@ -460,27 +469,33 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
   })
 })
 
+/** Runs git in `dir` with a throwaway identity and returns what it printed. */
+function gitIn(dir: string, ...args: string[]): string {
+  return execFileSync('git', ['-c', 'user.name=uncheck', '-c', 'user.email=uncheck@example.com', ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+  })
+}
+
 /** A git repository with one clean commit, so later edits show up as working-tree changes. */
 function committed(files: Record<string, string | object>) {
   const dir = fixture(files)
-  const git = (...args: string[]) =>
-    execFileSync('git', ['-c', 'user.name=uncheck', '-c', 'user.email=uncheck@example.com', ...args], { cwd: dir })
 
-  git('init', '--quiet')
-  git('add', '.')
-  git('commit', '--quiet', '-m', 'init')
+  gitIn(dir, 'init', '--quiet')
+  gitIn(dir, 'add', '.')
+  gitIn(dir, 'commit', '--quiet', '-m', 'init')
 
   return dir
 }
 
-describe('uncheck hooks run', { timeout: 120_000 }, () => {
-  const clean = {
-    '.oxlintrc.json': oxlintrc,
-    'tsconfig.json': standaloneTsconfig,
-    'src/index.ts': 'export const answer: number = 42;\n',
-    'src/other.ts': 'export const other = 2;\n',
-  }
+const clean = {
+  '.oxlintrc.json': oxlintrc,
+  'tsconfig.json': standaloneTsconfig,
+  'src/index.ts': 'export const answer: number = 42;\n',
+  'src/other.ts': 'export const other = 2;\n',
+}
 
+describe('uncheck hooks run', { timeout: 120_000 }, () => {
   it('checks the files changed since the last commit and sends the agent back once', async () => {
     const dir = committed(clean)
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
@@ -576,5 +591,198 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stderr).toContain('▶ oxlint\n')
     expect(stderr).toContain('✔ all checks passed (oxlint, oxfmt, tsc)')
+  })
+})
+
+describe('uncheck staged', { timeout: 120_000 }, () => {
+  it('checks the staged files, stages the fixes and keeps unstaged changes out of the way', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\nexport const two = 2;\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    // An unstaged hunk in the staged file, an unstaged file and an untracked one: none of them is checked.
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      'export const   answer: number = 42\nexport const two = 2;\nexport const three = 3;\n',
+    )
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 3\n')
+    writeFileSync(join(dir, 'src/fresh.ts'), 'var fresh = 4\n')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain(
+      `uncheck staged in ${dir}\n○ unstaged changes of src/index.ts set aside until the checks finish\n`,
+    )
+    expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)\n')
+    expect(stdout).toContain('✔ staged the fixes to src/index.ts\n○ unstaged changes of src/index.ts restored\n')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const answer: number = 42;\nexport const two = 2;\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 42;\nexport const two = 2;\nexport const three = 3;\n',
+    )
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 3\n')
+    expect(readFileSync(join(dir, 'src/fresh.ts'), 'utf8')).toBe('var fresh = 4\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\n M src/other.ts\n?? src/fresh.ts\n')
+    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+  })
+
+  it('undoes the fixes when they conflict with unstaged changes, so nothing is lost', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    // The unstaged change touches the line the formatter rewrites.
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
+    gitIn(dir, 'add', 'src/other.ts')
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
+    )
+
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const   answer: number = 42\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe('export const   answer: number = 43\n')
+    // The fixes to the other staged file are undone too, so a commit attempt never half applies.
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const   other = 2\n')
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 2\n')
+    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+  })
+
+  it('only reports without --fix, stages the fixes even when a check fails, and needs staged files', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
+    gitIn(dir, 'add', 'src/index.ts')
+
+    const check = await run(dir, ['staged'])
+
+    expect(check.result).toBeInstanceOf(CheckFailed)
+    expect((check.result as CheckFailed).outcomes).toEqual([
+      { name: 'oxlint', status: 'passed' },
+      { name: 'oxfmt', status: 'failed' },
+      { name: 'tsc', status: 'failed' },
+    ])
+    expect(check.stdout).toContain('▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(check.stdout).not.toContain('staged the fixes')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const   answer: string = 1\n')
+
+    const fix = await run(dir, ['staged', '--fix'])
+
+    expect(fix.result).toBeInstanceOf(CheckFailed)
+    expect(fix.stdout).toContain('TS2322')
+    expect(fix.stdout).toContain('✔ staged the fixes to src/index.ts\n')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const answer: string = 1;\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  src/index.ts\n')
+
+    gitIn(dir, 'commit', '--quiet', '-m', 'wip')
+
+    const nothing = await run(dir, ['staged', '--fix'])
+
+    expect(nothing.result).toBe('ok')
+    expect(nothing.stdout).toBe(`uncheck staged in ${dir}\n○ nothing to check, no staged files\n`)
+
+    await expect(run(fixture(clean), ['staged'])).rejects.toThrow(/needs a git repository/)
+  })
+})
+
+describe('uncheck prepare', { timeout: 120_000 }, () => {
+  const header = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
+
+  it('writes the pre-commit hook through the detected package manager and updates it in place', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+
+    await expect(run(dir, ['prepare'])).rejects.toThrow(/Pass --pre-commit/)
+    expect(existsSync(hook)).toBe(false)
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ pre-commit .git/hooks/pre-commit created\n')
+    expect(stdout).toContain('The hook runs pnpm exec uncheck staged --fix before every commit')
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix\n`)
+
+    if (process.platform !== 'win32') {
+      expect(statSync(hook).mode & 0o111).toBe(0o111)
+    }
+
+    const again = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(again.result).toBe('ok')
+    expect(again.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+
+    const fast = await run(dir, ['prepare', '--pre-commit', '--only=oxlint', '--only=oxfmt'])
+
+    expect(fast.result).toBe('ok')
+    expect(fast.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt\n`)
+
+    const checkOnly = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
+
+    expect(checkOnly.result).toBe('ok')
+    expect(checkOnly.stdout).toContain('The hook runs pnpm exec uncheck staged before every commit')
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged\n`)
+
+    await expect(run(dir, ['prepare', '--pre-commit', '--only=oxlint', '--skip=oxlint'])).rejects.toThrow(
+      /--only=oxlint and --skip=oxlint/,
+    )
+  })
+
+  it('keeps one line per package, drops duplicates and leaves lines it did not write alone', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+    const app = 'cd "packages/app" && pnpm exec uncheck staged --fix --only=oxlint'
+
+    await run(dir, ['prepare', '--pre-commit'])
+    await run(join(dir, 'packages/app'), ['prepare', '--pre-commit', '--only=oxlint'])
+
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix\n${app}\n`)
+
+    // Preparing the root again leaves the line of the nested package alone.
+    const root = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
+
+    expect(root.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged\n${app}\n`)
+
+    const mine = 'echo "runs uncheck staged"'
+
+    writeFileSync(hook, `${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\nnpx uncheck staged --skip=tsc\n`)
+
+    const deduped = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(deduped.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
+    // The second copy goes, the line that only mentions the command and the unrelated one stay.
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\n`)
+
+    const settled = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(settled.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+  })
+
+  it('adds itself to an existing hook, enters a nested project and does nothing outside git', async () => {
+    const dir = fixture(
+      { 'package.json': '{}\n', 'packages/app/package.json': '{}\n', 'packages/app/yarn.lock': '' },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+    writeFileSync(hook, '#!/bin/sh\necho hi')
+
+    const { result, stdout } = await run(join(dir, 'packages/app'), ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
+    expect(readFileSync(hook, 'utf8')).toBe('#!/bin/sh\necho hi\ncd "packages/app" && yarn uncheck staged --fix\n')
+
+    const plain = fixture({ 'package.json': '{}\n' }, [])
+    const skipped = await run(plain, ['prepare', '--pre-commit'])
+
+    expect(skipped.result).toBe('ok')
+    expect(skipped.stdout).toBe('○ no git repository found, nothing to prepare\n')
   })
 })

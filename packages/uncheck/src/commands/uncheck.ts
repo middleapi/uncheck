@@ -8,7 +8,7 @@ import { oxlint } from '../checks/oxlint'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, userError } from '../errors'
 import { listProjectFiles, resolvePaths } from '../files'
-import { bold, dim, green, red } from '../style'
+import { bold, dim, green, listFiles, red } from '../style'
 import { execute } from '../tool'
 
 const CHECKS: ReadonlyArray<Check> = [oxlint, oxfmt, tsc]
@@ -92,15 +92,22 @@ type CheckPlan =
   | { readonly name: CheckName; readonly status: 'run'; readonly commands: ReadonlyArray<CheckCommand> }
   | (CheckOutcome & { readonly status: 'skipped' | 'failed'; readonly reason: string })
 
+/** Validates the selection, says where it runs, then runs the checks on `paths`. */
 export const runChecks = Effect.fn(function* (paths: ReadonlyArray<string>, settings: RunSettings) {
-  const { fix, only, required, skipped, allowUnmatched } = settings
-
   yield* validateSelection(settings)
 
   const cwd = path.resolve(settings.cwd)
-  const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   yield* Console.log(dim(`uncheck in ${cwd}`))
+
+  return yield* checkPaths(paths, { ...settings, cwd })
+})
+
+/** The checks behind `runChecks`, for commands that validate and introduce themselves first. */
+export const checkPaths = Effect.fn(function* (paths: ReadonlyArray<string>, settings: RunSettings) {
+  const { fix, only, required, skipped, allowUnmatched } = settings
+  const cwd = path.resolve(settings.cwd)
+  const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
 
@@ -189,9 +196,9 @@ const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {
   const [duration, exitCodes] = yield* Effect.timed(
     Effect.forEach(plan.commands, invocation => {
       const { bin, args, files } = invocation
-      const tail = files === undefined ? [] : files.length <= 3 ? files : [`[${files.length} files]`]
+      const shown = files === undefined ? args : [...args, listFiles(files)]
 
-      return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim([...args, ...tail].join(' '))}`.trimEnd()).pipe(
+      return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
         Effect.flatMap(() => execute(invocation, cwd)),
       )
     }),

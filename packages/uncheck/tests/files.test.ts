@@ -10,6 +10,7 @@ const project = {
   'src/b.ts': '',
   'src/sub/c.ts': '',
   'docs/readme.md': '',
+  'app/[id].ts': '',
   'dist/out.js': '',
 }
 
@@ -35,8 +36,10 @@ describe('resolvePaths', () => {
     })
     expect(await resolve(dir, ['src/**/*.ts', '!src/sub'])).toEqual({ files: ['src/a.ts', 'src/b.ts'], unmatched: [] })
     expect(await resolve(dir, ['**/*.md'])).toEqual({ files: ['docs/readme.md'], unmatched: [] })
+    // An existing path is not read as a glob, so route files with brackets can be named.
+    expect(await resolve(dir, ['app/[id].ts'])).toEqual({ files: ['app/[id].ts'], unmatched: [] })
     expect(await resolve(dir, ['.'])).toEqual({
-      files: ['.gitignore', '.prettierignore', 'docs/readme.md', 'src/a.ts', 'src/b.ts', 'src/sub/c.ts'],
+      files: ['.gitignore', '.prettierignore', 'app/[id].ts', 'docs/readme.md', 'src/a.ts', 'src/b.ts', 'src/sub/c.ts'],
       unmatched: [],
     })
   })

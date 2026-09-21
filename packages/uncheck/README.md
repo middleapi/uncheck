@@ -21,7 +21,7 @@
   </a>
 </div>
 
-`uncheck` is a single command that lints, formats, and type checks your project. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types — and runs them together, so humans and coding agents have one command to remember instead of three.
+`uncheck` is a single command that lints, formats, and type checks your project. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types — and runs them together, so humans, coding agents and git hooks have one command to remember instead of three.
 
 ## Usage
 
@@ -76,6 +76,28 @@ uncheck hooks run --fix
 through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It runs every check on the files changed since the last commit (modified, staged and untracked, everything under the directory outside git), applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
 
 Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched. When even that is too slow for a project, leave the typecheck to CI: `--only`, `--skip` and `--require` given to `install` are written into the hook command as they are, and reinstalling with other flags updates it, so `install claude --only=oxlint --only=oxfmt` gives a hook that only lints and formats.
+
+## Pre-commit hook
+
+```sh
+npx uncheck staged          # check the staged files only, what a pre-commit hook should run
+npx uncheck staged --fix    # also apply the fixes and stage them
+npx uncheck prepare --pre-commit   # write .git/hooks/pre-commit so every commit runs `uncheck staged --fix`
+```
+
+`staged` runs the checks on the files staged for commit and nothing else. The unstaged hunks of partially staged files (`git add -p`) are set aside while the checks run, so what is checked is what gets committed, then put back. With `--fix` the fixes are staged too. When a fix conflicts with an unstaged hunk, the fixes are undone and the commit fails, so nothing is ever lost: stage the whole file or stash its unstaged changes and commit again.
+
+`prepare --pre-commit` replaces lint-staged and simple-git-hooks: it writes the git hook itself, running `uncheck staged --fix` through your package manager, and adds itself to an existing `pre-commit` hook rather than replacing it. Running it again only ever rewrites the line it wrote itself, so lines you added by hand stay, a repeated copy of its own line is dropped, and in a monorepo each package that prepares gets its own line with its own flags. Without a flag `prepare` sets nothing up. Register it as the `prepare` script so every clone installs the hook:
+
+```json
+{
+  "scripts": {
+    "prepare": "uncheck prepare --pre-commit"
+  }
+}
+```
+
+`--only`, `--skip` and `--require` given to `prepare` are written into the hook command as for `hooks install`, and `--no-fix` gives a hook that only checks. Outside a git repository `prepare` does nothing, so installs in CI and Docker builds keep working, and `git commit --no-verify` skips the hook.
 
 ## Sponsors
 
