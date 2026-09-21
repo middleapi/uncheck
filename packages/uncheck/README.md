@@ -26,7 +26,7 @@
 ## Usage
 
 ```sh
-npm i -D uncheck   # Node 22 or newer
+npm i -D uncheck   # Node 22.20+ or 24.8+, for stable path.matchesGlob
 
 npx uncheck                 # oxlint, oxfmt --check and tsc for everything under the current directory
 npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
