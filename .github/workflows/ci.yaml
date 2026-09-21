@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  lint_and_typecheck:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -19,15 +19,13 @@ jobs:
 
       - run: pnpm i
 
-      - run: pnpm run lint
-
-      - run: pnpm run type:check
+      - run: pnpm run check
 
   test_node_matrix:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [26, 24, 22, 20]
+        node-version: [26, 24, 22]
       fail-fast: false
     steps:
       - uses: actions/checkout@v7
@@ -58,7 +56,5 @@ jobs:
       - uses: pnpm/action-setup@v6
 
       - run: pnpm i
-
-      - run: pnpm --filter='./packages/*' run -r build
 
       - run: pnpm exec pkg-pr-new publish './packages/*' --pnpm --compact --template './playgrounds/*'

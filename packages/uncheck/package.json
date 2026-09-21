@@ -1,47 +1,62 @@
 {
   "name": "uncheck",
-  "type": "module",
   "version": "0.0.1",
-  "description": "Internal types and utilities shared across the Standard Server ecosystem",
-  "license": "MIT",
-  "funding": [
-    "https://github.com/sponsors/dinwwwh",
-    "https://opencollective.com/middleapi"
+  "description": "One command to lint, format check and typecheck a project with oxlint, oxfmt and tsc",
+  "keywords": [
+    "oxc",
+    "oxfmt",
+    "oxlint",
+    "tsc",
+    "typecheck",
+    "uncheck",
+    "unified check command"
   ],
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/middleapi/uncheck.git",
     "directory": "packages/uncheck"
   },
-  "keywords": [
-    "uncheck",
-    "unified check command",
-    "oxc",
-    "oxlint",
-    "oxfmt",
-    "tsc",
-    "typecheck"
+  "funding": [
+    "https://github.com/sponsors/dinwwwh",
+    "https://opencollective.com/middleapi"
   ],
-  "sideEffects": false,
-  "publishConfig": {
-    "exports": {
-      "./package.json": "./package.json",
-      ".": {
-        "types": "./dist/index.d.mts",
-        "import": "./dist/index.mjs",
-        "default": "./dist/index.mjs"
-      }
-    }
-  },
-  "exports": {
-    "./package.json": "./package.json",
-    ".": "./src/index.ts"
+  "bin": {
+    "uncheck": "./dist/bin.mjs"
   },
   "files": [
     "dist"
   ],
+  "type": "module",
+  "sideEffects": false,
   "scripts": {
-    "build": "unbuild",
-    "type:check": "tsc -b"
+    "prepack": "unbuild"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "^4.0.0-rc.116",
+    "effect": "^4.0.0-rc.116",
+    "jsonc-parser": "^3.3.1",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "oxfmt": "*",
+    "oxlint": "*",
+    "typescript": "*"
+  },
+  "peerDependenciesMeta": {
+    "oxfmt": {
+      "optional": true
+    },
+    "oxlint": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.20 <23 || >=24.8"
   }
 }

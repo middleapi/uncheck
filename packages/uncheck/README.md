@@ -5,7 +5,7 @@
       <img alt="codecov" src="https://codecov.io/gh/middleapi/uncheck/branch/main/graph/badge.svg">
   </a>
   <a href="https://www.npmjs.com/package/uncheck">
-    <img alt="weekly downloads" src="https://img.shields.io/npm/dw/%40standard-server%2Fshared?logo=npm" />
+    <img alt="weekly downloads" src="https://img.shields.io/npm/dw/uncheck?logo=npm" />
   </a>
   <a href="https://app.codspeed.io/middleapi/uncheck?utm_source=badge">
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed" />
@@ -22,6 +22,58 @@
 </div>
 
 `uncheck` is a single command that lints, formats, and type checks your project. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types — and runs them together, so humans and coding agents have one command to remember instead of three.
+
+## Usage
+
+```sh
+npm i -D uncheck   # Node 22.20+ or 24.8+, for stable path.matchesGlob
+
+npx uncheck                 # oxlint, oxfmt --check and tsc for everything under the current directory
+npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
+npx uncheck src/app         # check some files: paths, directories, globs and !exclusions
+npx uncheck --skip=tsc      # skip a check that would otherwise run
+npx uncheck --require=oxfmt # require a check: fail when it cannot run instead of skipping it
+npx uncheck --cwd packages/app   # run in another directory, paths are relative to it
+```
+
+Checks run in order and every check runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any check fails.
+
+| Check    | Runs when                             | Command                                                        |
+| -------- | ------------------------------------- | -------------------------------------------------------------- |
+| `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [files...]`                                    |
+| `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
+| `tsc`    | at least one `tsconfig.json` is found | `tsc -b` for projects using references, `tsc -p` for the rest  |
+
+Paths given on the command line are resolved by `uncheck` itself into one list of files that every tool receives, so tools never disagree about what a directory or glob means: a file must exist, a directory expands to the project files below it (ignored files stay out, like `git ls-files`), globs use the usual `**`/`*` syntax and `!pattern` excludes. A path that matches nothing fails the run, unless `--no-error-on-unmatched-pattern` is passed.
+
+Tools are resolved from `node_modules` the way Node does, so the versions your project already depends on are used. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped.
+
+### Typecheck in monorepos
+
+Every `tsconfig.json` in the project is discovered (through `git ls-files`, so ignored folders are skipped) and its `references` are followed recursively to build the project graph:
+
+- Projects that use `references`, or are referenced, are built with `tsc -b` on the roots of that graph. `tsc` builds the referenced projects first, in dependency order, exactly like running `tsc -b` in each package.
+- Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p`.
+- Circular references are reported as an error.
+
+When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
+
+## Agent hooks
+
+```sh
+npx uncheck hooks install                   # pick agents interactively
+npx uncheck hooks install claude cursor     # or name them: claude, codebuddy, cursor, windsurf, copilot
+```
+
+This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. Whenever the agent finishes a turn, the hook runs:
+
+```sh
+uncheck hooks run --fix
+```
+
+through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It runs every check on the files changed since the last commit (modified, staged and untracked, everything under the directory outside git), applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
+
+Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched.
 
 ## Sponsors
 
