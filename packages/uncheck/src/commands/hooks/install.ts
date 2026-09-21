@@ -1,9 +1,10 @@
 import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'effect'
-import { Argument, CliError, Command, Prompt } from 'effect/unstable/cli'
+import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { parse as parseJsonc } from 'jsonc-parser'
+import { userError } from '../../errors'
 import { ancestors, readJson } from '../../files'
 import { bold, dim, green } from '../../style'
-import { cwdFlag } from '../uncheck'
+import { cwdFlag, onlyFlag, requireFlag, selectionArgs, skipFlag, validateSelection } from '../uncheck'
 
 const AGENTS = [
   {
@@ -62,22 +63,28 @@ export const install = Command.make(
   'install',
   {
     cwd: cwdFlag,
+    only: onlyFlag,
+    required: requireFlag,
+    skipped: skipFlag,
     agents: Argument.Literals('agents', AGENT_IDS).pipe(
       Argument.variadic(),
       Argument.withDescription(`Agents to configure: ${AGENT_IDS.join(', ')}. Prompts for a selection when omitted.`),
     ),
   },
-  Effect.fn(function* ({ cwd, agents }) {
+  Effect.fn(function* ({ cwd, agents, ...selection }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const stdio = yield* Stdio.Stdio
+
+    yield* validateSelection(selection)
 
     let selected: ReadonlyArray<(typeof AGENT_IDS)[number]> = agents
 
     if (selected.length === 0) {
       if (!(yield* stdio.stdinIsTerminal)) {
-        const userMessage = `Pass the agents to configure, for example: uncheck hooks install ${AGENT_IDS.join(' ')}`
-        return yield* Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+        return yield* userError(
+          `Pass the agents to configure, for example: uncheck hooks install ${AGENT_IDS.join(' ')}`,
+        )
       }
 
       selected = yield* Prompt.run(
@@ -108,7 +115,7 @@ export const install = Command.make(
       }
     }
 
-    const command = `${exec} uncheck hooks run --fix`
+    const command = `${exec} ${HOOK_COMMAND} ${['--fix', ...selectionArgs(selection)].join(' ')}`
 
     for (const agent of AGENTS) {
       if (!selected.includes(agent.id)) {
@@ -121,16 +128,31 @@ export const install = Command.make(
 
       if (Option.isNone(existing)) {
         yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-        yield* fs.writeFileString(file, `${JSON.stringify(agent.content(command), null, 2)}\n`)
+        yield* fs.writeFileString(file, render(agent.content(command)))
         result = 'created'
-      } else if (existing.value.includes('uncheck')) {
-        result = 'unchanged'
       } else {
         const current: unknown = parseJsonc(existing.value, undefined, { allowTrailingComma: true })
-        const merged = mergeJson(Predicate.isObject(current) ? current : {}, agent.content(command))
+        const base = Predicate.isObject(current) ? current : {}
+        const installed: string[] = []
 
-        yield* fs.writeFileString(file, `${JSON.stringify(merged, null, 2)}\n`)
-        result = 'updated'
+        const replaced = mapStrings(base, text => {
+          if (!text.includes(HOOK_COMMAND)) {
+            return text
+          }
+
+          installed.push(text)
+          return command
+        })
+
+        if (installed.length === 0) {
+          yield* fs.writeFileString(file, render(mergeJson(base, agent.content(command))))
+          result = 'updated'
+        } else if (installed.every(text => text === command)) {
+          result = 'unchanged'
+        } else {
+          yield* fs.writeFileString(file, render(replaced))
+          result = 'updated'
+        }
       }
 
       yield* Console.log(`${green('✔')} ${bold(agent.name)} ${dim(`${agent.path} ${result}`)}`)
@@ -140,6 +162,28 @@ export const install = Command.make(
     yield* Console.log(`${dim('The hook runs')} ${bold(command)} ${dim('whenever the agent finishes a turn.')}`)
   }),
 ).pipe(Command.withDescription('Write the agent hook configs that run `uncheck hooks run` after every agent turn'))
+
+const HOOK_COMMAND = 'uncheck hooks run'
+
+function render(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`
+}
+
+function mapStrings(value: unknown, f: (text: string) => string): unknown {
+  if (typeof value === 'string') {
+    return f(value)
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => mapStrings(item, f))
+  }
+
+  if (Predicate.isObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, f)]))
+  }
+
+  return value
+}
 
 function mergeJson(base: unknown, addition: unknown): unknown {
   if (Array.isArray(base) && Array.isArray(addition)) {

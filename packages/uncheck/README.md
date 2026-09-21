@@ -32,6 +32,7 @@ npx uncheck                 # oxlint, oxfmt --check and tsc for everything under
 npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
 npx uncheck src/app         # check some files: paths, directories, globs and !exclusions
 npx uncheck --skip=tsc      # skip a check that would otherwise run
+npx uncheck --only=oxlint --only=oxfmt   # run only the named checks, here the fast ones
 npx uncheck --require=oxfmt # require a check: fail when it cannot run instead of skipping it
 npx uncheck --cwd packages/app   # run in another directory, paths are relative to it
 ```
@@ -63,6 +64,7 @@ When files are given, `tsc` runs only the projects it would actually check for t
 ```sh
 npx uncheck hooks install                   # pick agents interactively
 npx uncheck hooks install claude cursor     # or name them: claude, codebuddy, cursor, windsurf, copilot
+npx uncheck hooks install claude --only=oxlint --only=oxfmt   # a fast hook: lint and format, no typecheck
 ```
 
 This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. Whenever the agent finishes a turn, the hook runs:
@@ -73,7 +75,7 @@ uncheck hooks run --fix
 
 through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It runs every check on the files changed since the last commit (modified, staged and untracked, everything under the directory outside git), applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
 
-Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched.
+Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched. When even that is too slow for a project, leave the typecheck to CI: `--only`, `--skip` and `--require` given to `install` are written into the hook command as they are, and reinstalling with other flags updates it, so `install claude --only=oxlint --only=oxfmt` gives a hook that only lints and formats.
 
 ## Sponsors
 

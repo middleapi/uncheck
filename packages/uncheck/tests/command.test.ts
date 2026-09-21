@@ -319,6 +319,36 @@ describe('uncheck check flags', { timeout: 120_000 }, () => {
       'nothing to check: oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
     )
   })
+
+  it('runs only the checks named with --only', async () => {
+    const dir = fixture({
+      '.oxlintrc.json': oxlintrc,
+      'tsconfig.json': standaloneTsconfig,
+      'src/ugly.ts': 'export const   ugly = 1\n',
+    })
+
+    const lint = await run(dir, ['--only=oxlint'])
+
+    expect(lint.result).toBe('ok')
+    expect(lint.stdout).toContain('▶ oxlint\n')
+    expect(lint.stdout).toContain('○ oxfmt skipped, not selected by --only\n')
+    expect(lint.stdout).toContain('○ tsc skipped, not selected by --only\n')
+    expect(lint.stdout).toContain('✔ all checks passed (oxlint)')
+
+    const format = await run(dir, ['--only=oxfmt'])
+
+    expect(format.result).toBeInstanceOf(CheckFailed)
+    expect((format.result as CheckFailed).outcomes).toEqual([
+      { name: 'oxlint', status: 'skipped', reason: 'not selected by --only' },
+      { name: 'oxfmt', status: 'failed' },
+      { name: 'tsc', status: 'skipped', reason: 'not selected by --only' },
+    ])
+
+    await expect(run(dir, ['--only=oxlint', '--skip=oxlint'])).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
+    await expect(run(dir, ['--only=oxlint', '--only=oxfmt', '--require=tsc'])).rejects.toThrow(
+      /--require=tsc and --only=oxlint --only=oxfmt/,
+    )
+  })
 })
 
 describe('uncheck hooks install', { timeout: 120_000 }, () => {
@@ -389,6 +419,44 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     const dir = fixture({ 'package.json': '{}\n' }, [])
 
     await expect(run(dir, ['hooks', 'install', 'emacs'])).rejects.toThrow()
+  })
+
+  it('writes the check flags into the hook command and updates an installed hook', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'yarn.lock': '' }, [])
+    const fast = 'yarn uncheck hooks run --fix --only=oxlint --only=oxfmt'
+
+    const { result, stdout } = await run(dir, [
+      'hooks',
+      'install',
+      'claude',
+      'copilot',
+      '--only=oxlint',
+      '--only=oxfmt',
+    ])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain(fast)
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: fast }] }] },
+    })
+
+    const all = 'yarn uncheck hooks run --fix'
+    const again = await run(dir, ['hooks', 'install', 'claude', 'copilot'])
+
+    expect(again.result).toBe('ok')
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
+    expect(again.stdout).toContain('✔ GitHub Copilot .github/hooks/uncheck.json updated\n')
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: all }] }] },
+    })
+    expect(JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8'))).toEqual({
+      version: 1,
+      hooks: { agentStop: [{ type: 'command', bash: all, powershell: all }] },
+    })
+
+    await expect(run(dir, ['hooks', 'install', 'claude', '--only=oxlint', '--skip=oxlint'])).rejects.toThrow(
+      /--only=oxlint and --skip=oxlint/,
+    )
   })
 })
 
@@ -484,6 +552,20 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(ok.stdout).toBe('')
     expect(ok.stderr).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/other.ts\n')
     expect(ok.stderr).toContain('✔ all checks passed (oxlint, oxfmt, tsc)')
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
+
+    const fast = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=oxlint', '--only=oxfmt'],
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    )
+
+    expect(fast.result).toBe('ok')
+    expect(fast.stdout).toBe('')
+    expect(fast.stderr).toContain('○ tsc skipped, not selected by --only\n')
+    expect(fast.stderr).toContain('✔ all checks passed (oxlint, oxfmt)')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe('export const answer: string = 1;\n')
   })
 
   it('checks everything under the directory outside a git repository', async () => {

@@ -1,5 +1,6 @@
 import type { CheckOutcome } from './types'
-import { Data } from 'effect'
+import { Data, Effect } from 'effect'
+import { CliError } from 'effect/unstable/cli'
 
 export class NothingToCheck extends Data.TaggedError('NothingToCheck')<{
   readonly reason: string
@@ -14,3 +15,7 @@ export class CheckFailed extends Data.TaggedError('CheckFailed')<{
 }> {}
 
 export class StopBlocked extends Data.TaggedError('StopBlocked')<{}> {}
+
+export function userError(userMessage: string): Effect.Effect<never, CliError.UserError> {
+  return Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+}
