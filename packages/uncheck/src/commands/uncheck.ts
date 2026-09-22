@@ -5,13 +5,14 @@ import { Console, Duration, Effect } from 'effect'
 import { Argument, CliError, Command, Flag } from 'effect/unstable/cli'
 import { oxfmt } from '../checks/oxfmt'
 import { oxlint } from '../checks/oxlint'
+import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, userError } from '../errors'
 import { listProjectFiles, resolvePaths } from '../files'
 import { bold, dim, green, listFiles, red } from '../style'
 import { execute } from '../tool'
 
-const CHECKS: ReadonlyArray<Check> = [oxlint, oxfmt, tsc]
+const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
 
 export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
   Flag.withDefault(Effect.sync(() => process.cwd())),
@@ -19,7 +20,9 @@ export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
 )
 
 export const fixFlag = Flag.Boolean('fix').pipe(
-  Flag.withDescription('Apply lint fixes (oxlint --fix) and rewrite formatting (oxfmt) instead of only reporting'),
+  Flag.withDescription(
+    'Apply workspace fixes (sherif --fix), lint fixes (oxlint --fix) and rewrite formatting (oxfmt) instead of only reporting',
+  ),
   Flag.withDefault(false),
 )
 
@@ -170,11 +173,14 @@ export const checkPaths = Effect.fn(function* (paths: ReadonlyArray<string>, set
       `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map(outcome => outcome.name).join(', ')}`,
     )
 
-    if (
-      !fix &&
-      failed.some(outcome => outcome.reason === undefined && CHECKS.find(check => check.name === outcome.name)?.fixes)
-    ) {
-      yield* Console.log(dim('  run `uncheck --fix` to apply oxlint and oxfmt fixes'))
+    const fixable = failed
+      .filter(outcome => outcome.reason === undefined && CHECKS.find(check => check.name === outcome.name)?.fixes)
+      .map(outcome => outcome.name)
+      .join(', ')
+      .replace(/, ([^,]+)$/, ' and $1')
+
+    if (!fix && fixable !== '') {
+      yield* Console.log(dim(`  run \`uncheck --fix\` to apply ${fixable} fixes`))
     }
 
     return yield* Effect.fail(new CheckFailed({ outcomes }))
@@ -241,6 +247,6 @@ export const uncheck = Command.make(
   ({ paths, ...settings }) => runChecks(paths, settings),
 ).pipe(
   Command.withDescription(
-    'Lint (oxlint), format check (oxfmt) and typecheck (tsc) a project with one command. Each check runs only when the project uses that tool.',
+    'Check a workspace (sherif), lint (oxlint), format check (oxfmt) and typecheck (tsc) a project with one command. Each check runs only when the project uses that tool.',
   ),
 )

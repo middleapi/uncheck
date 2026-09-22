@@ -101,6 +101,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
 
     expect(check.result).toBeInstanceOf(CheckFailed)
     expect((check.result as CheckFailed).outcomes).toEqual([
+      { name: 'sherif', status: 'skipped', reason: 'no package.json found' },
       { name: 'oxlint', status: 'failed' },
       { name: 'oxfmt', status: 'failed' },
       { name: 'tsc', status: 'passed' },
@@ -120,7 +121,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const clean = await run(dir)
 
     expect(clean.result).toBe('ok')
-    expect(clean.stdout.startsWith(`uncheck in ${dir}\n▶ oxlint\n`)).toBe(true)
+    expect(clean.stdout.startsWith(`uncheck in ${dir}\n○ sherif skipped, no package.json found\n▶ oxlint\n`)).toBe(true)
     expect(clean.stdout).toContain('▶ oxlint\n')
     expect(clean.stdout).toContain('▶ oxfmt --check\n')
     expect(clean.stdout).toContain('▶ tsc -p tsconfig.json\n')
@@ -151,6 +152,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
 
     expect(broken.result).toBeInstanceOf(CheckFailed)
     expect((broken.result as CheckFailed).outcomes).toEqual([
+      { name: 'sherif', status: 'skipped', reason: 'no package.json found' },
       { name: 'oxlint', status: 'passed' },
       { name: 'oxfmt', status: 'passed' },
       { name: 'tsc', status: 'failed' },
@@ -280,7 +282,12 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir)
 
     expect(result).toBeInstanceOf(CheckFailed)
-    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual(['skipped', 'skipped', 'failed'])
+    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual([
+      'skipped',
+      'skipped',
+      'skipped',
+      'failed',
+    ])
     expect(stdout).toContain('found 1 tsconfig.json but typescript is not installed')
   })
 
@@ -290,8 +297,129 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir)
 
     expect(result).toBeInstanceOf(CheckFailed)
-    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual(['skipped', 'skipped', 'skipped'])
-    expect(stdout).toContain('nothing to check: oxlint not installed, oxfmt not installed, tsc no tsconfig.json found')
+    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual([
+      'skipped',
+      'skipped',
+      'skipped',
+      'skipped',
+    ])
+    expect(stdout).toContain(
+      'nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+    )
+  })
+})
+
+/** A workspace sherif has something to say about, with its install step off so the fix stays offline. */
+function workspace(extra: Record<string, string | object> = {}, config: Record<string, unknown> = {}) {
+  return fixture(
+    {
+      'package.json': {
+        name: 'root',
+        private: true,
+        packageManager: 'pnpm@10.0.0',
+        workspaces: ['packages/*'],
+        devDependencies: { zod: '^3.0.0', react: '^18.0.0' },
+        sherif: { noInstall: true, ...config },
+      },
+      'packages/a/package.json': { name: 'a', version: '1.0.0', dependencies: { react: '^18.0.0' } },
+      'packages/b/package.json': { name: 'b', version: '1.0.0', dependencies: { react: '^17.0.0' } },
+      ...extra,
+    },
+    ['sherif'],
+  )
+}
+
+describe('uncheck sherif', { timeout: 120_000 }, () => {
+  beforeEach(() => {
+    vi.stubEnv('CI', undefined)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('checks a workspace root with sherif and fixes it, aligning versions on the highest', async () => {
+    const dir = workspace()
+
+    const check = await run(dir)
+
+    expect(check.result).toBeInstanceOf(CheckFailed)
+    expect((check.result as CheckFailed).outcomes[0]).toEqual({ name: 'sherif', status: 'failed' })
+    expect(check.stdout).toContain('▶ sherif\n')
+    expect(check.stdout).toContain('unordered-dependencies')
+    expect(check.stdout).toContain('multiple-dependency-versions')
+    expect(check.stdout).toContain('✘ 1 of 1 checks failed: sherif\n  run `uncheck --fix` to apply sherif fixes')
+
+    const fix = await run(dir, ['--fix'])
+
+    expect(fix.result).toBe('ok')
+    expect(fix.stdout).toContain('▶ sherif --fix --select=highest\n')
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).devDependencies)).toEqual([
+      'react',
+      'zod',
+    ])
+    expect(JSON.parse(readFileSync(join(dir, 'packages/b/package.json'), 'utf8'))).toMatchObject({
+      dependencies: { react: '^18.0.0' },
+    })
+
+    const clean = await run(dir)
+
+    expect(clean.result).toBe('ok')
+    expect(clean.stdout).toContain('✔ all checks passed (sherif)')
+  })
+
+  it('leaves the version choice to the sherif config when it makes one', async () => {
+    const dir = workspace({}, { select: 'lowest' })
+
+    const { result, stdout } = await run(dir, ['--fix'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('▶ sherif --fix\n')
+    expect(JSON.parse(readFileSync(join(dir, 'packages/a/package.json'), 'utf8'))).toMatchObject({
+      dependencies: { react: '^17.0.0' },
+    })
+  })
+
+  it('only checks in CI, where sherif refuses to fix', async () => {
+    vi.stubEnv('CI', 'true')
+
+    const dir = workspace()
+
+    const { result, stdout } = await run(dir, ['--fix'])
+
+    expect(result).toBeInstanceOf(CheckFailed)
+    expect(stdout).toContain('▶ sherif\n')
+    expect(stdout).toContain('unordered-dependencies')
+    expect(stdout).not.toContain('Cannot fix issues inside a CI environment')
+  })
+
+  it('runs only for a workspace root and only when a package.json is among the given files', async () => {
+    const dir = workspace({ 'src/index.ts': 'export const answer = 42;\n' })
+
+    const code = await run(dir, ['src/index.ts'])
+
+    expect(code.result).toBeInstanceOf(CheckFailed)
+    expect(code.stdout).toContain('○ sherif skipped, no package.json among the given files\n')
+    expect(code.stdout).toContain('nothing to check: sherif no package.json among the given files')
+
+    const manifest = await run(dir, ['packages/a/package.json'])
+
+    expect(manifest.result).toBeInstanceOf(CheckFailed)
+    expect(manifest.stdout).toContain('▶ sherif\n')
+
+    const single = fixture({ 'package.json': { name: 'single', private: true } }, ['sherif'])
+    const alone = await run(single)
+
+    expect(alone.result).toBeInstanceOf(CheckFailed)
+    expect(alone.stdout).toContain('○ sherif skipped, not a workspace root\n')
+
+    const nested = fixture(
+      { 'package.json': { name: 'nested', private: true }, 'pnpm-workspace.yaml': 'packages:\n  - packages/*\n' },
+      ['sherif'],
+    )
+    const pnpm = await run(nested)
+
+    expect(pnpm.stdout).toContain('▶ sherif\n')
   })
 })
 
@@ -325,7 +453,7 @@ describe('uncheck check flags', { timeout: 120_000 }, () => {
 
     expect(none.result).toBeInstanceOf(CheckFailed)
     expect(none.stdout).toContain(
-      'nothing to check: oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
+      'nothing to check: sherif not installed, oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
     )
   })
 
@@ -348,6 +476,7 @@ describe('uncheck check flags', { timeout: 120_000 }, () => {
 
     expect(format.result).toBeInstanceOf(CheckFailed)
     expect((format.result as CheckFailed).outcomes).toEqual([
+      { name: 'sherif', status: 'skipped', reason: 'not selected by --only' },
       { name: 'oxlint', status: 'skipped', reason: 'not selected by --only' },
       { name: 'oxfmt', status: 'failed' },
       { name: 'tsc', status: 'skipped', reason: 'not selected by --only' },
@@ -661,6 +790,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
 
     expect(check.result).toBeInstanceOf(CheckFailed)
     expect((check.result as CheckFailed).outcomes).toEqual([
+      { name: 'sherif', status: 'skipped', reason: 'no package.json among the given files' },
       { name: 'oxlint', status: 'passed' },
       { name: 'oxfmt', status: 'failed' },
       { name: 'tsc', status: 'failed' },

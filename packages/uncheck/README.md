@@ -21,15 +21,15 @@
   </a>
 </div>
 
-`uncheck` is a single command that lints, formats, and type checks your project. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types — and runs them together, so humans, coding agents and git hooks have one command to remember instead of three.
+`uncheck` is a single command that lints, formats, type checks your project and keeps a monorepo consistent. It detects which tools the project already has — [`oxlint` and `oxfmt`](https://oxc.rs) for linting and formatting, `tsc` for types, [`sherif`](https://github.com/QuiiBz/sherif) for workspaces — and runs them together, so humans, coding agents and git hooks have one command to remember instead of four.
 
 ## Usage
 
 ```sh
 npm i -D uncheck   # Node 22.20+ or 24.8+, for stable path.matchesGlob
 
-npx uncheck                 # oxlint, oxfmt --check and tsc for everything under the current directory
-npx uncheck --fix           # oxlint --fix, then rewrite formatting with oxfmt
+npx uncheck                 # sherif, oxlint, oxfmt --check and tsc for everything under the current directory
+npx uncheck --fix           # sherif --fix and oxlint --fix, then rewrite formatting with oxfmt
 npx uncheck src/app         # check some files: paths, directories, globs and !exclusions
 npx uncheck --skip=tsc      # skip a check that would otherwise run
 npx uncheck --only=oxlint --only=oxfmt   # run only the named checks, here the fast ones
@@ -39,15 +39,20 @@ npx uncheck --cwd packages/app   # run in another directory, paths are relative 
 
 Checks run in order and every check runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any check fails.
 
-| Check    | Runs when                             | Command                                                        |
-| -------- | ------------------------------------- | -------------------------------------------------------------- |
-| `oxlint` | `oxlint` is installed                 | `oxlint [--fix] [files...]`                                    |
-| `oxfmt`  | `oxfmt` is installed                  | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
-| `tsc`    | at least one `tsconfig.json` is found | `tsc -b` for projects using references, `tsc -p` for the rest  |
+| Check    | Runs when                                                   | Command                                                        |
+| -------- | ----------------------------------------------------------- | -------------------------------------------------------------- |
+| `sherif` | `sherif` is installed and the directory is a workspace root | `sherif`, or `sherif --fix --select=highest` with `--fix`      |
+| `oxlint` | `oxlint` is installed                                       | `oxlint [--fix] [files...]`                                    |
+| `oxfmt`  | `oxfmt` is installed                                        | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
+| `tsc`    | at least one `tsconfig.json` is found                       | `tsc -b` for projects using references, `tsc -p` for the rest  |
 
 Paths given on the command line are resolved by `uncheck` itself into one list of files that every tool receives, so tools never disagree about what a directory or glob means: a file must exist, a directory expands to the project files below it (ignored files stay out, like `git ls-files`), globs use the usual `**`/`*` syntax and `!pattern` excludes. A path that matches nothing fails the run, unless `--no-error-on-unmatched-pattern` is passed.
 
 Tools are resolved from `node_modules` the way Node does, so the versions your project already depends on are used. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped.
+
+### Monorepo consistency
+
+[`sherif`](https://github.com/QuiiBz/sherif) lints a monorepo as a whole: dependency versions that differ between packages, unordered dependencies, a missing `packageManager` field and so on. It runs when the directory is a workspace root (`workspaces` in `package.json` or a `pnpm-workspace.yaml`) and, when paths are given, only if a `package.json` or `pnpm-workspace.yaml` is among them, since nothing else changes its verdict. Its options are read from the `sherif` field of the root `package.json` as sherif documents, so rules and dependencies to ignore live there. With `--fix` sherif also runs your package manager's install afterwards, unless that field sets `noInstall`; aligning versions takes the highest one unless the field sets `select`, since choosing interactively needs a terminal. sherif refuses to fix anything in CI, so with `CI` set it only checks.
 
 ### Typecheck in monorepos
 
