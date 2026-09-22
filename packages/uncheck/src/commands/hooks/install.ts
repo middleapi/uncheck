@@ -2,7 +2,7 @@ import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'eff
 import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { userError } from '../../errors'
-import { ancestors, readJson } from '../../files'
+import { detectExec } from '../../pm'
 import { bold, dim, green } from '../../style'
 import { cwdFlag, onlyFlag, requireFlag, selectionArgs, skipFlag, validateSelection } from '../uncheck'
 
@@ -44,21 +44,6 @@ const AGENTS = [
 
 const AGENT_IDS = AGENTS.map(agent => agent.id)
 
-const EXEC_BY_PACKAGE_MANAGER: Readonly<Record<string, string>> = {
-  pnpm: 'pnpm exec',
-  yarn: 'yarn',
-  bun: 'bunx',
-  npm: 'npx',
-}
-
-const EXEC_BY_LOCKFILE: ReadonlyArray<readonly [lockfile: string, exec: string]> = [
-  ['pnpm-lock.yaml', 'pnpm exec'],
-  ['yarn.lock', 'yarn'],
-  ['bun.lock', 'bunx'],
-  ['bun.lockb', 'bunx'],
-  ['package-lock.json', 'npx'],
-]
-
 export const install = Command.make(
   'install',
   {
@@ -96,25 +81,7 @@ export const install = Command.make(
       )
     }
 
-    let exec = 'npx'
-
-    for (const dir of ancestors(path, cwd)) {
-      const manifest = yield* readJson(path.join(dir, 'package.json'))
-      const declared =
-        typeof manifest?.packageManager === 'string'
-          ? EXEC_BY_PACKAGE_MANAGER[manifest.packageManager.split('@')[0] ?? '']
-          : undefined
-
-      const lockfile = yield* Effect.findFirst(EXEC_BY_LOCKFILE, ([file]) =>
-        fs.exists(path.join(dir, file)).pipe(Effect.orElseSucceed(() => false)),
-      )
-
-      if (declared !== undefined || Option.isSome(lockfile)) {
-        exec = declared ?? Option.getOrThrow(lockfile)[1]
-        break
-      }
-    }
-
+    const exec = yield* detectExec(cwd)
     const command = `${exec} ${HOOK_COMMAND} ${['--fix', ...selectionArgs(selection)].join(' ')}`
 
     for (const agent of AGENTS) {

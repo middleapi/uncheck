@@ -3,9 +3,12 @@
   "version": "0.0.2",
   "description": "One command to lint, format check and typecheck a project with oxlint, oxfmt and tsc",
   "keywords": [
+    "git hooks",
+    "lint-staged",
     "oxc",
     "oxfmt",
     "oxlint",
+    "pre-commit",
     "tsc",
     "typecheck",
     "uncheck",

@@ -7,9 +7,11 @@ import { Effect } from 'effect'
 import { Command } from 'effect/unstable/cli'
 import pkg from '../package.json'
 import { hooks } from './commands/hooks'
+import { prepare } from './commands/prepare'
+import { staged } from './commands/staged'
 import { uncheck } from './commands/uncheck'
 
-Command.run(uncheck.pipe(Command.withSubcommands([hooks])), { version: pkg.version }).pipe(
+Command.run(uncheck.pipe(Command.withSubcommands([staged, prepare, hooks])), { version: pkg.version }).pipe(
   Effect.catchTag('CheckFailed', () =>
     Effect.sync(() => {
       process.exitCode = 1
