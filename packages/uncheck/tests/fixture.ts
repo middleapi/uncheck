@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const TOOLS = ['oxlint', 'oxfmt', 'typescript'] as const
+export const TOOLS = ['sherif', 'oxlint', 'oxfmt', 'typescript'] as const
 
 const packageNodeModules = fileURLToPath(new URL('../node_modules', import.meta.url))
 const fixtures: string[] = []

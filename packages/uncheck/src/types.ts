@@ -5,7 +5,7 @@ import type { CannotCheck, NothingToCheck } from './errors'
 import type { ProjectFiles } from './files'
 import type { Bin } from './tool'
 
-export type CheckName = 'oxlint' | 'oxfmt' | 'tsc'
+export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'tsc'
 
 export interface CheckOutcome {
   readonly name: CheckName

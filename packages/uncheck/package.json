@@ -1,14 +1,16 @@
 {
   "name": "uncheck",
   "version": "0.0.2",
-  "description": "One command to lint, format check and typecheck a project with oxlint, oxfmt and tsc",
+  "description": "One command to lint, format check, typecheck and check monorepo consistency with oxlint, oxfmt, tsc and sherif",
   "keywords": [
     "git hooks",
     "lint-staged",
+    "monorepo",
     "oxc",
     "oxfmt",
     "oxlint",
     "pre-commit",
+    "sherif",
     "tsc",
     "typecheck",
     "uncheck",
@@ -41,11 +43,13 @@
     "jsonc-parser": "^3.3.1",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
+    "sherif": "^1.13.0",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "oxfmt": "*",
     "oxlint": "*",
+    "sherif": "*",
     "typescript": "*"
   },
   "peerDependenciesMeta": {
@@ -53,6 +57,9 @@
       "optional": true
     },
     "oxlint": {
+      "optional": true
+    },
+    "sherif": {
       "optional": true
     },
     "typescript": {
