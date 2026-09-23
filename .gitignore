@@ -6,8 +6,6 @@
 !.vscode/
 !.github/
 !.zed/
-!.oxfmtrc.json
-!.oxlintrc.json
 
 # Common generated folders
 logs/

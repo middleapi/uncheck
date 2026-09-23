@@ -1,5 +1,6 @@
 import { NodeServices } from '@effect/platform-node'
 import { Effect } from 'effect'
+
 import { tsc } from '../src/checks/tsc'
 import { listProjectFiles } from '../src/files'
 import { fixture } from './fixture'
@@ -9,9 +10,9 @@ function plan(dir: string, files?: string[]): Promise<string[] | string> {
   return Effect.runPromise(
     Effect.provide(
       tsc.plan({ cwd: dir, fix: false, files, projectFiles: listProjectFiles(dir) }).pipe(
-        Effect.map(commands => commands.map(command => command.args.join(' '))),
-        Effect.catchTag('NothingToCheck', error => Effect.succeed(error.reason)),
-        Effect.catchTag('CannotCheck', error => Effect.succeed(error.reason)),
+        Effect.map((commands) => commands.map((command) => command.args.join(' '))),
+        Effect.catchTag('NothingToCheck', (error) => Effect.succeed(error.reason)),
+        Effect.catchTag('CannotCheck', (error) => Effect.succeed(error.reason)),
       ),
       NodeServices.layer,
     ),
@@ -32,7 +33,9 @@ describe('tsc project references', () => {
       'tsconfig.json': {},
       'packages/shared/tsconfig.json': {},
       'packages/client/tsconfig.json': { references: [{ path: '../shared' }] },
-      'packages/server/tsconfig.json': { references: [{ path: '../client' }, { path: '../shared' }] },
+      'packages/server/tsconfig.json': {
+        references: [{ path: '../client' }, { path: '../shared' }],
+      },
       'packages/nest/tsconfig.json': { references: [{ path: '../server/tsconfig.json' }] },
     })
 
@@ -41,7 +44,9 @@ describe('tsc project references', () => {
 
   it('builds a solution-style root that references configs not named tsconfig.json', async () => {
     const dir = fixture({
-      'tsconfig.json': { references: [{ path: './tsconfig.app.json' }, { path: './tsconfig.node.json' }] },
+      'tsconfig.json': {
+        references: [{ path: './tsconfig.app.json' }, { path: './tsconfig.node.json' }],
+      },
       'tsconfig.app.json': {},
       'tsconfig.node.json': {},
     })
@@ -78,7 +83,9 @@ describe('tsc project references', () => {
       'c/tsconfig.json': {},
     })
 
-    expect(await plan(dir)).toBe('circular project references between a/tsconfig.json, b/tsconfig.json')
+    expect(await plan(dir)).toBe(
+      'circular project references between a/tsconfig.json, b/tsconfig.json',
+    )
   })
 
   it('reports only the cyclic part when a root also exists', async () => {
@@ -88,14 +95,19 @@ describe('tsc project references', () => {
       'c/tsconfig.json': { references: [{ path: '../b' }] },
     })
 
-    expect(await plan(dir)).toBe('circular project references between b/tsconfig.json, c/tsconfig.json')
+    expect(await plan(dir)).toBe(
+      'circular project references between b/tsconfig.json, c/tsconfig.json',
+    )
   })
 })
 
 describe('tsc project selection', () => {
   it('matches files like tsc: include folders, wildcards, extensions and default excludes', async () => {
     const dir = fixture({
-      'tsconfig.json': { include: ['src', 'scripts/*.ts', 'config/*.json', '*/*/*'], exclude: ['src/legacy'] },
+      'tsconfig.json': {
+        include: ['src', 'scripts/*.ts', 'config/*.json', '*/*/*'],
+        exclude: ['src/legacy'],
+      },
     })
     const covers = (file: string) => plan(dir, [file]).then(Array.isArray)
 
@@ -132,12 +144,17 @@ describe('tsc project selection', () => {
       'node_modules/@shared/tsconfig/package.json': { tsconfig: './base.json' },
       'node_modules/@shared/tsconfig/base.json': {
         compilerOptions: { allowJs: true },
+        // oxlint-disable-next-line no-template-curly-in-string
         include: ['${configDir}/lib'],
+        // oxlint-disable-next-line no-template-curly-in-string
         exclude: ['${configDir}/lib/vendor'],
       },
       'tsconfig.lib.json': { extends: '@shared/tsconfig', include: ['src'] },
       'packages/a/tsconfig.json': { extends: ['../../tsconfig.lib', './tsconfig.files.json'] },
-      'packages/a/tsconfig.files.json': { files: ['entry.ts'], compilerOptions: { allowJs: false } },
+      'packages/a/tsconfig.files.json': {
+        files: ['entry.ts'],
+        compilerOptions: { allowJs: false },
+      },
       'packages/b/tsconfig.json': { extends: '@shared/tsconfig' },
     })
     const a = ['-p packages/a/tsconfig.json']

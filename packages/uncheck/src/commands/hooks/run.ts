@@ -1,8 +1,10 @@
 import { stripVTControlCharacters } from 'node:util'
+
 import { Console, Effect, Predicate, Stdio, Stream } from 'effect'
 import { Command } from 'effect/unstable/cli'
-import { listChangedFiles } from '../../files'
+
 import { StopBlocked, userError } from '../../errors'
+import { listChangedFiles } from '../../files'
 import { cwdFlag, fixFlag, onlyFlag, requireFlag, runChecks, skipFlag } from '../uncheck'
 
 export const run = Command.make(
@@ -16,8 +18,8 @@ export const run = Command.make(
     }
 
     const payload = yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(
-      Effect.flatMap(text => Effect.try((): unknown => JSON.parse(text))),
-      Effect.map(value => (Predicate.isObject(value) ? value : {})),
+      Effect.flatMap((text) => Effect.try((): unknown => JSON.parse(text))),
+      Effect.map((value) => (Predicate.isObject(value) ? value : {})),
       Effect.orElseSucceed((): Record<string, unknown> => ({})),
     )
 
@@ -50,7 +52,8 @@ export const run = Command.make(
     // are already continuing; Cursor continues on a follow-up message and counts them in `loop_count`;
     // Copilot continues on a block decision and also sets `stop_hook_active`. Windsurf only shows the report.
     const alreadyContinued =
-      payload.stop_hook_active === true || (typeof payload.loop_count === 'number' && payload.loop_count > 0)
+      payload.stop_hook_active === true ||
+      (typeof payload.loop_count === 'number' && payload.loop_count > 0)
 
     if (!failed || alreadyContinued) {
       return

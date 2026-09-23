@@ -9,7 +9,10 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
   /** `git <args>` for messages, with the paths after `--` counted rather than listed. */
   get command(): string {
     const dash = this.args.indexOf('--')
-    const shown = dash === -1 ? this.args : [...this.args.slice(0, dash), `[${this.args.length - dash - 1} paths]`]
+    const shown =
+      dash === -1
+        ? this.args
+        : [...this.args.slice(0, dash), `[${this.args.length - dash - 1} paths]`]
 
     return `git ${shown.join(' ')}`
   }
@@ -24,7 +27,10 @@ export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>
   const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd, stdin: 'ignore' }))
 
   const [stdout, stderr] = yield* Effect.all(
-    [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
+    [
+      Stream.mkString(Stream.decodeText(handle.stdout)),
+      Stream.mkString(Stream.decodeText(handle.stderr)),
+    ],
     { concurrency: 'unbounded' },
   )
 
@@ -39,5 +45,5 @@ export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>
 
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */
 export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
-  return Effect.map(git(cwd, args), output => output.split('\0').filter(entry => entry !== ''))
+  return Effect.map(git(cwd, args), (output) => output.split('\0').filter((entry) => entry !== ''))
 }

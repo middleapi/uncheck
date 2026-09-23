@@ -1,9 +1,11 @@
-import type { CheckCommand } from './types'
 import process from 'node:process'
+
 import { Console, Effect, Path, Predicate, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+
 import { ancestors, readJson } from './files'
 import { colors } from './style'
+import type { CheckCommand } from './types'
 
 export interface Bin {
   readonly name: string
@@ -73,7 +75,9 @@ export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckComm
     }),
   )
 
-  yield* Stream.runForEach(Stream.splitLines(Stream.decodeText(handle.all)), text => Console.log(text))
+  yield* Stream.runForEach(Stream.splitLines(Stream.decodeText(handle.all)), (text) =>
+    Console.log(text),
+  )
 
   return yield* handle.exitCode
 }, Effect.scoped)

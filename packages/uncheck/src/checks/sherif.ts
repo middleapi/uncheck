@@ -1,9 +1,11 @@
-import type { Check } from '../types'
 import process from 'node:process'
+
 import { Effect, FileSystem, Path, Predicate } from 'effect'
+
 import { NothingToCheck } from '../errors'
 import { readJson } from '../files'
 import { resolveBin } from '../tool'
+import type { Check } from '../types'
 
 const WORKSPACE_FILES = new Set(['package.json', 'pnpm-workspace.yaml'])
 
@@ -14,8 +16,10 @@ export const sherif: Check = {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
-    if (files?.some(file => WORKSPACE_FILES.has(path.basename(file))) === false) {
-      return yield* Effect.fail(new NothingToCheck({ reason: 'no package.json among the given files' }))
+    if (files?.some((file) => WORKSPACE_FILES.has(path.basename(file))) === false) {
+      return yield* Effect.fail(
+        new NothingToCheck({ reason: 'no package.json among the given files' }),
+      )
     }
 
     const [bin, manifest, pnpmWorkspace] = yield* Effect.all(
@@ -43,6 +47,13 @@ export const sherif: Check = {
       return [{ bin, args: [] }]
     }
 
-    return [{ bin, args: Predicate.hasProperty(manifest.sherif, 'select') ? ['--fix'] : ['--fix', '--select=highest'] }]
+    return [
+      {
+        bin,
+        args: Predicate.hasProperty(manifest.sherif, 'select')
+          ? ['--fix']
+          : ['--fix', '--select=highest'],
+      },
+    ]
   }),
 }

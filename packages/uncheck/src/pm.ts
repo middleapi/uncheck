@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Option, Path } from 'effect'
+
 import { ancestors, readJson } from './files'
 
 const EXEC_BY_PACKAGE_MANAGER: Readonly<Record<string, string>> = {
@@ -18,7 +19,10 @@ const EXEC_BY_LOCKFILE: ReadonlyArray<readonly [lockfile: string, exec: string]>
 
 /** Every prefix `detectExec` can return, so a generated command line can be recognised again. */
 export const EXECS: ReadonlyArray<string> = [
-  ...new Set([...Object.values(EXEC_BY_PACKAGE_MANAGER), ...EXEC_BY_LOCKFILE.map(([, exec]) => exec)]),
+  ...new Set([
+    ...Object.values(EXEC_BY_PACKAGE_MANAGER),
+    ...EXEC_BY_LOCKFILE.map(([, exec]) => exec),
+  ]),
 ]
 
 /**

@@ -64,6 +64,26 @@ Every `tsconfig.json` in the project is discovered (through `git ls-files`, so i
 
 When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
 
+## Presets
+
+`uncheck/oxlint` and `uncheck/oxfmt` export presets for the two tools. `middleapi` is the one the [middleapi](https://github.com/middleapi) projects share:
+
+```ts
+// oxlint.config.ts
+import { defineConfig } from 'oxlint'
+import { middleapi } from 'uncheck/oxlint'
+
+export default defineConfig({ extends: [middleapi] })
+```
+
+```ts
+// oxfmt.config.ts
+import { defineConfig } from 'oxfmt'
+import { middleapi } from 'uncheck/oxfmt'
+
+export default defineConfig({ ...middleapi })
+```
+
 ## Agent hooks
 
 ```sh

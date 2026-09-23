@@ -1,10 +1,18 @@
 import { Console, Effect, FileSystem, Option, Path } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
+
 import { userError } from '../errors'
 import { git } from '../git'
 import { detectExec, EXECS } from '../pm'
 import { bold, dim, green, red } from '../style'
-import { cwdFlag, onlyFlag, requireFlag, selectionArgs, skipFlag, validateSelection } from './uncheck'
+import {
+  cwdFlag,
+  onlyFlag,
+  requireFlag,
+  selectionArgs,
+  skipFlag,
+  validateSelection,
+} from './uncheck'
 
 const HOOK_COMMAND = 'uncheck staged'
 const HEADER = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
@@ -22,7 +30,7 @@ function lineScope(text: string): string | undefined {
   const enters = ENTERS.exec(line)
   const command = enters === null ? line : line.slice(enters[0].length)
 
-  const runs = ['', ...EXECS.map(exec => `${exec} `)].some(prefix => {
+  const runs = ['', ...EXECS.map((exec) => `${exec} `)].some((prefix) => {
     const rest = command.startsWith(prefix) ? command.slice(prefix.length) : undefined
 
     return rest === HOOK_COMMAND || rest?.startsWith(`${HOOK_COMMAND} `) === true
@@ -37,7 +45,9 @@ export const prepare = Command.make(
     cwd: cwdFlag,
     preCommit: Flag.Boolean('pre-commit').pipe(
       Flag.withDefault(false),
-      Flag.withDescription('Write the git pre-commit hook, which runs `uncheck staged` on the files of every commit'),
+      Flag.withDescription(
+        'Write the git pre-commit hook, which runs `uncheck staged` on the files of every commit',
+      ),
     ),
     fix: Flag.Boolean('fix').pipe(
       Flag.withDefault(true),
@@ -73,9 +83,14 @@ export const prepare = Command.make(
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
-    const [top, hooks] = repository.value.map(line => line.trim())
+    const [top, hooks] = repository.value.map((line) => line.trim())
     const exec = yield* detectExec(cwd)
-    const command = [exec, HOOK_COMMAND, ...(fix ? ['--fix'] : []), ...selectionArgs(selection)].join(' ')
+    const command = [
+      exec,
+      HOOK_COMMAND,
+      ...(fix ? ['--fix'] : []),
+      ...selectionArgs(selection),
+    ].join(' ')
 
     // Git runs hooks at the top of the working tree, so a project below it is entered first.
     const inside = path.relative(top!, yield* fs.realPath(cwd)).replaceAll('\\', '/')
@@ -85,8 +100,14 @@ export const prepare = Command.make(
     const relative = path.relative(cwd, file)
     const shown = relative.startsWith('..') ? file : relative
     const existing = yield* fs.readFileString(file).pipe(Effect.option)
-    const next = Option.isNone(existing) ? `${HEADER}${line}\n` : rewrite(existing.value, line, inside)
-    const result = Option.isNone(existing) ? 'created' : next === existing.value ? 'unchanged' : 'updated'
+    const next = Option.isNone(existing)
+      ? `${HEADER}${line}\n`
+      : rewrite(existing.value, line, inside)
+    const result = Option.isNone(existing)
+      ? 'created'
+      : next === existing.value
+        ? 'unchanged'
+        : 'updated'
 
     const refused = yield* Effect.gen(function* () {
       if (result !== 'unchanged') {
@@ -97,12 +118,16 @@ export const prepare = Command.make(
       yield* fs.chmod(file, 0o755)
     }).pipe(
       Effect.as(undefined),
-      Effect.catch(error => Effect.succeed(error.cause instanceof Error ? error.cause.message : error.message)),
+      Effect.catch((error) =>
+        Effect.succeed(error.cause instanceof Error ? error.cause.message : error.message),
+      ),
     )
 
     // `prepare` runs on every install, so an unwritable hook says so rather than failing the install.
     if (refused !== undefined) {
-      return yield* Console.log(`${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${refused}`)}`)
+      return yield* Console.log(
+        `${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${refused}`)}`,
+      )
     }
 
     yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${result}`)}`)
@@ -124,7 +149,9 @@ export const prepare = Command.make(
  */
 function rewrite(hook: string, line: string, inside: string): string {
   const lines = hook.split('\n')
-  const [first, ...duplicates] = lines.flatMap((text, index) => (lineScope(text) === inside ? [index] : []))
+  const [first, ...duplicates] = lines.flatMap((text, index) =>
+    lineScope(text) === inside ? [index] : [],
+  )
 
   if (first === undefined) {
     const kept = hook === '' || hook.endsWith('\n') ? hook : `${hook}\n`

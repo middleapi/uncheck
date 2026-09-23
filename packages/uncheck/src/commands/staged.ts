@@ -1,10 +1,19 @@
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command } from 'effect/unstable/cli'
+
 import { userError } from '../errors'
 import { git, GitFailed, gitPaths } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
-import { checkPaths, cwdFlag, fixFlag, onlyFlag, requireFlag, skipFlag, validateSelection } from './uncheck'
+import {
+  checkPaths,
+  cwdFlag,
+  fixFlag,
+  onlyFlag,
+  requireFlag,
+  skipFlag,
+  validateSelection,
+} from './uncheck'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
 type Unstaged = 'restored' | 'conflicted' | 'stranded'
@@ -28,7 +37,9 @@ export const staged = Command.make(
         '--diff-filter=ACMR',
         '--relative',
         '-z',
-      ]).pipe(Effect.catchTag('GitFailed', () => userError('`uncheck staged` needs a git repository')))
+      ]).pipe(
+        Effect.catchTag('GitFailed', () => userError('`uncheck staged` needs a git repository')),
+      )
 
       yield* Console.log(dim(`uncheck staged in ${cwd}`))
 
@@ -37,30 +48,49 @@ export const staged = Command.make(
       }
 
       const unstaged = yield* gitPaths(cwd, ['diff', '--name-only', '--relative', '-z'])
-      const partial = files.filter(file => unstaged.includes(file))
+      const partial = files.filter((file) => unstaged.includes(file))
       const before = yield* writeTree(cwd)
       const outcome = yield* Ref.make<Unstaged>('restored')
 
       const failure = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
-            yield* Effect.acquireRelease(setAside(cwd, partial), patch =>
-              putBack(cwd, patch, files, partial, before).pipe(Effect.flatMap(result => Ref.set(outcome, result))),
+            yield* Effect.acquireRelease(setAside(cwd, partial), (patch) =>
+              putBack(cwd, patch, files, partial, before).pipe(
+                Effect.flatMap((result) => Ref.set(outcome, result)),
+              ),
             )
           }
 
-          const failed = yield* checkPaths(files, { ...selection, cwd, fix, allowUnmatched: true }).pipe(
+          const failed = yield* checkPaths(files, {
+            ...selection,
+            cwd,
+            fix,
+            allowUnmatched: true,
+          }).pipe(
             Effect.map(() => undefined),
-            Effect.catchTag('CheckFailed', error => Effect.succeed(error)),
+            Effect.catchTag('CheckFailed', (error) => Effect.succeed(error)),
           )
 
           if (fix) {
-            yield* Effect.forEach(argvBatches(files), batch => git(cwd, ['add', '--', ...batch]), { discard: true })
+            yield* Effect.forEach(
+              argvBatches(files),
+              (batch) => git(cwd, ['add', '--', ...batch]),
+              { discard: true },
+            )
 
             const after = yield* writeTree(cwd)
 
             if (after !== before) {
-              const fixed = yield* gitPaths(cwd, ['diff-tree', '-r', '--name-only', '--relative', '-z', before, after])
+              const fixed = yield* gitPaths(cwd, [
+                'diff-tree',
+                '-r',
+                '--name-only',
+                '--relative',
+                '-z',
+                before,
+                after,
+              ])
 
               yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(fixed)}`)
             }
@@ -79,14 +109,16 @@ export const staged = Command.make(
       }
 
       if (unstagedOutcome === 'stranded') {
-        return yield* userError(`The unstaged changes of ${listFiles(partial)} could not be put back, see above.`)
+        return yield* userError(
+          `The unstaged changes of ${listFiles(partial)} could not be put back, see above.`,
+        )
       }
 
       if (failure !== undefined) {
         return yield* Effect.fail(failure)
       }
     },
-    Effect.catchTag('GitFailed', error => userError(`${error.command} failed: ${error.stderr}`)),
+    Effect.catchTag('GitFailed', (error) => userError(`${error.command} failed: ${error.stderr}`)),
   ),
 ).pipe(
   Command.withDescription(
@@ -94,7 +126,7 @@ export const staged = Command.make(
   ),
 )
 
-const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), sha => sha.trim())
+const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
 
 const apply = (cwd: string, patch: string) =>
   git(cwd, ['apply', '--whitespace=nowarn', '--recount', '--unidiff-zero', patch])
@@ -106,7 +138,10 @@ const apply = (cwd: string, patch: string) =>
  */
 const setAside = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>) {
   const path = yield* Path.Path
-  const patch = path.resolve(cwd, (yield* git(cwd, ['rev-parse', '--git-path', 'uncheck-unstaged.patch'])).trim())
+  const patch = path.resolve(
+    cwd,
+    (yield* git(cwd, ['rev-parse', '--git-path', 'uncheck-unstaged.patch'])).trim(),
+  )
 
   yield* git(cwd, [
     'diff',
@@ -121,12 +156,16 @@ const setAside = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>)
     ...files,
   ])
 
-  yield* Effect.forEach(argvBatches(files), batch => git(cwd, ['checkout', '--', ...batch]), { discard: true }).pipe(
+  yield* Effect.forEach(argvBatches(files), (batch) => git(cwd, ['checkout', '--', ...batch]), {
+    discard: true,
+  }).pipe(
     // Giving up halfway would leave the hunks in the patch only, so put them back first.
     Effect.tapError(() => Effect.ignore(apply(cwd, patch))),
   )
 
-  yield* Console.log(dim(`○ unstaged changes of ${listFiles(files)} set aside until the checks finish`))
+  yield* Console.log(
+    dim(`○ unstaged changes of ${listFiles(files)} set aside until the checks finish`),
+  )
 
   return patch
 })
@@ -158,15 +197,17 @@ const putBack = Effect.fn(function* (
 
     yield* Effect.forEach(
       argvBatches(files),
-      batch => git(cwd, ['restore', `--source=${before}`, '--staged', '--worktree', '--', ...batch]),
+      (batch) =>
+        git(cwd, ['restore', `--source=${before}`, '--staged', '--worktree', '--', ...batch]),
       { discard: true },
     )
     yield* apply(cwd, patch)
 
     return 'conflicted' as const
   }).pipe(
-    Effect.catch(error => {
-      const reason = error instanceof GitFailed ? `${error.command} failed, ${error.stderr}` : String(error)
+    Effect.catch((error) => {
+      const reason =
+        error instanceof GitFailed ? `${error.command} failed, ${error.stderr}` : String(error)
 
       return Console.log(
         `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  they are saved in ${patch}, apply them with: git apply --unidiff-zero ${patch}`,
