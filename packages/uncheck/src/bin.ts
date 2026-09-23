@@ -13,6 +13,11 @@ import { prepare } from './commands/prepare'
 import { staged } from './commands/staged'
 import { uncheck } from './commands/uncheck'
 
+// A reader that goes away (`| head`) must not end the run before `staged` puts changes back.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', () => {})
+}
+
 Command.run(uncheck.pipe(Command.withSubcommands([staged, prepare, hooks])), {
   version: pkg.version,
 }).pipe(

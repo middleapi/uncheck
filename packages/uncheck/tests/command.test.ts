@@ -982,6 +982,48 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(gitIn(dir, 'rev-parse', ':sub')).toBe(staged)
   })
 
+  it('merges what git stores, so line endings a formatter rewrites are no change', async () => {
+    const dir = committed(clean)
+    const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+
+    gitIn(dir, 'config', 'core.autocrlf', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), crlf(`export const   answer: number = 43\n${lines}`))
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      crlf(`export const   answer: number = 43\n${lines}export const d = 4;\n`),
+    )
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe(`export const answer: number = 43;\n${lines}`)
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      crlf(`export const answer: number = 43;\n${lines}export const d = 4;\n`),
+    )
+  })
+
+  it('reads every unstaged change right, a rename among them', async () => {
+    const dir = committed({ ...clean, 'src/aaa.ts': 'export const aaa = 1;\n' })
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src/other.ts')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\nexport const more = 4;\n')
+    // A moved file added with `git add -N` shows up as a rename, sorted before src/other.ts.
+    gitIn(dir, 'mv', 'src/aaa.ts', 'src/moved.ts')
+    gitIn(dir, 'reset', '--quiet', '--', 'src/aaa.ts', 'src/moved.ts')
+    gitIn(dir, 'add', '--intent-to-add', 'src/moved.ts')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 3;\n')
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe(
+      'export const other = 3;\nexport const more = 4;\n',
+    )
+  })
+
   it('merges by plain text whatever merge driver the repository sets', async () => {
     const dir = committed(clean)
     const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'

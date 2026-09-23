@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+
 import { Data, Effect, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
@@ -19,11 +21,11 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
 }
 
 /**
- * Runs git in `cwd` and returns what it printed. A non-zero exit fails with `GitFailed` carrying
- * stderr, where git explains itself; running outside a repository is one such failure. Paths are
- * taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
+ * Runs git in `cwd` and returns the bytes it printed. A non-zero exit fails with `GitFailed`
+ * carrying stderr, where git explains itself; running outside a repository is one such failure.
+ * Paths are taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
  */
-export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
+export const gitBytes = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const handle = yield* spawner.spawn(
     ChildProcess.make('git', args, {
@@ -40,10 +42,7 @@ export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>
   )
 
   const [stdout, stderr] = yield* Effect.all(
-    [
-      Stream.mkString(Stream.decodeText(handle.stdout)),
-      Stream.mkString(Stream.decodeText(handle.stderr)),
-    ],
+    [Stream.runCollect(handle.stdout), Stream.mkString(Stream.decodeText(handle.stderr))],
     { concurrency: 'unbounded' },
   )
 
@@ -53,8 +52,13 @@ export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>
     return yield* Effect.fail(new GitFailed({ args, exitCode, stderr: stderr.trim() }))
   }
 
-  return stdout
+  return Buffer.concat(stdout)
 }, Effect.scoped)
+
+/** `gitBytes` for text output. */
+export function git(cwd: string, args: ReadonlyArray<string>) {
+  return Effect.map(gitBytes(cwd, args), (output) => output.toString())
+}
 
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */
 export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
