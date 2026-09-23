@@ -1,6 +1,16 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { execFileSync, spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { delimiter, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
@@ -963,7 +973,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ pre-commit .git/hooks/pre-commit created\n')
     expect(stdout).toContain('The hook runs pnpm exec uncheck staged --fix before every commit')
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix || exit 1\n`)
 
     if (process.platform !== 'win32') {
       expect(statSync(hook).mode & 0o111).toBe(0o111)
@@ -979,14 +989,14 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(fast.result).toBe('ok')
     expect(fast.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
     expect(readFileSync(hook, 'utf8')).toBe(
-      `${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt\n`,
+      `${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt || exit 1\n`,
     )
 
     const checkOnly = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
 
     expect(checkOnly.result).toBe('ok')
     expect(checkOnly.stdout).toContain('The hook runs pnpm exec uncheck staged before every commit')
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged || exit 1\n`)
 
     await expect(
       run(dir, ['prepare', '--pre-commit', '--only=oxlint', '--skip=oxlint']),
@@ -1000,18 +1010,20 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     )
     gitIn(dir, 'init', '--quiet')
     const hook = join(dir, '.git/hooks/pre-commit')
-    const app = 'cd "packages/app" && pnpm exec uncheck staged --fix --only=oxlint'
+    const app = '(cd "packages/app" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1'
 
     await run(dir, ['prepare', '--pre-commit'])
     await run(join(dir, 'packages/app'), ['prepare', '--pre-commit', '--only=oxlint'])
 
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix\n${app}\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `${header}pnpm exec uncheck staged --fix || exit 1\n${app}\n`,
+    )
 
     // Preparing the root again leaves the line of the nested package alone.
     const root = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
 
     expect(root.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged\n${app}\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged || exit 1\n${app}\n`)
 
     const mine = 'echo "runs uncheck staged"'
 
@@ -1025,12 +1037,108 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(deduped.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
     // The second copy goes, the line that only mentions the command and the unrelated one stay.
     expect(readFileSync(hook, 'utf8')).toBe(
-      `${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\n`,
+      `${header}${mine}\npnpm exec uncheck staged --fix || exit 1\npnpm test\n`,
     )
 
     const settled = await run(dir, ['prepare', '--pre-commit'])
 
     expect(settled.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'writes a hook that runs each line from the top of the working tree and fails when any line fails',
+    async () => {
+      const dir = fixture(
+        {
+          'package.json': '{}\n',
+          'pnpm-lock.yaml': '',
+          'packages/a/package.json': '{}\n',
+          'packages/b/package.json': '{}\n',
+        },
+        [],
+      )
+      gitIn(dir, 'init', '--quiet')
+      const top = realpathSync(dir)
+
+      await run(dir, ['prepare', '--pre-commit'])
+      await run(join(dir, 'packages/a'), ['prepare', '--pre-commit', '--only=oxlint'])
+      await run(join(dir, 'packages/b'), ['prepare', '--pre-commit'])
+
+      const bin = fixture(
+        { pnpm: '#!/bin/sh\necho "$(pwd -P) $*" >> "$LOG"\ntest ! -e fail\n' },
+        [],
+      )
+      const log = join(bin, 'log')
+      chmodSync(join(bin, 'pnpm'), 0o755)
+
+      function commit() {
+        writeFileSync(log, '')
+
+        const { status } = spawnSync('sh', ['.git/hooks/pre-commit'], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, LOG: log },
+        })
+
+        return { status, ran: readFileSync(log, 'utf8').split('\n').filter(Boolean) }
+      }
+
+      const root = `${top} exec uncheck staged --fix`
+      const a = `${top}/packages/a exec uncheck staged --fix --only=oxlint`
+      const b = `${top}/packages/b exec uncheck staged --fix`
+
+      expect(commit()).toEqual({ status: 0, ran: [root, a, b] })
+
+      writeFileSync(join(dir, 'fail'), '')
+
+      expect(commit()).toEqual({ status: 1, ran: [root] })
+
+      rmSync(join(dir, 'fail'))
+      writeFileSync(join(dir, 'packages/a/fail'), '')
+
+      expect(commit()).toEqual({ status: 1, ran: [root, a] })
+    },
+  )
+
+  it('updates the lines older versions wrote, whichever package prepares next', async () => {
+    const dir = fixture(
+      {
+        'package.json': '{}\n',
+        'pnpm-lock.yaml': '',
+        'packages/a/package.json': '{}\n',
+        'packages/b/package.json': '{}\n',
+      },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+
+    writeFileSync(
+      hook,
+      [
+        `${header}pnpm exec uncheck staged --fix`,
+        'pnpm test',
+        'cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint',
+        'cd "packages/b" && pnpm exec uncheck staged --fix',
+        '',
+      ].join('\n'),
+    )
+
+    const { stdout } = await run(join(dir, 'packages/b'), ['prepare', '--pre-commit', '--no-fix'])
+
+    expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(
+      [
+        `${header}pnpm exec uncheck staged --fix || exit 1`,
+        'pnpm test',
+        '(cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1',
+        '(cd "packages/b" && pnpm exec uncheck staged) || exit 1',
+        '',
+      ].join('\n'),
+    )
+
+    const again = await run(join(dir, 'packages/b'), ['prepare', '--pre-commit', '--no-fix'])
+
+    expect(again.stdout).toContain(`✔ pre-commit ${hook} unchanged\n`)
   })
 
   it('takes the runner from the packageManager field and reports an unwritable hook', async () => {
@@ -1067,7 +1175,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      '#!/bin/sh\necho hi\ncd "packages/app" && yarn uncheck staged --fix\n',
+      '#!/bin/sh\necho hi\n(cd "packages/app" && yarn uncheck staged --fix) || exit 1\n',
     )
 
     const plain = fixture({ 'package.json': '{}\n' }, [])

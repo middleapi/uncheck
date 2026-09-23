@@ -144,6 +144,18 @@ npx uncheck prepare --pre-commit   # write .git/hooks/pre-commit so every commit
 
 `--only`, `--skip` and `--require` given to `prepare` are written into the hook command as for `hooks install`, and `--no-fix` gives a hook that only checks. Outside a git repository `prepare` does nothing, so installs in CI and Docker builds keep working, and `git commit --no-verify` skips the hook.
 
+In a monorepo where the root and two packages prepare, the hook reads:
+
+```sh
+#!/bin/sh
+# Written by `uncheck prepare`, run it again to change the command.
+pnpm exec uncheck staged --fix || exit 1
+(cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1
+(cd "packages/b" && pnpm exec uncheck staged --fix) || exit 1
+```
+
+Every line ends in `|| exit 1`, so any failing check blocks the commit, and a package is entered in a subshell, so each line starts from the top of the working tree. A line you add by hand runs as you wrote it: give it `|| exit 1` too if its failure should block the commit.
+
 ## Sponsors
 
 Like what we build over at [middleapi](https://github.com/middleapi)? You can help keep it going through [GitHub Sponsors](https://github.com/sponsors/dinwwwh) or [Open Collective](https://opencollective.com/middleapi). Every bit helps! 🚀
