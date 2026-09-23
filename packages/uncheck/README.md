@@ -66,7 +66,7 @@ When files are given, `tsc` runs only the projects it would actually check for t
 
 ## Presets
 
-`uncheck/oxlint` and `uncheck/oxfmt` export presets for the two tools. `middleapi` is the one the [middleapi](https://github.com/middleapi) projects share:
+`uncheck/oxlint`, `uncheck/oxfmt` and `uncheck/tsconfig` export presets. `middleapi` is the one the [middleapi](https://github.com/middleapi) projects share:
 
 ```ts
 // oxlint.config.ts
@@ -83,6 +83,26 @@ import { middleapi } from 'uncheck/oxfmt'
 
 export default defineConfig({ ...middleapi })
 ```
+
+```jsonc
+// tsconfig.json, for Node.js code that is only type checked
+{
+  "extends": "uncheck/tsconfig/middleapi",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src"],
+}
+```
+
+```jsonc
+// packages/*/tsconfig.json, for a Node.js package that emits its declarations to dist
+{
+  "extends": "uncheck/tsconfig/middleapi/lib",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src"],
+}
+```
+
+The tsconfig presets target ES2022 and load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
 
 ## Agent hooks
 

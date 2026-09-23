@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 
 import { NodeServices } from '@effect/platform-node'
@@ -13,6 +14,8 @@ import { prepare } from '../src/commands/prepare'
 import { staged } from '../src/commands/staged'
 import { uncheck } from '../src/commands/uncheck'
 import { CheckFailed } from '../src/errors'
+import { middleapi as oxfmtPreset } from '../src/presets/oxfmt'
+import { middleapi as oxlintPreset } from '../src/presets/oxlint'
 import { fixture } from './fixture'
 
 const cli = uncheck.pipe(Command.withSubcommands([staged, prepare, hooks]))
@@ -1078,20 +1081,8 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 describe('uncheck presets', { timeout: 120_000 }, () => {
   it('lints with the middleapi oxlint preset and formats with the middleapi oxfmt preset', async () => {
     const dir = fixture({
-      'oxlint.config.ts': [
-        `import { defineConfig } from 'oxlint'`,
-        `import { middleapi } from '${new URL('../src/presets/oxlint.ts', import.meta.url).href}'`,
-        '',
-        'export default defineConfig({ extends: [middleapi] })',
-        '',
-      ].join('\n'),
-      'oxfmt.config.ts': [
-        `import { defineConfig } from 'oxfmt'`,
-        `import { middleapi } from '${new URL('../src/presets/oxfmt.ts', import.meta.url).href}'`,
-        '',
-        'export default defineConfig({ ...middleapi })',
-        '',
-      ].join('\n'),
+      '.oxlintrc.json': oxlintPreset,
+      '.oxfmtrc.json': oxfmtPreset,
       'src/index.ts':
         'import { a } from "./lib";\nimport { b } from "./lib";\nconsole.log(a, b)\nexport const enum Level { Low }\n',
       'src/lib.ts': 'export const a = 1\nexport const b = 2\n',
@@ -1156,5 +1147,32 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
       "import { a, b } from './lib'\nconsole.log(a, b)\nexport enum Level {\n  Low,\n}\n",
     )
+  })
+
+  it('type checks with the middleapi tsconfig presets', async () => {
+    const dir = fixture(
+      {
+        'tsconfig.json': { extends: 'uncheck/tsconfig/middleapi/lib', include: ['src'] },
+        'src/index.ts': [
+          'export function identity(value) {',
+          '  return value',
+          '}',
+          'export function first(items: string[]): string {',
+          '  return items[0]',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      ['typescript'],
+    )
+    symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(dir, 'node_modules', 'uncheck'))
+
+    const check = await run(dir, ['--only=tsc', 'src/index.ts'])
+
+    expect(check.result).toBeInstanceOf(CheckFailed)
+    expect(check.stdout).toContain('▶ tsc -p tsconfig.json')
+    // `strict` and `noUncheckedIndexedAccess` come from the base preset, through the lib one
+    expect(check.stdout).toContain('error TS7006')
+    expect(check.stdout).toContain('error TS2322')
   })
 })

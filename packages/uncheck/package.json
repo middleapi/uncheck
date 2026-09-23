@@ -30,7 +30,8 @@
     "uncheck": "./dist/bin.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "tsconfig"
   ],
   "type": "module",
   "sideEffects": false,
@@ -43,6 +44,8 @@
       "types": "./dist/presets/oxlint.d.mts",
       "default": "./dist/presets/oxlint.mjs"
     },
+    "./tsconfig/middleapi": "./tsconfig/middleapi/base.json",
+    "./tsconfig/middleapi/lib": "./tsconfig/middleapi/lib.json",
     "./package.json": "./package.json"
   },
   "scripts": {
