@@ -17,18 +17,31 @@ import {
 const HOOK_COMMAND = 'uncheck staged'
 const HEADER = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
 
-/** A line that enters a directory first, since git runs hooks at the top of the working tree. */
-const ENTERS = /^cd "([^"]*)" && /
+/** `sh` carries on past a failing command, so without this only the last line can fail the hook. */
+const EXIT = ' || exit 1'
 
 /**
- * The directory a hook line runs `uncheck staged` in, or `undefined` when the line is not one
- * `prepare` writes. A line only counts as ours when it runs the command directly or through a
- * package manager, so a line that merely mentions it, or runs it some other way, is left alone.
+ * A line that enters a directory first, since git runs hooks at the top of the working tree, in a
+ * subshell so the `cd` does not carry over to the next line.
  */
-function lineScope(text: string): string | undefined {
+const ENTERS = /^\(cd "([^"]*)" && (.*)\)$/
+const OLD_ENTERS = /^cd "([^"]*)" && (.*)$/
+
+function hookLine(inside: string, command: string): string {
+  return inside === '' ? `${command}${EXIT}` : `(cd "${inside}" && ${command})${EXIT}`
+}
+
+/**
+ * The directory and command of a hook line that runs `uncheck staged`, or `undefined` when the line
+ * is not one `prepare` writes. A line only counts as ours when it runs the command directly or
+ * through a package manager, so a line that merely mentions it, or runs it some other way, is left
+ * alone.
+ */
+function ownLine(text: string): { readonly inside: string; readonly command: string } | undefined {
   const line = text.trim()
-  const enters = ENTERS.exec(line)
-  const command = enters === null ? line : line.slice(enters[0].length)
+  const body = line.endsWith(EXIT) ? line.slice(0, -EXIT.length) : line
+  const enters = ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
+  const command = enters?.[2] ?? body
 
   const runs = ['', ...EXECS.map((exec) => `${exec} `)].some((prefix) => {
     const rest = command.startsWith(prefix) ? command.slice(prefix.length) : undefined
@@ -36,7 +49,7 @@ function lineScope(text: string): string | undefined {
     return rest === HOOK_COMMAND || rest?.startsWith(`${HOOK_COMMAND} `) === true
   })
 
-  return runs ? (enters?.[1] ?? '') : undefined
+  return runs ? { inside: enters?.[1] ?? '', command } : undefined
 }
 
 export const prepare = Command.make(
@@ -94,7 +107,7 @@ export const prepare = Command.make(
 
     // Git runs hooks at the top of the working tree, so a project below it is entered first.
     const inside = path.relative(top!, yield* fs.realPath(cwd)).replaceAll('\\', '/')
-    const line = inside === '' ? command : `cd "${inside}" && ${command}`
+    const line = hookLine(inside, command)
 
     const file = path.join(path.resolve(cwd, hooks!), 'pre-commit')
     const relative = path.relative(cwd, file)
@@ -145,21 +158,36 @@ export const prepare = Command.make(
 /**
  * Puts `line` into an existing hook, so running `prepare` again is idempotent: the line for this
  * directory is updated wherever it sits, duplicates of it are dropped, and everything else is kept,
- * including the lines of other packages in the same repository and whatever the user added.
+ * including the commands of other packages in the same repository and whatever the user added.
  */
 function rewrite(hook: string, line: string, inside: string): string {
-  const lines = hook.split('\n')
-  const [first, ...duplicates] = lines.flatMap((text, index) =>
-    lineScope(text) === inside ? [index] : [],
-  )
+  let placed = false
+  const lines = hook.split('\n').flatMap((text) => {
+    const own = ownLine(text)
 
-  if (first === undefined) {
-    const kept = hook === '' || hook.endsWith('\n') ? hook : `${hook}\n`
+    if (own === undefined) {
+      return [text]
+    }
 
-    return `${kept}${line}\n`
+    if (own.inside !== inside) {
+      return [hookLine(own.inside, own.command)]
+    }
+
+    if (placed) {
+      return []
+    }
+
+    placed = true
+
+    return [line]
+  })
+  const next = lines.join('\n')
+
+  if (placed) {
+    return next
   }
 
-  lines[first] = line
+  const kept = next === '' || next.endsWith('\n') ? next : `${next}\n`
 
-  return lines.filter((_, index) => !duplicates.includes(index)).join('\n')
+  return `${kept}${line}\n`
 }
