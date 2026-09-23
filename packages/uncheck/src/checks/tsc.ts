@@ -425,7 +425,18 @@ const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
     return yield* firstFile([target, `${target}.json`])
   }
 
+  const [name, subpath] = splitPackageSpec(spec)
+
   for (const current of ancestors(path, dir)) {
+    const pkg = path.join(current, 'node_modules', name)
+    const pkgManifest = yield* readJson(path.join(pkg, 'package.json'))
+
+    // Like tsc, a package that declares `exports` is reachable only through them.
+    if (pkgManifest?.exports !== undefined) {
+      const target = resolveExports(pkgManifest.exports, subpath)
+      return target === undefined ? Option.none() : yield* firstFile([path.resolve(pkg, target)])
+    }
+
     const base = path.join(current, 'node_modules', spec)
     const baseKind = yield* kind(base)
 
@@ -522,6 +533,79 @@ function wildcards(component: string): string {
   return component.replace(/[.*?+^${}()|[\]\\]/g, (char) =>
     char === '*' ? '[^/]*' : char === '?' ? '[^/]' : `\\${char}`,
   )
+}
+
+/** Splits `@scope/pkg/sub/path` into the package name and its `exports` subpath, `.` or `./sub/path`. */
+function splitPackageSpec(spec: string): readonly [name: string, subpath: string] {
+  const parts = spec.split('/')
+  const length = spec.startsWith('@') ? 2 : 1
+  const rest = parts.slice(length).join('/')
+
+  return [parts.slice(0, length).join('/'), rest === '' ? '.' : `./${rest}`]
+}
+
+/** The conditions tsc matches when it resolves `extends` through `exports`. */
+const EXPORT_CONDITIONS = new Set(['node', 'require', 'types', 'default'])
+
+/**
+ * The file a package's `exports` maps `subpath` to, following exact keys, `*` patterns (the longest
+ * prefix wins) and condition objects, or `undefined` when the subpath is not exported.
+ */
+function resolveExports(exports: unknown, subpath: string): string | undefined {
+  const map: Record<string, unknown> =
+    Predicate.isObject(exports) &&
+    !Array.isArray(exports) &&
+    Object.keys(exports).some((key) => key.startsWith('.'))
+      ? exports
+      : { '.': exports }
+
+  if (Object.hasOwn(map, subpath)) {
+    return exportTarget(map[subpath], undefined)
+  }
+
+  let best: { prefix: string; match: string; target: unknown } | undefined
+
+  for (const [key, target] of Object.entries(map)) {
+    const star = key.indexOf('*')
+    const prefix = key.slice(0, star)
+    const suffix = key.slice(star + 1)
+
+    if (
+      star !== -1 &&
+      subpath.length >= prefix.length + suffix.length &&
+      subpath.startsWith(prefix) &&
+      subpath.endsWith(suffix) &&
+      (best === undefined || prefix.length > best.prefix.length)
+    ) {
+      best = { prefix, match: subpath.slice(prefix.length, subpath.length - suffix.length), target }
+    }
+  }
+
+  return best && exportTarget(best.target, best.match)
+}
+
+function exportTarget(target: unknown, match: string | undefined): string | undefined {
+  if (typeof target === 'string') {
+    return match === undefined ? target : target.replaceAll('*', match)
+  }
+
+  const candidates = Array.isArray(target)
+    ? target
+    : Predicate.isObject(target)
+      ? Object.entries(target)
+          .filter(([condition]) => EXPORT_CONDITIONS.has(condition))
+          .map(([, value]) => value)
+      : []
+
+  for (const candidate of candidates) {
+    const resolved = exportTarget(candidate, match)
+
+    if (resolved !== undefined) {
+      return resolved
+    }
+  }
+
+  return undefined
 }
 
 function isStringArray(value: unknown): value is ReadonlyArray<string> {

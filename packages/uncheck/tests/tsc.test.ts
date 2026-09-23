@@ -173,6 +173,37 @@ describe('tsc project selection', () => {
     expect(await plan(dir, ['packages/b/src/index.ts'])).toBe(NOT_COVERED)
   })
 
+  it('resolves extends through the exports of a package like tsc, and nothing they leave out', async () => {
+    const js = { compilerOptions: { allowJs: true } }
+    const dir = fixture({
+      'node_modules/@shared/tsconfig/package.json': {
+        exports: {
+          './base': './presets/base.json',
+          './lib': { import: './missing.json', require: './presets/lib.json' },
+          './extra/*': './presets/extra/*.json',
+        },
+      },
+      'node_modules/@shared/tsconfig/presets/base.json': js,
+      'node_modules/@shared/tsconfig/presets/lib.json': js,
+      'node_modules/@shared/tsconfig/presets/extra/web.json': js,
+      'packages/a/tsconfig.json': { extends: '@shared/tsconfig/base', include: ['src'] },
+      'packages/b/tsconfig.json': { extends: '@shared/tsconfig/lib', include: ['src'] },
+      'packages/c/tsconfig.json': { extends: '@shared/tsconfig/extra/web', include: ['src'] },
+      'packages/d/tsconfig.json': {
+        extends: '@shared/tsconfig/presets/base.json',
+        include: ['src'],
+      },
+    })
+
+    // `allowJs` from the preset puts `.js` files in the project, so it was resolved.
+    expect(await plan(dir, ['packages/a/src/index.js'])).toEqual(['-p packages/a/tsconfig.json'])
+    // `import` is not a condition tsc uses for `extends`, so `require` is picked instead.
+    expect(await plan(dir, ['packages/b/src/index.js'])).toEqual(['-p packages/b/tsconfig.json'])
+    expect(await plan(dir, ['packages/c/src/index.js'])).toEqual(['-p packages/c/tsconfig.json'])
+    // The file exists, but the package does not export it.
+    expect(await plan(dir, ['packages/d/src/index.js'])).toBe(NOT_COVERED)
+  })
+
   it('selects only the projects whose inputs contain a given file', async () => {
     const lib = { extends: '../../tsconfig.base.json', include: ['src'], exclude: ['**/*.test.*'] }
     const dir = fixture({
