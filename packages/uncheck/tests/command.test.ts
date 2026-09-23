@@ -1414,6 +1414,146 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(skipped.result).toBe('ok')
     expect(skipped.stdout).toBe('○ no git repository found, nothing to prepare\n')
   })
+
+  it('writes the hook the husky 9 and Vite+ dispatcher runs, not their generated shim', async () => {
+    const dispatcher = [
+      's="$(dirname "$(dirname "$0")")/$(basename "$0")"',
+      '[ ! -f "$s" ] && exit 0',
+      'export PATH="node_modules/.bin:$PATH"',
+      'sh -e "$s" "$@"',
+      'exit $?',
+      '',
+    ].join('\n')
+    const shim = '#!/usr/bin/env sh\n. "$(dirname "$0")/h"\n'
+    const dir = fixture(
+      {
+        'package.json': '{}\n',
+        'pnpm-lock.yaml': '',
+        'packages/app/package.json': '{}\n',
+        '.husky/_/h': dispatcher,
+        '.husky/_/pre-commit': shim,
+        '.husky/pre-commit': 'pnpm test\n',
+      },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    gitIn(dir, 'config', 'core.hooksPath', '.husky/_')
+    chmodSync(join(dir, '.husky/_/pre-commit'), 0o755)
+    const hook = join(dir, '.husky/pre-commit')
+    const app = '(cd "packages/app" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1'
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ pre-commit .husky/pre-commit updated\n')
+
+    const nested = await run(join(dir, 'packages/app'), [
+      'prepare',
+      '--pre-commit',
+      '--only=oxlint',
+    ])
+
+    expect(nested.stdout).toContain(`✔ pre-commit ${hook} updated\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `pnpm test\npnpm exec uncheck staged --fix || exit 1\n${app}\n`,
+    )
+    expect(readFileSync(join(dir, '.husky/_/pre-commit'), 'utf8')).toBe(shim)
+
+    const again = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(again.stdout).toContain('✔ pre-commit .husky/pre-commit unchanged\n')
+
+    if (process.platform !== 'win32') {
+      expect(statSync(hook).mode & 0o111).toBe(0)
+
+      const bin = fixture(
+        { pnpm: '#!/bin/sh\necho "$(pwd -P) $*" >> "$LOG"\ntest ! -e fail\n' },
+        [],
+      )
+      const log = join(bin, 'log')
+      chmodSync(join(bin, 'pnpm'), 0o755)
+
+      function commit() {
+        writeFileSync(log, '')
+
+        const { status } = spawnSync(
+          'git',
+          [
+            '-c',
+            'user.name=uncheck',
+            '-c',
+            'user.email=uncheck@example.com',
+            'commit',
+            '--allow-empty',
+            '--quiet',
+            '--message=test',
+          ],
+          {
+            cwd: dir,
+            env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, LOG: log },
+          },
+        )
+
+        return { status, ran: readFileSync(log, 'utf8').split('\n').filter(Boolean) }
+      }
+
+      const top = realpathSync(dir)
+
+      expect(commit()).toEqual({
+        status: 0,
+        ran: [
+          `${top} test`,
+          `${top} exec uncheck staged --fix`,
+          `${top}/packages/app exec uncheck staged --fix --only=oxlint`,
+        ],
+      })
+
+      writeFileSync(join(dir, 'fail'), '')
+
+      expect(commit()).toEqual({ status: 1, ran: [`${top} test`] })
+    }
+
+    const vite = fixture(
+      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', '.vite-hooks/_/h': dispatcher },
+      [],
+    )
+    gitIn(vite, 'init', '--quiet')
+    gitIn(vite, 'config', 'core.hooksPath', '.vite-hooks/_')
+
+    const created = await run(vite, ['prepare', '--pre-commit'])
+
+    expect(created.stdout).toContain('✔ pre-commit .vite-hooks/pre-commit created\n')
+    expect(readFileSync(join(vite, '.vite-hooks/pre-commit'), 'utf8')).toBe(
+      `${header}pnpm exec uncheck staged --fix || exit 1\n`,
+    )
+    expect(existsSync(join(vite, '.vite-hooks/_/pre-commit'))).toBe(false)
+  })
+
+  it('writes into a core.hooksPath set by hand as it is', async () => {
+    const dir = fixture(
+      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    gitIn(dir, 'config', 'core.hooksPath', '.githooks')
+    const hook = join(dir, '.githooks/pre-commit')
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ pre-commit .githooks/pre-commit created\n')
+
+    await run(join(dir, 'packages/app'), ['prepare', '--pre-commit'])
+
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `${header}pnpm exec uncheck staged --fix || exit 1\n(cd "packages/app" && pnpm exec uncheck staged --fix) || exit 1\n`,
+    )
+    expect(existsSync(join(dir, '.git/hooks/pre-commit'))).toBe(false)
+
+    if (process.platform !== 'win32') {
+      expect(statSync(hook).mode & 0o111).toBe(0o111)
+    }
+  })
 })
 
 describe('uncheck presets', { timeout: 120_000 }, () => {
