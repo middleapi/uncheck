@@ -694,6 +694,17 @@ const clean = {
   'src/other.ts': 'export const other = 2;\n',
 }
 
+function installPreCommitHook(dir: string, args: string, folder = '.') {
+  const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+
+  mkdirSync(join(dir, '.git/hooks'), { recursive: true })
+  writeFileSync(
+    join(dir, '.git/hooks/pre-commit'),
+    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${bin}" ${args}) || exit 1\n`,
+    { mode: 0o755 },
+  )
+}
+
 describe('uncheck hooks run', { timeout: 120_000 }, () => {
   it('checks the files changed since the last commit and sends the agent back once', async () => {
     const dir = committed(clean)
@@ -854,7 +865,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(gitIn(dir, 'status', '--porcelain')).toBe(
       'MM src/index.ts\n M src/other.ts\n?? src/fresh.ts\n',
     )
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
   it('undoes the fixes when they conflict with unstaged changes, so nothing is lost', async () => {
@@ -878,17 +889,23 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     // The fixes to the other staged file are undone too, so a commit attempt never half applies.
     expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const   other = 2\n')
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 2\n')
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
   it('fails when the fixes undo every staged change, since the commit would be empty', async () => {
-    const dir = committed(clean)
+    const dir = committed({
+      ...clean,
+      'src/index.ts': 'export const answer: number = 42;\nexport const two = 2;\n',
+    })
 
-    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
-    gitIn(dir, 'add', 'src/index.ts')
     writeFileSync(
       join(dir, 'src/index.ts'),
       'export const   answer: number = 42\nexport const two = 2;\n',
+    )
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      'export const   answer: number = 42\nexport const two = 2;\nexport const three = 3;\n',
     )
 
     await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
@@ -897,9 +914,9 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
 
     expect(gitIn(dir, 'diff', '--cached', '--name-only')).toBe('')
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
-      'export const answer: number = 42;\nexport const two = 2;\n',
+      'export const answer: number = 42;\nexport const two = 2;\nexport const three = 3;\n',
     )
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
 
     const unborn = fixture(clean)
 
@@ -944,6 +961,225 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(nothing.stdout).toBe(`uncheck staged in ${dir}\n○ nothing to check, no staged files\n`)
 
     await expect(run(fixture(clean), ['staged'])).rejects.toThrow(/needs a git repository/)
+  })
+
+  it('puts unstaged lines back where they were after the fixes move or change lines around them', async () => {
+    const split = 'export const list = [\n  1,\n  2,\n];\n'
+    const joined = 'export const list = [1, 2];\n'
+    const staged =
+      "\nexport function f() {\n  return 1;\n}\n\nexport function g() {\n  return 'g'\n}\n"
+    const fixed = staged.replace("'g'", '"g";')
+    const edit = (text: string) =>
+      `${text.replace('  return 1;', '  // in f\n  return 1;')}\nexport const z = 1;\n`
+    const dir = committed({ 'packages/app/src/index.ts': joined })
+    const file = join(dir, 'packages/app/src/index.ts')
+
+    writeFileSync(file, split + staged)
+    gitIn(dir, 'add', '.')
+    writeFileSync(file, split + edit(staged))
+
+    const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(joined + fixed)
+    expect(readFileSync(file, 'utf8')).toBe(joined + edit(fixed))
+  })
+
+  it('stages only the staged files, even when their names look like patterns', async () => {
+    const dir = committed({
+      'app/[id]/page.ts': 'export const id = 1;\n',
+      'app/i/page.ts': 'export const i = 1;\n',
+    })
+
+    writeFileSync(join(dir, 'app/[id]/page.ts'), 'export const   id = 2\n')
+    writeFileSync(join(dir, 'app/i/page.ts'), 'export const   i = 2\n')
+    gitIn(dir, '--literal-pathspecs', 'add', 'app/[id]/page.ts')
+    vi.stubEnv('GIT_GLOB_PATHSPECS', '1')
+    vi.stubEnv('GIT_ICASE_PATHSPECS', '1')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt']).finally(() =>
+      vi.unstubAllEnvs(),
+    )
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  app/[id]/page.ts\n M app/i/page.ts\n')
+  })
+
+  it('never stages the commit a submodule has checked out but not staged', async () => {
+    const dir = committed(clean)
+    const sub = join(dir, 'sub')
+
+    mkdirSync(sub)
+    gitIn(sub, 'init', '--quiet')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'one')
+    gitIn(dir, 'add', 'sub')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'two')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+    gitIn(dir, 'add', 'sub', 'src/index.ts')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'three')
+    const staged = gitIn(dir, 'rev-parse', ':sub')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'rev-parse', ':sub')).toBe(staged)
+  })
+
+  it('merges what git stores, so line endings a formatter rewrites are no change', async () => {
+    const dir = committed(clean)
+    const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+
+    gitIn(dir, 'config', 'core.autocrlf', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), crlf(`export const   answer: number = 43\n${lines}`))
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      crlf(`export const   answer: number = 43\n${lines}export const d = 4;\n`),
+    )
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe(`export const answer: number = 43;\n${lines}`)
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      crlf(`export const answer: number = 43;\n${lines}export const d = 4;\n`),
+    )
+  })
+
+  it('reads every unstaged change right, a rename among them', async () => {
+    const dir = committed({ ...clean, 'src/aaa.ts': 'export const aaa = 1;\n' })
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src/other.ts')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\nexport const more = 4;\n')
+    gitIn(dir, 'mv', 'src/aaa.ts', 'src/moved.ts')
+    gitIn(dir, 'reset', '--quiet', '--', 'src/aaa.ts', 'src/moved.ts')
+    gitIn(dir, 'add', '--intent-to-add', 'src/moved.ts')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 3;\n')
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe(
+      'export const other = 3;\nexport const more = 4;\n',
+    )
+  })
+
+  it('merges by plain text whatever merge driver the repository sets', async () => {
+    const dir = committed(clean)
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+
+    mkdirSync(join(dir, '.git/info'), { recursive: true })
+    writeFileSync(join(dir, '.git/info/attributes'), '*.ts merge=ours\n')
+    gitIn(dir, 'config', 'merge.ours.driver', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), `export const   answer: number = 42\n${lines}`)
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      `export const   answer: number = 42\n${lines.replace('c = 3', 'c = 30')}`,
+    )
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      `export const answer: number = 42;\n${lines.replace('c = 3', 'c = 30')}`,
+    )
+  })
+
+  it('refuses to set aside an unstaged change that is not an edit to a file', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src/other.ts')
+    rmSync(join(dir, 'src/other.ts'))
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /src\/other\.ts are not edits to a file/,
+    )
+    expect(existsSync(join(dir, 'src/other.ts'))).toBe(false)
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 3;\n')
+  })
+
+  it('keeps the unstaged changes when setting them aside fails halfway', async () => {
+    const dir = committed(clean)
+
+    mkdirSync(join(dir, '.git/info'), { recursive: true })
+    writeFileSync(join(dir, '.git/info/attributes'), 'src/other.ts filter=flaky\n')
+    gitIn(dir, 'config', 'filter.flaky.clean', 'cat')
+    gitIn(
+      dir,
+      'config',
+      'filter.flaky.smudge',
+      'if [ -e .git/failed ]; then cat; else touch .git/failed; exit 1; fi',
+    )
+    gitIn(dir, 'config', 'filter.flaky.required', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 43;\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 4;\n')
+
+    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout \[2 paths\] failed/)
+
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 44;\n',
+    )
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const other = 4;\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\nMM src/other.ts\n')
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+  })
+
+  it('stages the fixes in the index `git commit <paths>` leaves behind, not only in its own', () => {
+    const dir = committed(clean)
+
+    installPreCommitHook(dir, 'staged --fix --only=oxfmt')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+    gitIn(dir, 'commit', '--quiet', '-m', 'fix', 'src/index.ts')
+
+    expect(gitIn(dir, 'show', 'HEAD:src/index.ts')).toBe('export const answer: number = 43;\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('')
+  })
+
+  it('runs from a package folder of a linked worktree, whose hook git hands GIT_DIR', () => {
+    const dir = committed({
+      ...clean,
+      '.gitignore': 'node_modules\nworktrees\n',
+      'packages/app/src/index.ts': 'export const app = 1;\n',
+    })
+    const worktree = join(dir, 'worktrees/wt')
+
+    installPreCommitHook(dir, 'staged --fix --only=oxfmt', 'packages/app')
+    gitIn(dir, 'worktree', 'add', '--quiet', worktree)
+    symlinkSync(join(dir, 'node_modules'), join(worktree, 'node_modules'))
+    writeFileSync(join(worktree, 'packages/app/src/index.ts'), 'export const   app = 2\n')
+    gitIn(worktree, 'commit', '--quiet', '-am', 'fix')
+
+    expect(gitIn(worktree, 'show', 'HEAD:packages/app/src/index.ts')).toBe(
+      'export const app = 2;\n',
+    )
+    expect(gitIn(worktree, 'status', '--porcelain')).toBe('')
+  })
+
+  it('stops instead of overwriting unstaged changes an earlier run left behind', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 43;\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
+    mkdirSync(join(dir, '.git/uncheck-unstaged/src'), { recursive: true })
+    writeFileSync(join(dir, '.git/uncheck-unstaged/src/index.ts'), 'left behind')
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /An earlier run left the unstaged versions of your files in .*uncheck-unstaged/,
+    )
+    expect(readFileSync(join(dir, '.git/uncheck-unstaged/src/index.ts'), 'utf8')).toBe(
+      'left behind',
+    )
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 44;\n',
+    )
   })
 })
 
