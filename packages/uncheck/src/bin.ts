@@ -13,7 +13,8 @@ import { prepare } from './commands/prepare'
 import { staged } from './commands/staged'
 import { uncheck } from './commands/uncheck'
 
-// A reader that goes away (`| head`) must not end the run before `staged` puts changes back.
+// Any failed write (a reader gone after `| head`, a closed terminal, a full disk) would otherwise end
+// the run before `staged` puts unstaged changes back, so output errors are ignored.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', () => {})
 }

@@ -23,7 +23,6 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
 /**
  * Runs git in `cwd` and returns the bytes it printed. A non-zero exit fails with `GitFailed`
  * carrying stderr, where git explains itself; running outside a repository is one such failure.
- * Paths are taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
  */
 export const gitBytes = Effect.fn(function* (
   cwd: string,
@@ -64,7 +63,6 @@ export const gitBytes = Effect.fn(function* (
   return Buffer.concat(stdout)
 }, Effect.scoped)
 
-/** `gitBytes` for text output. */
 export function git(
   cwd: string,
   args: ReadonlyArray<string>,

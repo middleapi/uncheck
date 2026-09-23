@@ -694,8 +694,7 @@ const clean = {
   'src/other.ts': 'export const other = 2;\n',
 }
 
-/** Makes this checkout's CLI the pre-commit hook of `dir`, run from `folder` as `prepare` writes it. */
-function hook(dir: string, args: string, folder = '.') {
+function installPreCommitHook(dir: string, args: string, folder = '.') {
   const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
 
   mkdirSync(join(dir, '.git/hooks'), { recursive: true })
@@ -931,7 +930,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   })
 
   it('puts unstaged lines back where they were after the fixes move or change lines around them', async () => {
-    // oxfmt joins the split list, which moves every line below it, and fixes the last statement.
     const split = 'export const list = [\n  1,\n  2,\n];\n'
     const joined = 'export const list = [1, 2];\n'
     const staged =
@@ -962,7 +960,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'app/[id]/page.ts'), 'export const   id = 2\n')
     writeFileSync(join(dir, 'app/i/page.ts'), 'export const   i = 2\n')
     gitIn(dir, '--literal-pathspecs', 'add', 'app/[id]/page.ts')
-    // Settings a user may export that git refuses next to literal paths.
     vi.stubEnv('GIT_GLOB_PATHSPECS', '1')
     vi.stubEnv('GIT_ICASE_PATHSPECS', '1')
 
@@ -1022,7 +1019,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
     gitIn(dir, 'add', 'src/other.ts')
     writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\nexport const more = 4;\n')
-    // A moved file added with `git add -N` shows up as a rename, sorted before src/other.ts.
     gitIn(dir, 'mv', 'src/aaa.ts', 'src/moved.ts')
     gitIn(dir, 'reset', '--quiet', '--', 'src/aaa.ts', 'src/moved.ts')
     gitIn(dir, 'add', '--intent-to-add', 'src/moved.ts')
@@ -1040,7 +1036,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     const dir = committed(clean)
     const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
 
-    // The `ours` driver reports every merge as clean and keeps one side only.
     mkdirSync(join(dir, '.git/info'), { recursive: true })
     writeFileSync(join(dir, '.git/info/attributes'), '*.ts merge=ours\n')
     gitIn(dir, 'config', 'merge.ours.driver', 'true')
@@ -1076,8 +1071,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('keeps the unstaged changes when setting them aside fails halfway', async () => {
     const dir = committed(clean)
 
-    // A filter that fails the first time git writes src/other.ts, like a lock another git process
-    // holds for a moment, so setting aside stops after src/index.ts.
     mkdirSync(join(dir, '.git/info'), { recursive: true })
     writeFileSync(join(dir, '.git/info/attributes'), 'src/other.ts filter=flaky\n')
     gitIn(dir, 'config', 'filter.flaky.clean', 'cat')
@@ -1107,7 +1100,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('stages the fixes in the index `git commit <paths>` leaves behind, not only in its own', () => {
     const dir = committed(clean)
 
-    hook(dir, 'staged --fix --only=oxfmt')
+    installPreCommitHook(dir, 'staged --fix --only=oxfmt')
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
     gitIn(dir, 'commit', '--quiet', '-m', 'fix', 'src/index.ts')
 
@@ -1123,7 +1116,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     })
     const worktree = join(dir, 'worktrees/wt')
 
-    hook(dir, 'staged --fix --only=oxfmt', 'packages/app')
+    installPreCommitHook(dir, 'staged --fix --only=oxfmt', 'packages/app')
     gitIn(dir, 'worktree', 'add', '--quiet', worktree)
     symlinkSync(join(dir, 'node_modules'), join(worktree, 'node_modules'))
     writeFileSync(join(worktree, 'packages/app/src/index.ts'), 'export const   app = 2\n')

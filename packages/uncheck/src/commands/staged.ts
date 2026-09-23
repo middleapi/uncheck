@@ -51,7 +51,6 @@ export const staged = Command.make(
         return yield* Console.log(`${dim('○')} nothing to check, no staged files`)
       }
 
-      // Copies are kept at their paths from the top, whichever package folder the run starts in.
       const [prefix = '', folder = ''] = (yield* git(cwd, [
         'rev-parse',
         '--show-prefix',
@@ -171,13 +170,8 @@ const leftover = (saved: string) =>
     `An earlier run left the unstaged versions of your files in ${saved}, at their paths from the top of the repository. Unless another commit is running, copy back what your files are missing, delete the folder, then commit again.`,
   )
 
-/** Only edits to plain files can be set aside: `100644` or `100755` in the index and on disk. */
-const PLAIN = /^100(?:644|755)$/
+const REGULAR_FILE_MODE = /^100(?:644|755)$/
 
-/**
- * The staged `files` that also have unstaged changes, with their staged blobs. A deleted file, a
- * symlink or a type change among them stops the run before anything is touched.
- */
 const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>) {
   const entries = (yield* git(cwd, [
     'diff',
@@ -194,11 +188,10 @@ const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<s
     const file = entries[index + 1]!
 
     if (files.includes(file)) {
-      // `:<index mode> <file mode> <index blob> <file blob> <status>`, then the path.
-      const [from = '', to = '', blob = ''] = entries[index]!.slice(1).split(' ')
+      const [indexMode = '', fileMode = '', indexBlob = ''] = entries[index]!.slice(1).split(' ')
 
-      if (PLAIN.test(from) && PLAIN.test(to)) {
-        partial.set(file, blob)
+      if (REGULAR_FILE_MODE.test(indexMode) && REGULAR_FILE_MODE.test(fileMode)) {
+        partial.set(file, indexBlob)
       } else {
         odd.push(file)
       }
@@ -214,7 +207,6 @@ const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<s
   return partial
 })
 
-/** Where a partially staged file lives and where its copy is kept while the checks run. */
 interface Aside {
   readonly cwd: string
   readonly saved: string
@@ -227,11 +219,6 @@ const copiesOf = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: Read
   return files.map((file) => [path.join(cwd, file), path.join(saved, prefix, file)] as const)
 })
 
-/**
- * Copies the partially staged `files` into the saved folder, then checks them out so the checks see
- * what will be committed. Should anything fail after the copies exist, they go back and nothing is
- * set aside.
- */
 const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -269,12 +256,7 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
   )
 })
 
-/**
- * Puts the unstaged changes back on top of the fixes. When a fix and an unstaged change touch the
- * same or neighbouring lines, the fixes are undone on every staged file and the copies go back.
- * Never fails, since it runs as a finalizer: what it could not do is reported and returned, and
- * the copies stay in the saved folder then.
- */
+/** Runs as a finalizer, so it must never fail: what it cannot do is reported and returned. */
 const putBack = Effect.fn(function* (
   aside: Aside,
   files: ReadonlyArray<string>,
@@ -322,12 +304,8 @@ const putBack = Effect.fn(function* (
   return result
 })
 
-/**
- * Writes to `file` its unstaged `copy` plus whatever the checks changed since the staged `base`
- * blob, or returns false when both touch the same or neighbouring lines. The merge runs on what git
- * stores, so line endings or filters a formatter rewrites are no change. `merge-file`, unlike
- * `apply --3way`, ignores the merge drivers and rerere a repository may configure.
- */
+// Merges what git stores: a formatter rewriting line endings would conflict with every line of a
+// raw merge. `apply --3way` would run the repository's merge drivers and rerere; `merge-file` does not.
 const merge = Effect.fn(function* (cwd: string, file: string, copy: string, base: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
