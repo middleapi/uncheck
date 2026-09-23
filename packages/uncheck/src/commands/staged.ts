@@ -52,7 +52,7 @@ export const staged = Command.make(
       const before = yield* writeTree(cwd)
       const outcome = yield* Ref.make<Unstaged>('restored')
 
-      const failure = yield* Effect.scoped(
+      const { failure, empty } = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
             yield* Effect.acquireRelease(setAside(cwd, partial), (patch) =>
@@ -94,9 +94,11 @@ export const staged = Command.make(
 
               yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(fixed)}`)
             }
+
+            return { failure: failed, empty: after === (yield* headTree(cwd)) }
           }
 
-          return failed
+          return { failure: failed, empty: false }
         }),
       )
 
@@ -114,6 +116,12 @@ export const staged = Command.make(
         )
       }
 
+      if (empty) {
+        return yield* userError(
+          'The fixes undid every staged change, so the commit would be empty. To commit a change the fixes undo, make it again and commit with `git commit --no-verify`.',
+        )
+      }
+
       if (failure !== undefined) {
         return yield* Effect.fail(failure)
       }
@@ -127,6 +135,12 @@ export const staged = Command.make(
 )
 
 const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
+
+const headTree = (cwd: string) =>
+  git(cwd, ['rev-parse', '-q', '--verify', 'HEAD^{tree}']).pipe(
+    Effect.map((sha) => sha.trim()),
+    Effect.catchTag('GitFailed', () => Effect.succeed(undefined)),
+  )
 
 const apply = (cwd: string, patch: string) =>
   git(cwd, ['apply', '--whitespace=nowarn', '--recount', '--unidiff-zero', patch])

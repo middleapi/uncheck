@@ -881,6 +881,34 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
   })
 
+  it('fails when the fixes undo every staged change, since the commit would be empty', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      'export const   answer: number = 42\nexport const two = 2;\n',
+    )
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /fixes undid every staged change, so the commit would be empty/,
+    )
+
+    expect(gitIn(dir, 'diff', '--cached', '--name-only')).toBe('')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 42;\nexport const two = 2;\n',
+    )
+    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+
+    const unborn = fixture(clean)
+
+    gitIn(unborn, 'init', '--quiet')
+    gitIn(unborn, 'add', '.')
+
+    expect((await run(unborn, ['staged', '--fix'])).result).toBe('ok')
+  })
+
   it('only reports without --fix, stages the fixes even when a check fails, and needs staged files', async () => {
     const dir = committed(clean)
 
