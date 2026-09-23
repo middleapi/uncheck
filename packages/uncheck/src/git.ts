@@ -20,11 +20,14 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
 
 /**
  * Runs git in `cwd` and returns what it printed. A non-zero exit fails with `GitFailed` carrying
- * stderr, where git explains itself; running outside a repository is one such failure.
+ * stderr, where git explains itself; running outside a repository is one such failure. Paths are
+ * taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
  */
 export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd, stdin: 'ignore' }))
+  const handle = yield* spawner.spawn(
+    ChildProcess.make('git', ['--literal-pathspecs', ...args], { cwd, stdin: 'ignore' }),
+  )
 
   const [stdout, stderr] = yield* Effect.all(
     [

@@ -23,6 +23,7 @@ export const staged = Command.make(
   { cwd: cwdFlag, fix: fixFlag, only: onlyFlag, required: requireFlag, skipped: skipFlag },
   Effect.fn(
     function* ({ cwd: directory, fix, ...selection }) {
+      const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
 
       yield* validateSelection(selection)
@@ -47,6 +48,18 @@ export const staged = Command.make(
         return yield* Console.log(`${dim('○')} nothing to check, no staged files`)
       }
 
+      const patch = path.resolve(
+        cwd,
+        (yield* git(cwd, ['rev-parse', '--git-path', 'uncheck-unstaged.patch'])).trim(),
+      )
+
+      // A run that was killed, or could not put them back, left unstaged changes in the patch only.
+      if (yield* fs.exists(patch)) {
+        return yield* userError(
+          `An earlier run left unstaged changes in ${patch}. Put them back with \`git apply -C1 ${patch}\` (skip this if your files already have them), delete the file, then commit again.`,
+        )
+      }
+
       const unstaged = yield* gitPaths(cwd, ['diff', '--name-only', '--relative', '-z'])
       const partial = files.filter((file) => unstaged.includes(file))
       const before = yield* writeTree(cwd)
@@ -55,10 +68,19 @@ export const staged = Command.make(
       const failure = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
-            yield* Effect.acquireRelease(setAside(cwd, partial), (patch) =>
+            // Once the patch is saved, putBack runs however the rest ends, a failed checkout included.
+            yield* Effect.acquireRelease(savePatch(cwd, patch, partial), () =>
               putBack(cwd, patch, files, partial, before).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
+            )
+            yield* Effect.forEach(
+              argvBatches(partial),
+              (batch) => git(cwd, ['checkout', '--', ...batch]),
+              { discard: true },
+            )
+            yield* Console.log(
+              dim(`○ unstaged changes of ${listFiles(partial)} set aside until the checks finish`),
             )
           }
 
@@ -128,47 +150,16 @@ export const staged = Command.make(
 
 const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
 
+/** Context lines find each hunk where the fixes moved it, `-C1` even when the fixes changed some. */
 const apply = (cwd: string, patch: string) =>
-  git(cwd, ['apply', '--whitespace=nowarn', '--recount', '--unidiff-zero', patch])
+  git(cwd, ['apply', '--whitespace=nowarn', '-C1', patch])
 
 /**
- * Saves the unstaged hunks of the partially staged `files` as a patch and takes them out of the
- * working tree, so the checks see what will be committed. Zero context lines keep the patch
- * applicable once the fixes have changed lines around the hunks.
+ * Saves the unstaged hunks of `files` as a patch. Unlike `git diff`, `diff-files` ignores settings
+ * such as `diff.relative` or `diff.context` that would make the patch unfit for `git apply`.
  */
-const setAside = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>) {
-  const path = yield* Path.Path
-  const patch = path.resolve(
-    cwd,
-    (yield* git(cwd, ['rev-parse', '--git-path', 'uncheck-unstaged.patch'])).trim(),
-  )
-
-  yield* git(cwd, [
-    'diff',
-    '--binary',
-    '--unified=0',
-    '--no-color',
-    '--no-ext-diff',
-    '--src-prefix=a/',
-    '--dst-prefix=b/',
-    `--output=${patch}`,
-    '--',
-    ...files,
-  ])
-
-  yield* Effect.forEach(argvBatches(files), (batch) => git(cwd, ['checkout', '--', ...batch]), {
-    discard: true,
-  }).pipe(
-    // Giving up halfway would leave the hunks in the patch only, so put them back first.
-    Effect.tapError(() => Effect.ignore(apply(cwd, patch))),
-  )
-
-  yield* Console.log(
-    dim(`○ unstaged changes of ${listFiles(files)} set aside until the checks finish`),
-  )
-
-  return patch
-})
+const savePatch = (cwd: string, patch: string, files: ReadonlyArray<string>) =>
+  git(cwd, ['diff-files', '--patch', '--binary', `--output=${patch}`, '--', ...files])
 
 /**
  * Puts the unstaged hunks back on top of the fixes. When they no longer apply, the fixes are undone
@@ -210,7 +201,7 @@ const putBack = Effect.fn(function* (
         error instanceof GitFailed ? `${error.command} failed, ${error.stderr}` : String(error)
 
       return Console.log(
-        `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  they are saved in ${patch}, apply them with: git apply --unidiff-zero ${patch}`,
+        `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  they are saved in ${patch}, apply them with: git apply -C1 ${patch}`,
       ).pipe(Effect.as('stranded' as const))
     }),
   )

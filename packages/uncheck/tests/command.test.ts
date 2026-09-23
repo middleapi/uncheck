@@ -907,6 +907,92 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
 
     await expect(run(fixture(clean), ['staged'])).rejects.toThrow(/needs a git repository/)
   })
+
+  it('puts unstaged lines back where they were after the fixes move them, whatever the diff settings', async () => {
+    // oxfmt joins the split list into one line, which moves every line below it.
+    const split = 'export const list = [\n  1,\n  2,\n];\n'
+    const joined = 'export const list = [1, 2];\n'
+    const rest =
+      '\nexport function f() {\n  return 1;\n}\n\nexport function g() {\n  return 2;\n}\n'
+    const edited = rest.replace('  return 2;', '  // in g\n  return 2;')
+    const dir = committed({ 'packages/app/src/index.ts': joined + rest })
+    const file = join(dir, 'packages/app/src/index.ts')
+
+    writeFileSync(file, split + rest)
+    gitIn(dir, 'add', '.')
+    writeFileSync(file, split + edited)
+    gitIn(dir, 'config', 'diff.relative', 'true')
+    gitIn(dir, 'config', 'diff.context', '0')
+
+    const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(joined + rest)
+    expect(readFileSync(file, 'utf8')).toBe(joined + edited)
+  })
+
+  it('stages only the staged files, even when their names look like patterns', async () => {
+    const dir = committed({
+      'app/[id]/page.ts': 'export const id = 1;\n',
+      'app/i/page.ts': 'export const i = 1;\n',
+    })
+
+    writeFileSync(join(dir, 'app/[id]/page.ts'), 'export const   id = 2\n')
+    writeFileSync(join(dir, 'app/i/page.ts'), 'export const   i = 2\n')
+    gitIn(dir, '--literal-pathspecs', 'add', 'app/[id]/page.ts')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  app/[id]/page.ts\n M app/i/page.ts\n')
+  })
+
+  it('keeps the unstaged changes when setting them aside fails halfway', async () => {
+    const dir = committed(clean)
+
+    // A filter that fails the first time git writes src/other.ts, like a lock another git process
+    // holds for a moment, so setting aside stops after src/index.ts.
+    writeFileSync(join(dir, '.git/info/attributes'), 'src/other.ts filter=flaky\n')
+    gitIn(dir, 'config', 'filter.flaky.clean', 'cat')
+    gitIn(
+      dir,
+      'config',
+      'filter.flaky.smudge',
+      'if [ -e .git/failed ]; then cat; else touch .git/failed; exit 1; fi',
+    )
+    gitIn(dir, 'config', 'filter.flaky.required', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 43;\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 4;\n')
+
+    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout \[2 paths\] failed/)
+
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 44;\n',
+    )
+    expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const other = 4;\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\nMM src/other.ts\n')
+    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+  })
+
+  it('stops instead of overwriting unstaged changes an earlier run left behind', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 43;\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
+    writeFileSync(join(dir, '.git/uncheck-unstaged.patch'), 'left behind')
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /An earlier run left unstaged changes in .*uncheck-unstaged\.patch/,
+    )
+    expect(readFileSync(join(dir, '.git/uncheck-unstaged.patch'), 'utf8')).toBe('left behind')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: number = 44;\n',
+    )
+  })
 })
 
 describe('uncheck staged in a package', { timeout: 120_000 }, () => {
