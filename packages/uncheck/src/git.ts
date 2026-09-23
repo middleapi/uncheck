@@ -25,17 +25,26 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
  * carrying stderr, where git explains itself; running outside a repository is one such failure.
  * Paths are taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
  */
-export const gitBytes = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
+export const gitBytes = Effect.fn(function* (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  env: Readonly<Record<string, string>> = {},
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const handle = yield* spawner.spawn(
     ChildProcess.make('git', args, {
       cwd,
       stdin: 'ignore',
-      // Git refuses literal paths next to the other pathspec settings a user may export.
       env: {
+        // Git refuses literal paths next to the other pathspec settings a user may export.
         GIT_LITERAL_PATHSPECS: '1',
         GIT_GLOB_PATHSPECS: undefined,
         GIT_ICASE_PATHSPECS: undefined,
+        // A hook in a linked worktree gets GIT_DIR without GIT_WORK_TREE, which would make the
+        // package folder a hook line enters the top of the repository.
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        ...env,
       },
       extendEnv: true,
     }),
@@ -56,8 +65,12 @@ export const gitBytes = Effect.fn(function* (cwd: string, args: ReadonlyArray<st
 }, Effect.scoped)
 
 /** `gitBytes` for text output. */
-export function git(cwd: string, args: ReadonlyArray<string>) {
-  return Effect.map(gitBytes(cwd, args), (output) => output.toString())
+export function git(
+  cwd: string,
+  args: ReadonlyArray<string>,
+  env?: Readonly<Record<string, string>>,
+) {
+  return Effect.map(gitBytes(cwd, args, env), (output) => output.toString())
 }
 
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */

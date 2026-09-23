@@ -1,3 +1,5 @@
+import process from 'node:process'
+
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command } from 'effect/unstable/cli'
 
@@ -64,15 +66,16 @@ export const staged = Command.make(
         return yield* leftover(saved)
       }
 
-      const partial = yield* partiallyStaged(cwd, files)
+      const bases = yield* partiallyStaged(cwd, files)
+      const partial = [...bases.keys()]
       const before = yield* writeTree(cwd)
       const outcome = yield* Ref.make<Unstaged>('restored')
 
       const failure = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
-            yield* Effect.acquireRelease(setAside(aside, partial), (bases) =>
-              putBack(aside, files, partial, bases, before).pipe(
+            yield* Effect.acquireRelease(setAside(aside, partial), () =>
+              putBack(aside, files, bases, before).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
             )
@@ -94,6 +97,25 @@ export const staged = Command.make(
               (batch) => git(cwd, ['add', '--', ...batch]),
               { discard: true },
             )
+
+            // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
+            // behind (index.lock until then) needs the fixes too, or it would hold their revert.
+            const active = process.env.GIT_INDEX_FILE
+
+            if (active?.endsWith('.lock') === true) {
+              const lock = path.resolve(
+                cwd,
+                (yield* git(cwd, ['rev-parse', '--git-path', 'index.lock'])).trim(),
+              )
+
+              if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
+                yield* Effect.forEach(
+                  argvBatches(files),
+                  (batch) => git(cwd, ['add', '--', ...batch], { GIT_INDEX_FILE: lock }),
+                  { discard: true },
+                )
+              }
+            }
 
             const after = yield* writeTree(cwd)
 
@@ -153,23 +175,33 @@ const leftover = (saved: string) =>
 const PLAIN = /^100(?:644|755)$/
 
 /**
- * The staged `files` that also have unstaged changes. A deleted file, a symlink or a type change
- * among them stops the run before anything is touched.
+ * The staged `files` that also have unstaged changes, with their staged blobs. A deleted file, a
+ * symlink or a type change among them stops the run before anything is touched.
  */
 const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>) {
-  // `:<index mode> <file mode> <index id> <file id> <status>` then one path, NUL separated.
-  const entries = (yield* git(cwd, ['diff', '--raw', '--no-renames', '--relative', '-z'])).split(
-    '\0',
-  )
-  const partial: string[] = []
+  const entries = (yield* git(cwd, [
+    'diff',
+    '--raw',
+    '--no-abbrev',
+    '--no-renames',
+    '--relative',
+    '-z',
+  ])).split('\0')
+  const partial = new Map<string, string>()
   const odd: string[] = []
 
   for (let index = 0; index + 1 < entries.length; index += 2) {
     const file = entries[index + 1]!
 
     if (files.includes(file)) {
-      const modes = entries[index]!.slice(1).split(' ').slice(0, 2)
-      ;(modes.every((mode) => PLAIN.test(mode)) ? partial : odd).push(file)
+      // `:<index mode> <file mode> <index blob> <file blob> <status>`, then the path.
+      const [from = '', to = '', blob = ''] = entries[index]!.slice(1).split(' ')
+
+      if (PLAIN.test(from) && PLAIN.test(to)) {
+        partial.set(file, blob)
+      } else {
+        odd.push(file)
+      }
     }
   }
 
@@ -197,17 +229,14 @@ const copiesOf = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: Read
 
 /**
  * Copies the partially staged `files` into the saved folder, then checks them out so the checks see
- * what will be committed, and returns their staged blobs, the base putBack merges from. Should
- * anything fail after the copies exist, they go back and nothing is set aside.
+ * what will be committed. Should anything fail after the copies exist, they go back and nothing is
+ * set aside.
  */
 const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const { cwd, saved } = aside
   const copies = yield* copiesOf(aside, files)
-  const bases = (yield* git(cwd, ['rev-parse', ...files.map((file) => `:./${file}`)]))
-    .trim()
-    .split('\n')
 
   // Creating the folder, not only finding it missing, is what claims it from a parallel run.
   yield* fs.makeDirectory(saved).pipe(
@@ -238,8 +267,6 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
   yield* Console.log(
     dim(`○ unstaged changes of ${listFiles(files)} set aside until the checks finish`),
   )
-
-  return bases
 })
 
 /**
@@ -251,17 +278,17 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
 const putBack = Effect.fn(function* (
   aside: Aside,
   files: ReadonlyArray<string>,
-  partial: ReadonlyArray<string>,
-  bases: ReadonlyArray<string>,
+  bases: ReadonlyMap<string, string>,
   before: string,
 ) {
   const fs = yield* FileSystem.FileSystem
   const { cwd, saved } = aside
+  const partial = [...bases.keys()]
 
   const result = yield* Effect.gen(function* () {
     const copies = yield* copiesOf(aside, partial)
     const merged = yield* Effect.forEach(partial, (file, index) =>
-      merge(cwd, file, copies[index]![1], bases[index]!),
+      merge(cwd, file, copies[index]![1], bases.get(file)!),
     )
 
     if (merged.every(Boolean)) {
@@ -271,8 +298,7 @@ const putBack = Effect.fn(function* (
 
     yield* Effect.forEach(
       argvBatches(files),
-      (batch) =>
-        git(cwd, ['restore', `--source=${before}`, '--staged', '--worktree', '--', ...batch]),
+      (batch) => git(cwd, ['checkout', before, '--', ...batch]),
       { discard: true },
     )
     yield* Effect.forEach(copies, ([file, copy]) => fs.copyFile(copy, file), { discard: true })

@@ -694,6 +694,18 @@ const clean = {
   'src/other.ts': 'export const other = 2;\n',
 }
 
+/** Makes this checkout's CLI the pre-commit hook of `dir`, run from `folder` as `prepare` writes it. */
+function hook(dir: string, args: string, folder = '.') {
+  const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+
+  mkdirSync(join(dir, '.git/hooks'), { recursive: true })
+  writeFileSync(
+    join(dir, '.git/hooks/pre-commit'),
+    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${bin}" ${args}) || exit 1\n`,
+    { mode: 0o755 },
+  )
+}
+
 describe('uncheck hooks run', { timeout: 120_000 }, () => {
   it('checks the files changed since the last commit and sends the agent back once', async () => {
     const dir = committed(clean)
@@ -1090,6 +1102,37 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const other = 4;\n')
     expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\nMM src/other.ts\n')
     expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+  })
+
+  it('stages the fixes in the index `git commit <paths>` leaves behind, not only in its own', () => {
+    const dir = committed(clean)
+
+    hook(dir, 'staged --fix --only=oxfmt')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+    gitIn(dir, 'commit', '--quiet', '-m', 'fix', 'src/index.ts')
+
+    expect(gitIn(dir, 'show', 'HEAD:src/index.ts')).toBe('export const answer: number = 43;\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('')
+  })
+
+  it('runs from a package folder of a linked worktree, whose hook git hands GIT_DIR', () => {
+    const dir = committed({
+      ...clean,
+      '.gitignore': 'node_modules\nworktrees\n',
+      'packages/app/src/index.ts': 'export const app = 1;\n',
+    })
+    const worktree = join(dir, 'worktrees/wt')
+
+    hook(dir, 'staged --fix --only=oxfmt', 'packages/app')
+    gitIn(dir, 'worktree', 'add', '--quiet', worktree)
+    symlinkSync(join(dir, 'node_modules'), join(worktree, 'node_modules'))
+    writeFileSync(join(worktree, 'packages/app/src/index.ts'), 'export const   app = 2\n')
+    gitIn(worktree, 'commit', '--quiet', '-am', 'fix')
+
+    expect(gitIn(worktree, 'show', 'HEAD:packages/app/src/index.ts')).toBe(
+      'export const app = 2;\n',
+    )
+    expect(gitIn(worktree, 'status', '--porcelain')).toBe('')
   })
 
   it('stops instead of overwriting unstaged changes an earlier run left behind', async () => {
