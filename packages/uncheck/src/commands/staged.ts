@@ -30,12 +30,13 @@ export const staged = Command.make(
 
       const cwd = path.resolve(directory)
 
-      // Staged deletions have nothing left to check.
+      // Staged deletions and submodules have nothing to check.
       const files = yield* gitPaths(cwd, [
         'diff',
         '--cached',
         '--name-only',
         '--diff-filter=ACMR',
+        '--ignore-submodules=all',
         '--relative',
         '-z',
       ]).pipe(
@@ -48,15 +49,12 @@ export const staged = Command.make(
         return yield* Console.log(`${dim('○')} nothing to check, no staged files`)
       }
 
-      const patch = path.resolve(
-        cwd,
-        (yield* git(cwd, ['rev-parse', '--git-path', 'uncheck-unstaged.patch'])).trim(),
-      )
+      const repo = yield* repoPaths(cwd)
 
       // A run that was killed, or could not put them back, left unstaged changes in the patch only.
-      if (yield* fs.exists(patch)) {
+      if (yield* fs.exists(repo.patch)) {
         return yield* userError(
-          `An earlier run left unstaged changes in ${patch}. Put them back with \`git apply -C1 ${patch}\` (skip this if your files already have them), delete the file, then commit again.`,
+          `An earlier run left unstaged changes in ${repo.patch}. Put them back with \`${applyByHand(repo)}\`, which refuses if your files already have them, then delete the file and commit again.`,
         )
       }
 
@@ -69,8 +67,8 @@ export const staged = Command.make(
         Effect.gen(function* () {
           if (partial.length > 0) {
             // Once the patch is saved, putBack runs however the rest ends, a failed checkout included.
-            yield* Effect.acquireRelease(savePatch(cwd, patch, partial), () =>
-              putBack(cwd, patch, files, partial, before).pipe(
+            yield* Effect.acquireRelease(savePatch(cwd, repo.patch, partial), () =>
+              putBack(cwd, repo, files, partial, before).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
             )
@@ -150,38 +148,81 @@ export const staged = Command.make(
 
 const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
 
-/** Context lines find each hunk where the fixes moved it, `-C1` even when the fixes changed some. */
-const apply = (cwd: string, patch: string) =>
-  git(cwd, ['apply', '--whitespace=nowarn', '-C1', patch])
+/**
+ * The repository of `cwd`: its top folder and index, where the unstaged hunks are kept while the
+ * checks run, and the copy of the index they are merged into.
+ */
+const repoPaths = Effect.fn(function* (cwd: string) {
+  const path = yield* Path.Path
+  const output = yield* git(cwd, [
+    'rev-parse',
+    '--show-toplevel',
+    '--git-path',
+    'index',
+    '--git-path',
+    'uncheck-unstaged.patch',
+    '--git-path',
+    'uncheck-index',
+  ])
+  const [top, index, patch, merged] = output
+    .trim()
+    .split('\n')
+    .map((line) => path.resolve(cwd, line))
+
+  return { top: top!, index: index!, patch: patch!, merged: merged! }
+})
+
+type RepoPaths = Effect.Success<ReturnType<typeof repoPaths>>
+
+/** Plain `git apply` refuses rather than guess, and it skips files outside the folder it runs in. */
+const applyByHand = ({ top, patch }: RepoPaths) => `git -C "${top}" apply "${patch}"`
 
 /**
  * Saves the unstaged hunks of `files` as a patch. Unlike `git diff`, `diff-files` ignores settings
- * such as `diff.relative` or `diff.context` that would make the patch unfit for `git apply`.
+ * such as `diff.relative` or `diff.context` that would make the patch unfit for `git apply`, and
+ * `GIT_DIFF_OPTS` is cleared for the same reason. A half-written patch is removed, since the files
+ * still hold every change then.
  */
-const savePatch = (cwd: string, patch: string, files: ReadonlyArray<string>) =>
-  git(cwd, ['diff-files', '--patch', '--binary', `--output=${patch}`, '--', ...files])
+const savePatch = Effect.fn(function* (cwd: string, patch: string, files: ReadonlyArray<string>) {
+  const fs = yield* FileSystem.FileSystem
+
+  yield* git(cwd, ['diff-files', '--patch', '--binary', `--output=${patch}`, '--', ...files], {
+    GIT_DIFF_OPTS: undefined,
+  }).pipe(Effect.tapError(() => Effect.ignore(fs.remove(patch))))
+})
 
 /**
- * Puts the unstaged hunks back on top of the fixes. When they no longer apply, the fixes are undone
- * on every staged file, which makes the files what the patch was taken from, so it applies again.
+ * Puts the unstaged hunks back on top of the fixes. A three-way merge into a copy of the index
+ * follows the lines the fixes moved and keeps the hunks unstaged, then the merged files are
+ * checked out of that copy. When a fix and a hunk touch the same lines, the fixes are undone on
+ * every staged file, which makes the files what the patch was taken from, so it applies as it is.
  * Never fails, since it runs as a finalizer: what it could not do is reported and returned.
  */
 const putBack = Effect.fn(function* (
   cwd: string,
-  patch: string,
+  repo: RepoPaths,
   files: ReadonlyArray<string>,
   partial: ReadonlyArray<string>,
   before: string,
 ) {
   const fs = yield* FileSystem.FileSystem
+  const merged = { GIT_INDEX_FILE: repo.merged }
 
   const result = yield* Effect.gen(function* () {
-    const applied = yield* apply(cwd, patch).pipe(
-      Effect.map(() => true),
+    const clean = yield* fs.copyFile(repo.index, repo.merged).pipe(
+      Effect.andThen(
+        git(cwd, ['apply', '--3way', '--cached', '--whitespace=nowarn', repo.patch], merged),
+      ),
+      Effect.as(true),
       Effect.catchTag('GitFailed', () => Effect.succeed(false)),
     )
 
-    if (applied) {
+    if (clean) {
+      yield* Effect.forEach(
+        argvBatches(partial),
+        (batch) => git(cwd, ['checkout', '--', ...batch], merged),
+        { discard: true },
+      )
       yield* Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`))
       return 'restored' as const
     }
@@ -192,7 +233,7 @@ const putBack = Effect.fn(function* (
         git(cwd, ['restore', `--source=${before}`, '--staged', '--worktree', '--', ...batch]),
       { discard: true },
     )
-    yield* apply(cwd, patch)
+    yield* git(cwd, ['apply', '--whitespace=nowarn', repo.patch])
 
     return 'conflicted' as const
   }).pipe(
@@ -201,13 +242,14 @@ const putBack = Effect.fn(function* (
         error instanceof GitFailed ? `${error.command} failed, ${error.stderr}` : String(error)
 
       return Console.log(
-        `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  they are saved in ${patch}, apply them with: git apply -C1 ${patch}`,
+        `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  they are saved in ${repo.patch}, put them back with \`${applyByHand(repo)}\` and delete the file`,
       ).pipe(Effect.as('stranded' as const))
     }),
+    Effect.ensuring(Effect.ignore(fs.remove(repo.merged))),
   )
 
   if (result !== 'stranded') {
-    yield* Effect.ignore(fs.remove(patch))
+    yield* Effect.ignore(fs.remove(repo.patch))
   }
 
   return result

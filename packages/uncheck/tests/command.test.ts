@@ -908,27 +908,30 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     await expect(run(fixture(clean), ['staged'])).rejects.toThrow(/needs a git repository/)
   })
 
-  it('puts unstaged lines back where they were after the fixes move them, whatever the diff settings', async () => {
-    // oxfmt joins the split list into one line, which moves every line below it.
+  it('puts unstaged lines back where they were after the fixes move or change lines around them', async () => {
+    // oxfmt joins the split list, which moves every line below it, and fixes the last statement.
     const split = 'export const list = [\n  1,\n  2,\n];\n'
     const joined = 'export const list = [1, 2];\n'
-    const rest =
-      '\nexport function f() {\n  return 1;\n}\n\nexport function g() {\n  return 2;\n}\n'
-    const edited = rest.replace('  return 2;', '  // in g\n  return 2;')
-    const dir = committed({ 'packages/app/src/index.ts': joined + rest })
+    const staged =
+      "\nexport function f() {\n  return 1;\n}\n\nexport function g() {\n  return 'g'\n}\n"
+    const fixed = staged.replace("'g'", '"g";')
+    const edit = (text: string) =>
+      `${text.replace('  return 1;', '  // in f\n  return 1;')}\nexport const z = 1;\n`
+    const dir = committed({ 'packages/app/src/index.ts': joined + fixed })
     const file = join(dir, 'packages/app/src/index.ts')
 
-    writeFileSync(file, split + rest)
+    writeFileSync(file, split + staged)
     gitIn(dir, 'add', '.')
-    writeFileSync(file, split + edited)
+    writeFileSync(file, split + edit(staged))
+    // Settings that change what `git diff` prints must not change the saved hunks.
     gitIn(dir, 'config', 'diff.relative', 'true')
     gitIn(dir, 'config', 'diff.context', '0')
 
     const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
 
     expect(result).toBe('ok')
-    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(joined + rest)
-    expect(readFileSync(file, 'utf8')).toBe(joined + edited)
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(joined + fixed)
+    expect(readFileSync(file, 'utf8')).toBe(joined + edit(fixed))
   })
 
   it('stages only the staged files, even when their names look like patterns', async () => {
@@ -947,11 +950,32 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(gitIn(dir, 'status', '--porcelain')).toBe('M  app/[id]/page.ts\n M app/i/page.ts\n')
   })
 
+  it('never stages the commit a submodule has checked out but not staged', async () => {
+    const dir = committed(clean)
+    const sub = join(dir, 'sub')
+
+    mkdirSync(sub)
+    gitIn(sub, 'init', '--quiet')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'one')
+    gitIn(dir, 'add', 'sub')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'two')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+    gitIn(dir, 'add', 'sub', 'src/index.ts')
+    gitIn(sub, 'commit', '--quiet', '--allow-empty', '-m', 'three')
+    const staged = gitIn(dir, 'rev-parse', ':sub')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'rev-parse', ':sub')).toBe(staged)
+  })
+
   it('keeps the unstaged changes when setting them aside fails halfway', async () => {
     const dir = committed(clean)
 
     // A filter that fails the first time git writes src/other.ts, like a lock another git process
     // holds for a moment, so setting aside stops after src/index.ts.
+    mkdirSync(join(dir, '.git/info'), { recursive: true })
     writeFileSync(join(dir, '.git/info/attributes'), 'src/other.ts filter=flaky\n')
     gitIn(dir, 'config', 'filter.flaky.clean', 'cat')
     gitIn(
