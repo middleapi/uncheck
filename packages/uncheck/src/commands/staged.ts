@@ -1,7 +1,7 @@
 import process from 'node:process'
 
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
-import { Command } from 'effect/unstable/cli'
+import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { git, gitBytes, GitFailed, gitPaths } from '../git'
@@ -22,9 +22,21 @@ type Unstaged = 'restored' | 'conflicted' | 'stranded'
 
 export const staged = Command.make(
   'staged',
-  { cwd: cwdFlag, fix: fixFlag, only: onlyFlag, required: requireFlag, skipped: skipFlag },
+  {
+    cwd: cwdFlag,
+    fix: fixFlag,
+    allowEmpty: Flag.Boolean('allow-empty').pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        'Let the commit through when the fixes undo every staged change, which makes it empty',
+      ),
+    ),
+    only: onlyFlag,
+    required: requireFlag,
+    skipped: skipFlag,
+  },
   Effect.fn(
-    function* ({ cwd: directory, fix, ...selection }) {
+    function* ({ cwd: directory, fix, allowEmpty, ...selection }) {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
 
@@ -153,9 +165,9 @@ export const staged = Command.make(
         )
       }
 
-      if (empty) {
+      if (empty && !allowEmpty) {
         return yield* userError(
-          'The fixes undid every staged change, so the commit would be empty. To commit a change the fixes undo, make it again and commit with `git commit --no-verify`.',
+          'The fixes undid every staged change, so the commit would be empty. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.',
         )
       }
 

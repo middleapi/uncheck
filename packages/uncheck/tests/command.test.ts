@@ -892,7 +892,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
-  it('fails when the fixes undo every staged change, since the commit would be empty', async () => {
+  it('fails when the fixes undo every staged change, unless empty commits are allowed', async () => {
     const dir = committed({
       ...clean,
       'src/index.ts': 'export const answer: number = 42;\nexport const two = 2;\n',
@@ -917,6 +917,15 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
       'export const answer: number = 42;\nexport const two = 2;\nexport const three = 3;\n',
     )
     expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
+    gitIn(dir, 'add', 'src/other.ts')
+
+    const allowed = await run(dir, ['staged', '--fix', '--allow-empty'])
+
+    expect(allowed.result).toBe('ok')
+    expect(allowed.stdout).toContain('✔ staged the fixes to src/other.ts\n')
+    expect(gitIn(dir, 'diff', '--cached', '--name-only')).toBe('')
 
     const unborn = fixture(clean)
 
@@ -1254,6 +1263,13 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(fast.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
     expect(readFileSync(hook, 'utf8')).toBe(
       `${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt || exit 1\n`,
+    )
+
+    const allowEmpty = await run(dir, ['prepare', '--pre-commit', '--allow-empty'])
+
+    expect(allowEmpty.result).toBe('ok')
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `${header}pnpm exec uncheck staged --fix --allow-empty || exit 1\n`,
     )
 
     const checkOnly = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
