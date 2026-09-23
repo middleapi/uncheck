@@ -109,7 +109,13 @@ export const prepare = Command.make(
     const inside = path.relative(top!, yield* fs.realPath(cwd)).replaceAll('\\', '/')
     const line = hookLine(inside, command)
 
-    const file = path.join(path.resolve(cwd, hooks!), 'pre-commit')
+    // husky 9 and Vite+ point core.hooksPath at generated shims that source the `h` dispatcher, which
+    // exits before any line appended to a shim and runs the hook in the folder above instead.
+    const configured = path.resolve(cwd, hooks!)
+    const dispatched = yield* fs
+      .exists(path.join(configured, 'h'))
+      .pipe(Effect.orElseSucceed(() => false))
+    const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
     const relative = path.relative(cwd, file)
     const shown = relative.startsWith('..') ? file : relative
     const existing = yield* fs.readFileString(file).pipe(Effect.option)
@@ -128,7 +134,11 @@ export const prepare = Command.make(
         yield* fs.writeFileString(file, next)
       }
 
-      yield* fs.chmod(file, 0o755)
+      // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would leave
+      // every clone with a change to commit.
+      if (!dispatched) {
+        yield* fs.chmod(file, 0o755)
+      }
     }).pipe(
       Effect.as(undefined),
       Effect.catch((error) =>
