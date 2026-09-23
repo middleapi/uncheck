@@ -854,7 +854,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(gitIn(dir, 'status', '--porcelain')).toBe(
       'MM src/index.ts\n M src/other.ts\n?? src/fresh.ts\n',
     )
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
   it('undoes the fixes when they conflict with unstaged changes, so nothing is lost', async () => {
@@ -878,7 +878,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     // The fixes to the other staged file are undone too, so a commit attempt never half applies.
     expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const   other = 2\n')
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 2\n')
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
   it('only reports without --fix, stages the fixes even when a check fails, and needs staged files', async () => {
@@ -933,9 +933,6 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(file, split + staged)
     gitIn(dir, 'add', '.')
     writeFileSync(file, split + edit(staged))
-    // Settings that change what `git diff` prints must not change the saved hunks.
-    gitIn(dir, 'config', 'diff.relative', 'true')
-    gitIn(dir, 'config', 'diff.context', '0')
 
     const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
 
@@ -953,8 +950,13 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'app/[id]/page.ts'), 'export const   id = 2\n')
     writeFileSync(join(dir, 'app/i/page.ts'), 'export const   i = 2\n')
     gitIn(dir, '--literal-pathspecs', 'add', 'app/[id]/page.ts')
+    // Settings a user may export that git refuses next to literal paths.
+    vi.stubEnv('GIT_GLOB_PATHSPECS', '1')
+    vi.stubEnv('GIT_ICASE_PATHSPECS', '1')
 
-    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt']).finally(() =>
+      vi.unstubAllEnvs(),
+    )
 
     expect(result).toBe('ok')
     expect(gitIn(dir, 'status', '--porcelain')).toBe('M  app/[id]/page.ts\n M app/i/page.ts\n')
@@ -978,6 +980,43 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
 
     expect(result).toBe('ok')
     expect(gitIn(dir, 'rev-parse', ':sub')).toBe(staged)
+  })
+
+  it('merges by plain text whatever merge driver the repository sets', async () => {
+    const dir = committed(clean)
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+
+    // The `ours` driver reports every merge as clean and keeps one side only.
+    mkdirSync(join(dir, '.git/info'), { recursive: true })
+    writeFileSync(join(dir, '.git/info/attributes'), '*.ts merge=ours\n')
+    gitIn(dir, 'config', 'merge.ours.driver', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), `export const   answer: number = 42\n${lines}`)
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      `export const   answer: number = 42\n${lines.replace('c = 3', 'c = 30')}`,
+    )
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      `export const answer: number = 42;\n${lines.replace('c = 3', 'c = 30')}`,
+    )
+  })
+
+  it('refuses to set aside an unstaged change that is not an edit to a file', async () => {
+    const dir = committed(clean)
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src/other.ts')
+    rmSync(join(dir, 'src/other.ts'))
+
+    await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
+      /src\/other\.ts are not edits to a file/,
+    )
+    expect(existsSync(join(dir, 'src/other.ts'))).toBe(false)
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 3;\n')
   })
 
   it('keeps the unstaged changes when setting them aside fails halfway', async () => {
@@ -1008,7 +1047,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     )
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const other = 4;\n')
     expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\nMM src/other.ts\n')
-    expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
+    expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
   })
 
   it('stops instead of overwriting unstaged changes an earlier run left behind', async () => {
@@ -1017,12 +1056,15 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 43;\n')
     gitIn(dir, 'add', 'src/index.ts')
     writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
-    writeFileSync(join(dir, '.git/uncheck-unstaged.patch'), 'left behind')
+    mkdirSync(join(dir, '.git/uncheck-unstaged/src'), { recursive: true })
+    writeFileSync(join(dir, '.git/uncheck-unstaged/src/index.ts'), 'left behind')
 
     await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
-      /An earlier run left unstaged changes in .*uncheck-unstaged\.patch/,
+      /An earlier run left the unstaged versions of your files in .*uncheck-unstaged/,
     )
-    expect(readFileSync(join(dir, '.git/uncheck-unstaged.patch'), 'utf8')).toBe('left behind')
+    expect(readFileSync(join(dir, '.git/uncheck-unstaged/src/index.ts'), 'utf8')).toBe(
+      'left behind',
+    )
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
       'export const answer: number = 44;\n',
     )

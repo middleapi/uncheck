@@ -23,11 +23,7 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
  * stderr, where git explains itself; running outside a repository is one such failure. Paths are
  * taken literally, so `app/[id]/page.ts` never also matches `app/i/page.ts`.
  */
-export const git = Effect.fn(function* (
-  cwd: string,
-  args: ReadonlyArray<string>,
-  env: Readonly<Record<string, string | undefined>> = {},
-) {
+export const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const handle = yield* spawner.spawn(
     ChildProcess.make('git', args, {
@@ -38,7 +34,6 @@ export const git = Effect.fn(function* (
         GIT_LITERAL_PATHSPECS: '1',
         GIT_GLOB_PATHSPECS: undefined,
         GIT_ICASE_PATHSPECS: undefined,
-        ...env,
       },
       extendEnv: true,
     }),
