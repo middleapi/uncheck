@@ -1095,7 +1095,8 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
       'src/index.ts':
         'import { a } from "./lib";\nimport { b } from "./lib";\nconsole.log(a, b)\nexport const enum Level { Low }\n',
       'src/lib.ts': 'export const a = 1\nexport const b = 2\n',
-      'src/debug.ts': 'export function pause() {\n  debugger\n}\n',
+      'src/warn.ts':
+        "import { a } from './lib'\nimport { b } from './lib'\n\nexport function pause() {\n  debugger\n  return a + b\n}\n",
       'src/bugs.ts': [
         'export function parse() {',
         '  try { JSON.parse("x") }',
@@ -1122,7 +1123,7 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
       { name: 'tsc', status: 'skipped', reason: 'no tsconfig.json found' },
     ])
     expect(check.stdout).toContain('eslint(no-console)')
-    expect(check.stdout).toContain('warning import(no-duplicates)')
+    expect(check.stdout).toContain('import(no-duplicates)')
     expect(check.stdout).toContain('oxc(no-const-enum)')
 
     for (const rule of [
@@ -1138,11 +1139,13 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
       expect(check.stdout).toContain(rule)
     }
 
-    // a default rule keeps oxlint's `warn` level, which reports without failing the run
-    const warned = await run(dir, ['--only=oxlint', 'src/debug.ts'])
+    // `warn` rules, a default one and `import/no-duplicates`, report without failing the run; the
+    // output format depends on the environment (a terminal, CI or an agent), so only names are matched
+    const warned = await run(dir, ['--only=oxlint', 'src/warn.ts'])
 
     expect(warned.result).toBe('ok')
-    expect(warned.stdout).toContain('warning eslint(no-debugger)')
+    expect(warned.stdout).toContain('eslint(no-debugger)')
+    expect(warned.stdout).toContain('import(no-duplicates)')
 
     const fix = await run(dir, ['--fix'])
 
