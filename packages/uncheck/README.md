@@ -64,6 +64,46 @@ Every `tsconfig.json` in the project is discovered (through `git ls-files`, so i
 
 When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
 
+## Presets
+
+`uncheck/oxlint`, `uncheck/oxfmt` and `uncheck/tsconfig` export presets. `middleapi` is the one the [middleapi](https://github.com/middleapi) projects share:
+
+```ts
+// oxlint.config.ts
+import { defineConfig } from 'oxlint'
+import { middleapi } from 'uncheck/oxlint'
+
+export default defineConfig({ extends: [middleapi] })
+```
+
+```ts
+// oxfmt.config.ts
+import { defineConfig } from 'oxfmt'
+import { middleapi } from 'uncheck/oxfmt'
+
+export default defineConfig({ ...middleapi })
+```
+
+```jsonc
+// tsconfig.json, for Node.js code that is only type checked
+{
+  "extends": "uncheck/tsconfig/middleapi",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src"],
+}
+```
+
+```jsonc
+// packages/*/tsconfig.json, for a Node.js package that emits its declarations to dist
+{
+  "extends": "uncheck/tsconfig/middleapi/lib",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src"],
+}
+```
+
+The tsconfig presets target ES2022 and load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
+
 ## Agent hooks
 
 ```sh

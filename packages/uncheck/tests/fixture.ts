@@ -41,7 +41,10 @@ export function fixture(
 
   for (const [relative, content] of Object.entries({ ...defaults, ...files })) {
     mkdirSync(dirname(join(dir, relative)), { recursive: true })
-    writeFileSync(join(dir, relative), typeof content === 'string' ? content : JSON.stringify(content))
+    writeFileSync(
+      join(dir, relative),
+      typeof content === 'string' ? content : JSON.stringify(content),
+    )
   }
 
   return dir

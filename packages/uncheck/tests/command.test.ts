@@ -1,17 +1,22 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
+
 import { NodeServices } from '@effect/platform-node'
 import { Console, Effect, Stdio, Stream } from 'effect'
 import { Command } from 'effect/unstable/cli'
-import { fixture } from './fixture'
+
 import { hooks } from '../src/commands/hooks'
 import { prepare } from '../src/commands/prepare'
 import { staged } from '../src/commands/staged'
 import { uncheck } from '../src/commands/uncheck'
 import { CheckFailed } from '../src/errors'
+import { middleapi as oxfmtPreset } from '../src/presets/oxfmt'
+import { middleapi as oxlintPreset } from '../src/presets/oxlint'
+import { fixture } from './fixture'
 
 const cli = uncheck.pipe(Command.withSubcommands([staged, prepare, hooks]))
 const SUBCOMMANDS = new Set(['staged', 'prepare', 'hooks', 'install', 'run'])
@@ -47,7 +52,7 @@ async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): P
   const result = await Effect.runPromise(
     Command.runWith(cli, { version: '0.0.0' })(argv).pipe(
       Effect.map(() => 'ok' as const),
-      Effect.catchTag('CheckFailed', error => Effect.succeed(error)),
+      Effect.catchTag('CheckFailed', (error) => Effect.succeed(error)),
       Effect.catchTag('StopBlocked', () => Effect.succeed('blocked' as const)),
       Effect.provideService(Console.Console, capture),
       Effect.provide(Stdio.layerTest({ stdin: Stream.make(new TextEncoder().encode(stdin)) })),
@@ -60,13 +65,19 @@ async function run(cwd: string, args: ReadonlyArray<string> = [], stdin = ''): P
 
 /** Joins captured lines the way a terminal would show them, without ANSI styling. */
 function text(lines: string[]): string {
-  return stripVTControlCharacters(lines.map(line => `${line}\n`).join(''))
+  return stripVTControlCharacters(lines.map((line) => `${line}\n`).join(''))
 }
 
 const oxlintrc = { rules: { 'no-var': 'error' } }
 
 const standaloneTsconfig = {
-  compilerOptions: { noEmit: true, strict: true, module: 'esnext', moduleResolution: 'bundler', types: [] },
+  compilerOptions: {
+    noEmit: true,
+    strict: true,
+    module: 'esnext',
+    moduleResolution: 'bundler',
+    types: [],
+  },
   include: ['src', 'scripts'],
 }
 
@@ -83,7 +94,7 @@ function compositeTsconfig(references: string[] = []) {
       moduleResolution: 'bundler',
       types: [],
     },
-    references: references.map(path => ({ path })),
+    references: references.map((path) => ({ path })),
     include: ['src'],
   }
 }
@@ -115,13 +126,21 @@ describe('uncheck', { timeout: 120_000 }, () => {
     expect(fix.result).toBe('ok')
     expect(fix.stdout).toContain('▶ oxlint --fix\n')
     expect(fix.stdout).toContain('▶ oxfmt\n')
-    expect(readFileSync(join(dir, 'src/legacy.ts'), 'utf8')).toBe('const count = 1;\nexport { count };\n')
-    expect(readFileSync(join(dir, 'src/ugly.ts'), 'utf8')).toBe('export const ugly = { a: 1, b: 2 };\n')
+    expect(readFileSync(join(dir, 'src/legacy.ts'), 'utf8')).toBe(
+      'const count = 1;\nexport { count };\n',
+    )
+    expect(readFileSync(join(dir, 'src/ugly.ts'), 'utf8')).toBe(
+      'export const ugly = { a: 1, b: 2 };\n',
+    )
 
     const clean = await run(dir)
 
     expect(clean.result).toBe('ok')
-    expect(clean.stdout.startsWith(`uncheck in ${dir}\n○ sherif skipped, no package.json found\n▶ oxlint\n`)).toBe(true)
+    expect(
+      clean.stdout.startsWith(
+        `uncheck in ${dir}\n○ sherif skipped, no package.json found\n▶ oxlint\n`,
+      ),
+    ).toBe(true)
     expect(clean.stdout).toContain('▶ oxlint\n')
     expect(clean.stdout).toContain('▶ oxfmt --check\n')
     expect(clean.stdout).toContain('▶ tsc -p tsconfig.json\n')
@@ -192,7 +211,9 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const single = await run(dir, ['--fix', 'scripts/hello.ts'])
 
     expect(single.result).toBe('ok')
-    expect(single.stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern scripts/hello.ts\n')
+    expect(single.stdout).toContain(
+      '▶ oxlint --fix --no-error-on-unmatched-pattern scripts/hello.ts\n',
+    )
     expect(single.stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern scripts/hello.ts\n')
     expect(single.stdout).toContain('▶ tsc -p tsconfig.json\n')
     expect(single.stdout).not.toContain('tsc -b')
@@ -221,7 +242,11 @@ describe('uncheck', { timeout: 120_000 }, () => {
       /No files match missing.ts, lib\/\*\*/,
     )
 
-    const lenient = await run(dir, ['--no-error-on-unmatched-pattern', 'src/index.ts', 'missing.ts'])
+    const lenient = await run(dir, [
+      '--no-error-on-unmatched-pattern',
+      'src/index.ts',
+      'missing.ts',
+    ])
 
     expect(lenient.result).toBe('ok')
     expect(lenient.stdout).toContain('▶ oxlint --no-error-on-unmatched-pattern src/index.ts\n')
@@ -229,7 +254,9 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const nothing = await run(dir, ['--no-error-on-unmatched-pattern', 'missing.ts'])
 
     expect(nothing.result).toBe('ok')
-    expect(nothing.stdout).toBe(`uncheck in ${dir}\n○ nothing to check, no files match missing.ts\n`)
+    expect(nothing.stdout).toBe(
+      `uncheck in ${dir}\n○ nothing to check, no files match missing.ts\n`,
+    )
   })
 
   it('discovers tsconfig files through git so ignored folders are skipped', async () => {
@@ -277,12 +304,15 @@ describe('uncheck', { timeout: 120_000 }, () => {
   })
 
   it('fails when a tsconfig.json exists but typescript is not installed', async () => {
-    const dir = fixture({ 'tsconfig.json': standaloneTsconfig, 'src/index.ts': 'export const answer = 42;\n' }, [])
+    const dir = fixture(
+      { 'tsconfig.json': standaloneTsconfig, 'src/index.ts': 'export const answer = 42;\n' },
+      [],
+    )
 
     const { result, stdout } = await run(dir)
 
     expect(result).toBeInstanceOf(CheckFailed)
-    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual([
+    expect((result as CheckFailed).outcomes.map((outcome) => outcome.status)).toEqual([
       'skipped',
       'skipped',
       'skipped',
@@ -297,7 +327,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir)
 
     expect(result).toBeInstanceOf(CheckFailed)
-    expect((result as CheckFailed).outcomes.map(outcome => outcome.status)).toEqual([
+    expect((result as CheckFailed).outcomes.map((outcome) => outcome.status)).toEqual([
       'skipped',
       'skipped',
       'skipped',
@@ -310,7 +340,10 @@ describe('uncheck', { timeout: 120_000 }, () => {
 })
 
 /** A workspace sherif has something to say about, with its install step off so the fix stays offline. */
-function workspace(extra: Record<string, string | object> = {}, config: Record<string, unknown> = {}) {
+function workspace(
+  extra: Record<string, string | object> = {},
+  config: Record<string, unknown> = {},
+) {
   return fixture(
     {
       'package.json': {
@@ -321,8 +354,16 @@ function workspace(extra: Record<string, string | object> = {}, config: Record<s
         devDependencies: { zod: '^3.0.0', react: '^18.0.0' },
         sherif: { noInstall: true, ...config },
       },
-      'packages/a/package.json': { name: 'a', version: '1.0.0', dependencies: { react: '^18.0.0' } },
-      'packages/b/package.json': { name: 'b', version: '1.0.0', dependencies: { react: '^17.0.0' } },
+      'packages/a/package.json': {
+        name: 'a',
+        version: '1.0.0',
+        dependencies: { react: '^18.0.0' },
+      },
+      'packages/b/package.json': {
+        name: 'b',
+        version: '1.0.0',
+        dependencies: { react: '^17.0.0' },
+      },
       ...extra,
     },
     ['sherif'],
@@ -348,16 +389,17 @@ describe('uncheck sherif', { timeout: 120_000 }, () => {
     expect(check.stdout).toContain('▶ sherif\n')
     expect(check.stdout).toContain('unordered-dependencies')
     expect(check.stdout).toContain('multiple-dependency-versions')
-    expect(check.stdout).toContain('✘ 1 of 1 checks failed: sherif\n  run `uncheck --fix` to apply sherif fixes')
+    expect(check.stdout).toContain(
+      '✘ 1 of 1 checks failed: sherif\n  run `uncheck --fix` to apply sherif fixes',
+    )
 
     const fix = await run(dir, ['--fix'])
 
     expect(fix.result).toBe('ok')
     expect(fix.stdout).toContain('▶ sherif --fix --select=highest\n')
-    expect(Object.keys(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).devDependencies)).toEqual([
-      'react',
-      'zod',
-    ])
+    expect(
+      Object.keys(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).devDependencies),
+    ).toEqual(['react', 'zod'])
     expect(JSON.parse(readFileSync(join(dir, 'packages/b/package.json'), 'utf8'))).toMatchObject({
       dependencies: { react: '^18.0.0' },
     })
@@ -414,7 +456,10 @@ describe('uncheck sherif', { timeout: 120_000 }, () => {
     expect(alone.stdout).toContain('○ sherif skipped, not a workspace root\n')
 
     const nested = fixture(
-      { 'package.json': { name: 'nested', private: true }, 'pnpm-workspace.yaml': 'packages:\n  - packages/*\n' },
+      {
+        'package.json': { name: 'nested', private: true },
+        'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
+      },
       ['sherif'],
     )
     const pnpm = await run(nested)
@@ -447,7 +492,9 @@ describe('uncheck check flags', { timeout: 120_000 }, () => {
     expect(required.stdout).toContain('✘ oxfmt not installed\n')
     expect(required.stdout).toContain('✘ 1 of 2 checks failed: oxfmt')
 
-    await expect(run(dir, ['--require=tsc', '--skip=tsc'])).rejects.toThrow(/--require=tsc and --skip=tsc/)
+    await expect(run(dir, ['--require=tsc', '--skip=tsc'])).rejects.toThrow(
+      /--require=tsc and --skip=tsc/,
+    )
 
     const none = await run(dir, ['--skip=oxlint', '--skip=oxfmt', '--skip=tsc'])
 
@@ -482,7 +529,9 @@ describe('uncheck check flags', { timeout: 120_000 }, () => {
       { name: 'tsc', status: 'skipped', reason: 'not selected by --only' },
     ])
 
-    await expect(run(dir, ['--only=oxlint', '--skip=oxlint'])).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
+    await expect(run(dir, ['--only=oxlint', '--skip=oxlint'])).rejects.toThrow(
+      /--only=oxlint and --skip=oxlint/,
+    )
     await expect(run(dir, ['--only=oxlint', '--only=oxfmt', '--require=tsc'])).rejects.toThrow(
       /--require=tsc and --only=oxlint --only=oxfmt/,
     )
@@ -493,7 +542,14 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
   it('writes stop hook configs for the named agents through the detected package manager', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
 
-    const { result, stdout } = await run(dir, ['hooks', 'install', 'claude', 'cursor', 'windsurf', 'copilot'])
+    const { result, stdout } = await run(dir, [
+      'hooks',
+      'install',
+      'claude',
+      'cursor',
+      'windsurf',
+      'copilot',
+    ])
 
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ Claude Code .claude/settings.json created\n')
@@ -592,18 +648,22 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
       hooks: { agentStop: [{ type: 'command', bash: all, powershell: all }] },
     })
 
-    await expect(run(dir, ['hooks', 'install', 'claude', '--only=oxlint', '--skip=oxlint'])).rejects.toThrow(
-      /--only=oxlint and --skip=oxlint/,
-    )
+    await expect(
+      run(dir, ['hooks', 'install', 'claude', '--only=oxlint', '--skip=oxlint']),
+    ).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
   })
 })
 
 /** Runs git in `dir` with a throwaway identity and returns what it printed. */
 function gitIn(dir: string, ...args: string[]): string {
-  return execFileSync('git', ['-c', 'user.name=uncheck', '-c', 'user.email=uncheck@example.com', ...args], {
-    cwd: dir,
-    encoding: 'utf8',
-  })
+  return execFileSync(
+    'git',
+    ['-c', 'user.name=uncheck', '-c', 'user.email=uncheck@example.com', ...args],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+    },
+  )
 }
 
 /** A git repository with one clean commit, so later edits show up as working-tree changes. */
@@ -638,11 +698,15 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
 
     expect(claude.result).toBe('blocked')
     expect(claude.stdout).toBe('')
-    expect(claude.stderr).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/fresh.ts src/index.ts\n')
+    expect(claude.stderr).toContain(
+      '▶ oxlint --fix --no-error-on-unmatched-pattern src/fresh.ts src/index.ts\n',
+    )
     expect(claude.stderr).toContain('▶ tsc -p tsconfig.json\n')
     expect(claude.stderr).toContain('TS2322')
     expect(claude.stderr).toContain('✘ 1 of 3 checks failed: tsc')
-    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe('export const answer: string = 1;\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: string = 1;\n',
+    )
 
     const continuing = await run(
       dir,
@@ -654,10 +718,16 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(continuing.stdout).toBe('')
     expect(continuing.stderr).toContain('TS2322')
 
-    const cursor = await run(dir, ['hooks', 'run', '--fix'], JSON.stringify({ hook_event_name: 'stop', loop_count: 0 }))
+    const cursor = await run(
+      dir,
+      ['hooks', 'run', '--fix'],
+      JSON.stringify({ hook_event_name: 'stop', loop_count: 0 }),
+    )
 
     expect(cursor.result).toBe('ok')
-    expect((JSON.parse(cursor.stdout) as { followup_message: string }).followup_message).toContain('TS2322')
+    expect((JSON.parse(cursor.stdout) as { followup_message: string }).followup_message).toContain(
+      'TS2322',
+    )
 
     const copilot = await run(
       dir,
@@ -682,7 +752,11 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
   it('stays silent when nothing changed and passes quietly when the changes are clean', async () => {
     const dir = committed(clean)
 
-    const nothing = await run(dir, ['hooks', 'run', '--fix'], JSON.stringify({ hook_event_name: 'Stop' }))
+    const nothing = await run(
+      dir,
+      ['hooks', 'run', '--fix'],
+      JSON.stringify({ hook_event_name: 'Stop' }),
+    )
 
     expect(nothing.result).toBe('ok')
     expect(nothing.stdout).toBe('')
@@ -690,7 +764,11 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
 
     writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
 
-    const ok = await run(dir, ['hooks', 'run', '--fix'], JSON.stringify({ hook_event_name: 'Stop' }))
+    const ok = await run(
+      dir,
+      ['hooks', 'run', '--fix'],
+      JSON.stringify({ hook_event_name: 'Stop' }),
+    )
 
     expect(ok.result).toBe('ok')
     expect(ok.stdout).toBe('')
@@ -709,7 +787,9 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(fast.stdout).toBe('')
     expect(fast.stderr).toContain('○ tsc skipped, not selected by --only\n')
     expect(fast.stderr).toContain('✔ all checks passed (oxlint, oxfmt)')
-    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe('export const answer: string = 1;\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const answer: string = 1;\n',
+    )
   })
 
   it('checks everything under the directory outside a git repository', async () => {
@@ -727,7 +807,10 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('checks the staged files, stages the fixes and keeps unstaged changes out of the way', async () => {
     const dir = committed(clean)
 
-    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\nexport const two = 2;\n')
+    writeFileSync(
+      join(dir, 'src/index.ts'),
+      'export const   answer: number = 42\nexport const two = 2;\n',
+    )
     gitIn(dir, 'add', 'src/index.ts')
     // An unstaged hunk in the staged file, an unstaged file and an untracked one: none of them is checked.
     writeFileSync(
@@ -747,14 +830,20 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
     expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
     expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)\n')
-    expect(stdout).toContain('✔ staged the fixes to src/index.ts\n○ unstaged changes of src/index.ts restored\n')
-    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const answer: number = 42;\nexport const two = 2;\n')
+    expect(stdout).toContain(
+      '✔ staged the fixes to src/index.ts\n○ unstaged changes of src/index.ts restored\n',
+    )
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe(
+      'export const answer: number = 42;\nexport const two = 2;\n',
+    )
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
       'export const answer: number = 42;\nexport const two = 2;\nexport const three = 3;\n',
     )
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 3\n')
     expect(readFileSync(join(dir, 'src/fresh.ts'), 'utf8')).toBe('var fresh = 4\n')
-    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\n M src/other.ts\n?? src/fresh.ts\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe(
+      'MM src/index.ts\n M src/other.ts\n?? src/fresh.ts\n',
+    )
     expect(existsSync(join(dir, '.git/uncheck-unstaged.patch'))).toBe(false)
   })
 
@@ -773,7 +862,9 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     )
 
     expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const   answer: number = 42\n')
-    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe('export const   answer: number = 43\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const   answer: number = 43\n',
+    )
     // The fixes to the other staged file are undone too, so a commit attempt never half applies.
     expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const   other = 2\n')
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 2\n')
@@ -838,7 +929,9 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
     expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
     expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
     expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
-    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe('export const answer: number = 42;\n')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(
+      'export const answer: number = 42;\n',
+    )
     expect(gitIn(dir, 'show', ':src/root.ts')).toBe('export const   root = 11\n')
   })
 
@@ -885,7 +978,9 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(fast.result).toBe('ok')
     expect(fast.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `${header}pnpm exec uncheck staged --fix --only=oxlint --only=oxfmt\n`,
+    )
 
     const checkOnly = await run(dir, ['prepare', '--pre-commit', '--no-fix'])
 
@@ -893,13 +988,16 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(checkOnly.stdout).toContain('The hook runs pnpm exec uncheck staged before every commit')
     expect(readFileSync(hook, 'utf8')).toBe(`${header}pnpm exec uncheck staged\n`)
 
-    await expect(run(dir, ['prepare', '--pre-commit', '--only=oxlint', '--skip=oxlint'])).rejects.toThrow(
-      /--only=oxlint and --skip=oxlint/,
-    )
+    await expect(
+      run(dir, ['prepare', '--pre-commit', '--only=oxlint', '--skip=oxlint']),
+    ).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
   })
 
   it('keeps one line per package, drops duplicates and leaves lines it did not write alone', async () => {
-    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' }, [])
+    const dir = fixture(
+      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' },
+      [],
+    )
     gitIn(dir, 'init', '--quiet')
     const hook = join(dir, '.git/hooks/pre-commit')
     const app = 'cd "packages/app" && pnpm exec uncheck staged --fix --only=oxlint'
@@ -917,13 +1015,18 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     const mine = 'echo "runs uncheck staged"'
 
-    writeFileSync(hook, `${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\nnpx uncheck staged --skip=tsc\n`)
+    writeFileSync(
+      hook,
+      `${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\nnpx uncheck staged --skip=tsc\n`,
+    )
 
     const deduped = await run(dir, ['prepare', '--pre-commit'])
 
     expect(deduped.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
     // The second copy goes, the line that only mentions the command and the unrelated one stay.
-    expect(readFileSync(hook, 'utf8')).toBe(`${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\n`)
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `${header}${mine}\npnpm exec uncheck staged --fix\npnpm test\n`,
+    )
 
     const settled = await run(dir, ['prepare', '--pre-commit'])
 
@@ -963,12 +1066,113 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(result).toBe('ok')
     expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
-    expect(readFileSync(hook, 'utf8')).toBe('#!/bin/sh\necho hi\ncd "packages/app" && yarn uncheck staged --fix\n')
+    expect(readFileSync(hook, 'utf8')).toBe(
+      '#!/bin/sh\necho hi\ncd "packages/app" && yarn uncheck staged --fix\n',
+    )
 
     const plain = fixture({ 'package.json': '{}\n' }, [])
     const skipped = await run(plain, ['prepare', '--pre-commit'])
 
     expect(skipped.result).toBe('ok')
     expect(skipped.stdout).toBe('○ no git repository found, nothing to prepare\n')
+  })
+})
+
+describe('uncheck presets', { timeout: 120_000 }, () => {
+  it('lints with the middleapi oxlint preset and formats with the middleapi oxfmt preset', async () => {
+    const dir = fixture({
+      '.oxlintrc.json': oxlintPreset,
+      '.oxfmtrc.json': oxfmtPreset,
+      'src/index.ts':
+        'import { a } from "./lib";\nimport { b } from "./lib";\nconsole.log(a, b)\nexport const enum Level { Low }\n',
+      'src/lib.ts': 'export const a = 1\nexport const b = 2\n',
+      'src/warn.ts':
+        "import { a } from './lib'\nimport { b } from './lib'\n\nexport function pause() {\n  debugger\n  return a + b\n}\n",
+      'src/bugs.ts': [
+        'export function parse() {',
+        '  try { JSON.parse("x") }',
+        '  catch (error) { throw new Error("parse failed") }',
+        '}',
+        'export function assign(a: number, b: number) { a -= a - b; return a }',
+        'export function collect(xs: number[]) { let out: number[] = []; for (const x of xs) { out = [...out, x] } return out }',
+        'export function confuse(a: string | null, b: string) { return a! == b }',
+        'export class Recurse { get v(): number { return this.v } }',
+        'export function fill() { return new Array(3).fill([]) }',
+        'export function negate(a: boolean, b: boolean) { return !a === b }',
+        'export class Construct { constructor() { return { x: 1 } } }',
+        '',
+      ].join('\n'),
+    })
+
+    const check = await run(dir)
+
+    expect(check.result).toBeInstanceOf(CheckFailed)
+    expect((check.result as CheckFailed).outcomes).toEqual([
+      { name: 'sherif', status: 'skipped', reason: 'no package.json found' },
+      { name: 'oxlint', status: 'failed' },
+      { name: 'oxfmt', status: 'failed' },
+      { name: 'tsc', status: 'skipped', reason: 'no tsconfig.json found' },
+    ])
+    expect(check.stdout).toContain('eslint(no-console)')
+    expect(check.stdout).toContain('import(no-duplicates)')
+    expect(check.stdout).toContain('oxc(no-const-enum)')
+
+    for (const rule of [
+      'eslint(preserve-caught-error)',
+      'oxc(misrefactored-assign-op)',
+      'oxc(no-accumulating-spread)',
+      'typescript(no-confusing-non-null-assertion)',
+      'unicorn(no-accessor-recursion)',
+      'unicorn(no-array-fill-with-reference-type)',
+      'unicorn(no-negation-in-equality-check)',
+      'eslint(no-constructor-return)',
+    ]) {
+      expect(check.stdout).toContain(rule)
+    }
+
+    // `warn` rules, a default one and `import/no-duplicates`, report without failing the run; the
+    // output format depends on the environment (a terminal, CI or an agent), so only names are matched
+    const warned = await run(dir, ['--only=oxlint', 'src/warn.ts'])
+
+    expect(warned.result).toBe('ok')
+    expect(warned.stdout).toContain('eslint(no-debugger)')
+    expect(warned.stdout).toContain('import(no-duplicates)')
+
+    const fix = await run(dir, ['--fix'])
+
+    expect(fix.result).toBeInstanceOf(CheckFailed)
+    expect(fix.stdout).toContain('eslint(no-console)')
+    expect(fix.stdout).not.toContain('import(no-duplicates)')
+    expect(fix.stdout).not.toContain('oxc(no-const-enum)')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      "import { a, b } from './lib'\nconsole.log(a, b)\nexport enum Level {\n  Low,\n}\n",
+    )
+  })
+
+  it('type checks with the middleapi tsconfig presets', async () => {
+    const dir = fixture(
+      {
+        'tsconfig.json': { extends: 'uncheck/tsconfig/middleapi/lib', include: ['src'] },
+        'src/index.ts': [
+          'export function identity(value) {',
+          '  return value',
+          '}',
+          'export function first(items: string[]): string {',
+          '  return items[0]',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      ['typescript'],
+    )
+    symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(dir, 'node_modules', 'uncheck'))
+
+    const check = await run(dir, ['--only=tsc', 'src/index.ts'])
+
+    expect(check.result).toBeInstanceOf(CheckFailed)
+    expect(check.stdout).toContain('▶ tsc -p tsconfig.json')
+    // `strict` and `noUncheckedIndexedAccess` come from the base preset, through the lib one
+    expect(check.stdout).toContain('error TS7006')
+    expect(check.stdout).toContain('error TS2322')
   })
 })

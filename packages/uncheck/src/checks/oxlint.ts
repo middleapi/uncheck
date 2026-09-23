@@ -1,7 +1,8 @@
-import type { Check } from '../types'
 import { Effect } from 'effect'
+
 import { NothingToCheck } from '../errors'
 import { argvBatches, resolveBin } from '../tool'
+import type { Check } from '../types'
 
 export const oxlint: Check = {
   name: 'oxlint',
@@ -20,6 +21,10 @@ export const oxlint: Check = {
     }
 
     // Given files may include ones oxlint does not handle (a Markdown file), which is not a failure.
-    return argvBatches(files).map(batch => ({ bin, args: [...args, '--no-error-on-unmatched-pattern'], files: batch }))
+    return argvBatches(files).map((batch) => ({
+      bin,
+      args: [...args, '--no-error-on-unmatched-pattern'],
+      files: batch,
+    }))
   }),
 }

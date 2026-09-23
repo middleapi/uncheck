@@ -23,8 +23,10 @@ interface Sponsor {
   [key: string]: unknown
 }
 
-const SPONSORS_SOURCE_URL = 'https://raw.githubusercontent.com/middleapi/static/refs/heads/main/sponsors.json'
-const PAST_SPONSORS_URL = 'https://htmlpreview.github.io/?https://github.com/middleapi/static/blob/main/sponsors.svg'
+const SPONSORS_SOURCE_URL =
+  'https://raw.githubusercontent.com/middleapi/static/refs/heads/main/sponsors.json'
+const PAST_SPONSORS_URL =
+  'https://htmlpreview.github.io/?https://github.com/middleapi/static/blob/main/sponsors.svg'
 const ROOT_DIR = process.cwd()
 const README_FILE_NAME = 'README.md'
 
@@ -67,8 +69,11 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;')
 }
 
-function getTierImageSizeAndColumns(tierLevel: number, tierLevels: number[]): [columns: number, imageSize: number] {
-  const rank = tierLevels.findIndex(level => level === tierLevel)
+function getTierImageSizeAndColumns(
+  tierLevel: number,
+  tierLevels: number[],
+): [columns: number, imageSize: number] {
+  const rank = tierLevels.findIndex((level) => level === tierLevel)
 
   const columnByRank = [3, 4, 5, 6, 7, 8]
   const column = columnByRank[Math.min(rank, columnByRank.length - 1)] ?? 3
@@ -106,13 +111,15 @@ function buildSlotCards(slotSponsors: Sponsor[]): string[] {
 }
 
 function buildSponsorsSection(sponsors: Sponsor[]): string {
-  const activeSponsors = sponsors.filter(sponsor => sponsor.tierLevel > 0 && sponsor.amount > 0)
-  const pastSponsors = sponsors.filter(sponsor => sponsor.tierLevel <= 0 || sponsor.amount <= 0)
+  const activeSponsors = sponsors.filter((sponsor) => sponsor.tierLevel > 0 && sponsor.amount > 0)
+  const pastSponsors = sponsors.filter((sponsor) => sponsor.tierLevel <= 0 || sponsor.amount <= 0)
 
   // Slot sponsors are featured as cards up top; the tier tables below carry
   // everyone else so nobody appears twice.
-  const slotSponsors = activeSponsors.filter(sponsor => sponsor.slot !== undefined).sort((a, b) => a.slot! - b.slot!)
-  const tieredSponsors = activeSponsors.filter(sponsor => sponsor.slot === undefined)
+  const slotSponsors = activeSponsors
+    .filter((sponsor) => sponsor.slot !== undefined)
+    .sort((a, b) => a.slot! - b.slot!)
+  const tieredSponsors = activeSponsors.filter((sponsor) => sponsor.slot === undefined)
 
   const groupedSponsors = new Map<number, Sponsor[]>()
 
@@ -140,7 +147,9 @@ function buildSponsorsSection(sponsors: Sponsor[]): string {
 
   // Sizes rank against every active tier, slot sponsors' tiers included, so
   // featuring the top tiers as cards does not inflate the tables below them.
-  const sizeTierLevels = [...new Set(activeSponsors.map(sponsor => sponsor.tierLevel))].sort((a, b) => b - a)
+  const sizeTierLevels = [...new Set(activeSponsors.map((sponsor) => sponsor.tierLevel))].sort(
+    (a, b) => b - a,
+  )
   const tierLevels = [...groupedSponsors.keys()].sort((a, b) => b - a)
 
   for (const tierLevel of tierLevels) {
@@ -184,7 +193,9 @@ function buildSponsorsSection(sponsors: Sponsor[]): string {
   if (pastSponsors.length > 0) {
     const noun = pastSponsors.length === 1 ? 'past sponsor' : 'past sponsors'
 
-    lines.push(`With thanks to [${pastSponsors.length} ${noun}](${PAST_SPONSORS_URL}) who helped get us here.`)
+    lines.push(
+      `With thanks to [${pastSponsors.length} ${noun}](${PAST_SPONSORS_URL}) who helped get us here.`,
+    )
     lines.push('')
   }
 
@@ -220,7 +231,9 @@ async function main(): Promise<void> {
   const readmeFiles = await findReadmes(ROOT_DIR)
   const replacement = buildSponsorsSection(sponsors)
 
-  const readmeContents = await Promise.all(readmeFiles.map(readmePath => readFile(readmePath, 'utf8')))
+  const readmeContents = await Promise.all(
+    readmeFiles.map((readmePath) => readFile(readmePath, 'utf8')),
+  )
 
   const writePromises: Promise<void>[] = []
   let updatedCount = 0
@@ -235,10 +248,11 @@ async function main(): Promise<void> {
   }
 
   await Promise.all(writePromises)
+  // oxlint-disable-next-line no-console
   console.log(`Updated sponsors section in ${updatedCount} README files.`)
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error(error)
   process.exitCode = 1
 })

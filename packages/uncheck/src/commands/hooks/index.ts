@@ -1,4 +1,5 @@
 import { Command } from 'effect/unstable/cli'
+
 import { install } from './install'
 import { run } from './run'
 

@@ -1,11 +1,20 @@
-import type { Check, CheckCommand } from '../types'
 import { posix } from 'node:path'
 import process from 'node:process'
+
 import { Data, Effect, FileSystem, Graph, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
-import { ancestors, readJson } from '../files'
+
 import { CannotCheck, NothingToCheck } from '../errors'
+import { ancestors, readJson } from '../files'
 import { resolveBin } from '../tool'
+import type { Check, CheckCommand } from '../types'
+
+/**
+ * TypeScript replaces this token in `extends`, `references` and file specs with the folder of the
+ * leaf config.
+ */
+// oxlint-disable-next-line no-template-curly-in-string
+const CONFIG_DIR = '${configDir}'
 
 export const tsc: Check = {
   name: 'tsc',
@@ -15,21 +24,25 @@ export const tsc: Check = {
     const path = yield* Path.Path
 
     const targets = files
-      ?.map(file => path.resolve(cwd, file))
-      .filter(file => CHECKABLE_EXTENSIONS.has(posix.extname(file).toLowerCase()))
+      ?.map((file) => path.resolve(cwd, file))
+      .filter((file) => CHECKABLE_EXTENSIONS.has(posix.extname(file).toLowerCase()))
 
     if (targets !== undefined && targets.length === 0) {
-      return yield* Effect.fail(new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }))
+      return yield* Effect.fail(
+        new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }),
+      )
     }
 
     const [typescript, tsconfigs] = yield* Effect.all(
       [
         resolveBin('typescript', cwd, 'tsc'),
-        Effect.flatMap(projectFiles, all =>
+        Effect.flatMap(projectFiles, (all) =>
           // Tracked files can be deleted from the working tree without being staged yet.
           Effect.filter(
-            all.filter(file => path.basename(file) === 'tsconfig.json').map(file => path.resolve(cwd, file)),
-            candidate => fs.exists(candidate),
+            all
+              .filter((file) => path.basename(file) === 'tsconfig.json')
+              .map((file) => path.resolve(cwd, file)),
+            (candidate) => fs.exists(candidate),
             { concurrency: 'unbounded' },
           ),
         ),
@@ -44,12 +57,16 @@ export const tsc: Check = {
     const selected = targets === undefined ? tsconfigs : yield* selectTsconfigs(tsconfigs, targets)
 
     if (selected.length === 0) {
-      return yield* Effect.fail(new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }))
+      return yield* Effect.fail(
+        new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }),
+      )
     }
 
     if (typescript === undefined) {
       return yield* Effect.fail(
-        new CannotCheck({ reason: `found ${selected.length} tsconfig.json but typescript is not installed` }),
+        new CannotCheck({
+          reason: `found ${selected.length} tsconfig.json but typescript is not installed`,
+        }),
       )
     }
 
@@ -70,16 +87,23 @@ export const tsc: Check = {
     }
 
     const plan = yield* planTypecheck(selected, projects).pipe(
-      Effect.catchTag('CircularProjectReferences', error => {
-        const cycle = error.projects.map(configPath => path.relative(cwd, configPath) || '.').join(', ')
-        return Effect.fail(new CannotCheck({ reason: `circular project references between ${cycle}` }))
+      Effect.catchTag('CircularProjectReferences', (error) => {
+        const cycle = error.projects
+          .map((configPath) => path.relative(cwd, configPath) || '.')
+          .join(', ')
+        return Effect.fail(
+          new CannotCheck({ reason: `circular project references between ${cycle}` }),
+        )
       }),
     )
 
     const commands: CheckCommand[] = []
 
     if (plan.build.length > 0) {
-      commands.push({ bin, args: ['-b', ...plan.build.map(configPath => path.relative(cwd, configPath) || '.')] })
+      commands.push({
+        bin,
+        args: ['-b', ...plan.build.map((configPath) => path.relative(cwd, configPath) || '.')],
+      })
     }
 
     for (const configPath of plan.check) {
@@ -90,7 +114,17 @@ export const tsc: Check = {
   }),
 }
 
-const CHECKABLE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json'])
+const CHECKABLE_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.json',
+])
 
 interface TsProject {
   readonly path: string
@@ -134,8 +168,8 @@ function planTypecheck(
 
   const nodes = [...members].sort()
 
-  const graph = Graph.directed<string, null>(mutable => {
-    const indexes = new Map(nodes.map(node => [node, Graph.addNode(mutable, node)] as const))
+  const graph = Graph.directed<string, null>((mutable) => {
+    const indexes = new Map(nodes.map((node) => [node, Graph.addNode(mutable, node)] as const))
 
     for (const node of nodes) {
       for (const reference of projects.get(node)?.references ?? []) {
@@ -148,14 +182,16 @@ function planTypecheck(
 
   if (Option.isSome(cycle)) {
     // The path closes on its first node, drop that repetition.
-    const path = cycle.value.path.slice(0, -1).map(index => Option.getOrThrow(Graph.getNode(graph, index)))
+    const path = cycle.value.path
+      .slice(0, -1)
+      .map((index) => Option.getOrThrow(Graph.getNode(graph, index)))
 
     return Effect.fail(new CircularProjectReferences({ projects: path }))
   }
 
   return Effect.succeed({
-    build: nodes.filter(member => !referenced.has(member)),
-    check: entries.filter(entry => !members.has(entry)).sort(),
+    build: nodes.filter((member) => !referenced.has(member)),
+    check: entries.filter((entry) => !members.has(entry)).sort(),
   })
 }
 
@@ -165,9 +201,12 @@ function selectTsconfigs(
 ): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
   return Effect.filter(
     entries,
-    entry => Effect.map(loadTsconfigInputs(entry), inputs => files.some(file => includesFile(inputs, file))),
+    (entry) =>
+      Effect.map(loadTsconfigInputs(entry), (inputs) =>
+        files.some((file) => includesFile(inputs, file)),
+      ),
     { concurrency: 'unbounded' },
-  ).pipe(Effect.map(selected => [...selected].sort()))
+  ).pipe(Effect.map((selected) => [...selected].sort()))
 }
 
 interface RawTsconfig {
@@ -183,7 +222,9 @@ interface RawTsconfig {
 const readTsconfig = Effect.fn(
   function* (configPath: string) {
     const fs = yield* FileSystem.FileSystem
-    const value: unknown = parseJsonc(yield* fs.readFileString(configPath), undefined, { allowTrailingComma: true })
+    const value: unknown = parseJsonc(yield* fs.readFileString(configPath), undefined, {
+      allowTrailingComma: true,
+    })
 
     return Predicate.isObject(value) ? value : {}
   },
@@ -201,7 +242,7 @@ const readReferences = Effect.fn(function* (configPath: string) {
       return []
     }
 
-    const target = path.resolve(configDir, reference.path.replaceAll('${configDir}', configDir))
+    const target = path.resolve(configDir, reference.path.replaceAll(CONFIG_DIR, configDir))
 
     return [target.endsWith('.json') ? target : path.join(target, 'tsconfig.json')]
   })
@@ -276,25 +317,31 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
   }
 
   const resolve = (specs: Specs | undefined): string[] =>
-    specs?.specs.map(spec => path.resolve(specs.dir, spec.replaceAll('${configDir}', leafDir)).replaceAll('\\', '/')) ??
-    []
+    specs?.specs.map((spec) =>
+      path.resolve(specs.dir, spec.replaceAll(CONFIG_DIR, leafDir)).replaceAll('\\', '/'),
+    ) ?? []
 
   const includeSpecs =
-    include === undefined && files === undefined ? [`${leafDir.replaceAll('\\', '/')}/**/*`] : resolve(include)
+    include === undefined && files === undefined
+      ? [`${leafDir.replaceAll('\\', '/')}/**/*`]
+      : resolve(include)
 
   const excludeSpecs =
     exclude === undefined
-      ? [...DEFAULT_EXCLUDES.map(name => `${leafDir.replaceAll('\\', '/')}/${name}`), ...resolve(outDir)]
+      ? [
+          ...DEFAULT_EXCLUDES.map((name) => `${leafDir.replaceAll('\\', '/')}/${name}`),
+          ...resolve(outDir),
+        ]
       : resolve(exclude)
 
   return {
     dir: leafDir,
     files: resolve(files),
-    include: includeSpecs.flatMap(spec => {
+    include: includeSpecs.flatMap((spec) => {
       const regex = compileGlob(spec, 'files')
       return regex === undefined ? [] : [{ spec, regex }]
     }),
-    exclude: excludeSpecs.map(spec => ({ spec, regex: compileGlob(spec, 'exclude')! })),
+    exclude: excludeSpecs.map((spec) => ({ spec, regex: compileGlob(spec, 'exclude')! })),
     extensions: new Set(allowJs ? [...TS_EXTENSIONS, ...JS_EXTENSIONS] : TS_EXTENSIONS),
   }
 })
@@ -313,12 +360,14 @@ function includesFile(inputs: TsconfigInputs, file: string): boolean {
     return false
   }
 
-  if (inputs.exclude.some(pattern => pattern.regex.test(target))) {
+  if (inputs.exclude.some((pattern) => pattern.regex.test(target))) {
     return false
   }
 
   // JSON files only come in through an `include` that names the extension explicitly.
-  return inputs.include.some(pattern => pattern.regex.test(target) && (!json || pattern.spec.endsWith('.json')))
+  return inputs.include.some(
+    (pattern) => pattern.regex.test(target) && (!json || pattern.spec.endsWith('.json')),
+  )
 }
 
 interface ChainEntry {
@@ -339,14 +388,15 @@ const loadExtendsChain = Effect.fn(function* (
   const path = yield* Path.Path
   const raw = yield* readTsconfig(configPath)
   const dir = path.dirname(configPath)
-  const specs = typeof raw.extends === 'string' ? [raw.extends] : isStringArray(raw.extends) ? raw.extends : []
+  const specs =
+    typeof raw.extends === 'string' ? [raw.extends] : isStringArray(raw.extends) ? raw.extends : []
 
-  const bases = yield* Effect.forEach(specs, spec =>
+  const bases = yield* Effect.forEach(specs, (spec) =>
     resolveExtends(spec, dir).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed<ReadonlyArray<ChainEntry>>([]),
-          onSome: base => loadExtendsChain(base, visited),
+          onSome: (base) => loadExtendsChain(base, visited),
         }),
       ),
     ),
@@ -361,19 +411,32 @@ const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
 
   const kind = (target: string) =>
     fs.stat(target).pipe(
-      Effect.map(info => info.type),
+      Effect.map((info) => info.type),
       Effect.orElseSucceed(() => undefined),
     )
 
   const firstFile = (candidates: ReadonlyArray<string>) =>
-    Effect.findFirst(candidates, candidate => Effect.map(kind(candidate), type => type === 'File'))
+    Effect.findFirst(candidates, (candidate) =>
+      Effect.map(kind(candidate), (type) => type === 'File'),
+    )
 
   if (spec.startsWith('./') || spec.startsWith('../') || path.isAbsolute(spec)) {
     const target = path.resolve(dir, spec)
     return yield* firstFile([target, `${target}.json`])
   }
 
+  const [name, subpath] = splitPackageSpec(spec)
+
   for (const current of ancestors(path, dir)) {
+    const pkg = path.join(current, 'node_modules', name)
+    const pkgManifest = yield* readJson(path.join(pkg, 'package.json'))
+
+    // Like tsc, a package that declares `exports` is reachable only through them.
+    if (pkgManifest?.exports !== undefined) {
+      const target = resolveExports(pkgManifest.exports, subpath)
+      return target === undefined ? Option.none() : yield* firstFile([path.resolve(pkg, target)])
+    }
+
     const base = path.join(current, 'node_modules', spec)
     const baseKind = yield* kind(base)
 
@@ -385,7 +448,12 @@ const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
 
     if (baseKind === 'Directory') {
       const manifest = yield* readJson(path.join(base, 'package.json'))
-      candidates.push(path.resolve(base, typeof manifest?.tsconfig === 'string' ? manifest.tsconfig : 'tsconfig.json'))
+      candidates.push(
+        path.resolve(
+          base,
+          typeof manifest?.tsconfig === 'string' ? manifest.tsconfig : 'tsconfig.json',
+        ),
+      )
     }
 
     const found = yield* firstFile(candidates)
@@ -438,7 +506,10 @@ function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | unde
     written = true
   }
 
-  return new RegExp(`^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`, CASE_INSENSITIVE ? 'i' : '')
+  return new RegExp(
+    `^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`,
+    CASE_INSENSITIVE ? 'i' : '',
+  )
 }
 
 function filesComponent(component: string): string {
@@ -459,11 +530,84 @@ function filesComponent(component: string): string {
 }
 
 function wildcards(component: string): string {
-  return component.replace(/[.*?+^${}()|[\]\\]/g, char =>
+  return component.replace(/[.*?+^${}()|[\]\\]/g, (char) =>
     char === '*' ? '[^/]*' : char === '?' ? '[^/]' : `\\${char}`,
   )
 }
 
+/** Splits `@scope/pkg/sub/path` into the package name and its `exports` subpath, `.` or `./sub/path`. */
+function splitPackageSpec(spec: string): readonly [name: string, subpath: string] {
+  const parts = spec.split('/')
+  const length = spec.startsWith('@') ? 2 : 1
+  const rest = parts.slice(length).join('/')
+
+  return [parts.slice(0, length).join('/'), rest === '' ? '.' : `./${rest}`]
+}
+
+/** The conditions tsc matches when it resolves `extends` through `exports`. */
+const EXPORT_CONDITIONS = new Set(['node', 'require', 'types', 'default'])
+
+/**
+ * The file a package's `exports` maps `subpath` to, following exact keys, `*` patterns (the longest
+ * prefix wins) and condition objects, or `undefined` when the subpath is not exported.
+ */
+function resolveExports(exports: unknown, subpath: string): string | undefined {
+  const map: Record<string, unknown> =
+    Predicate.isObject(exports) &&
+    !Array.isArray(exports) &&
+    Object.keys(exports).some((key) => key.startsWith('.'))
+      ? exports
+      : { '.': exports }
+
+  if (Object.hasOwn(map, subpath)) {
+    return exportTarget(map[subpath], undefined)
+  }
+
+  let best: { prefix: string; match: string; target: unknown } | undefined
+
+  for (const [key, target] of Object.entries(map)) {
+    const star = key.indexOf('*')
+    const prefix = key.slice(0, star)
+    const suffix = key.slice(star + 1)
+
+    if (
+      star !== -1 &&
+      subpath.length >= prefix.length + suffix.length &&
+      subpath.startsWith(prefix) &&
+      subpath.endsWith(suffix) &&
+      (best === undefined || prefix.length > best.prefix.length)
+    ) {
+      best = { prefix, match: subpath.slice(prefix.length, subpath.length - suffix.length), target }
+    }
+  }
+
+  return best && exportTarget(best.target, best.match)
+}
+
+function exportTarget(target: unknown, match: string | undefined): string | undefined {
+  if (typeof target === 'string') {
+    return match === undefined ? target : target.replaceAll('*', match)
+  }
+
+  const candidates = Array.isArray(target)
+    ? target
+    : Predicate.isObject(target)
+      ? Object.entries(target)
+          .filter(([condition]) => EXPORT_CONDITIONS.has(condition))
+          .map(([, value]) => value)
+      : []
+
+  for (const candidate of candidates) {
+    const resolved = exportTarget(candidate, match)
+
+    if (resolved !== undefined) {
+      return resolved
+    }
+  }
+
+  return undefined
+}
+
 function isStringArray(value: unknown): value is ReadonlyArray<string> {
-  return Array.isArray(value) && value.every(item => typeof item === 'string')
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }

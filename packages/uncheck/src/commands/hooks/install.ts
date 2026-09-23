@@ -1,23 +1,35 @@
 import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'effect'
 import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { parse as parseJsonc } from 'jsonc-parser'
+
 import { userError } from '../../errors'
 import { detectExec } from '../../pm'
 import { bold, dim, green } from '../../style'
-import { cwdFlag, onlyFlag, requireFlag, selectionArgs, skipFlag, validateSelection } from '../uncheck'
+import {
+  cwdFlag,
+  onlyFlag,
+  requireFlag,
+  selectionArgs,
+  skipFlag,
+  validateSelection,
+} from '../uncheck'
 
 const AGENTS = [
   {
     id: 'claude',
     name: 'Claude Code',
     path: '.claude/settings.json',
-    content: (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+    content: (command: string) => ({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
+    }),
   },
   {
     id: 'codebuddy',
     name: 'CodeBuddy',
     path: '.codebuddy/settings.json',
-    content: (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }),
+    content: (command: string) => ({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
+    }),
   },
   {
     id: 'cursor',
@@ -29,7 +41,9 @@ const AGENTS = [
     id: 'windsurf',
     name: 'Windsurf',
     path: '.windsurf/hooks.json',
-    content: (command: string) => ({ hooks: { post_cascade_response: [{ command, show_output: true }] } }),
+    content: (command: string) => ({
+      hooks: { post_cascade_response: [{ command, show_output: true }] },
+    }),
   },
   {
     id: 'copilot',
@@ -42,7 +56,7 @@ const AGENTS = [
   },
 ] as const
 
-const AGENT_IDS = AGENTS.map(agent => agent.id)
+const AGENT_IDS = AGENTS.map((agent) => agent.id)
 
 export const install = Command.make(
   'install',
@@ -53,7 +67,9 @@ export const install = Command.make(
     skipped: skipFlag,
     agents: Argument.Literals('agents', AGENT_IDS).pipe(
       Argument.variadic(),
-      Argument.withDescription(`Agents to configure: ${AGENT_IDS.join(', ')}. Prompts for a selection when omitted.`),
+      Argument.withDescription(
+        `Agents to configure: ${AGENT_IDS.join(', ')}. Prompts for a selection when omitted.`,
+      ),
     ),
   },
   Effect.fn(function* ({ cwd, agents, ...selection }) {
@@ -75,7 +91,7 @@ export const install = Command.make(
       selected = yield* Prompt.run(
         Prompt.MultiSelect({
           message: 'Which agents should run uncheck when they finish a turn?',
-          choices: AGENTS.map(agent => ({ title: agent.name, value: agent.id })),
+          choices: AGENTS.map((agent) => ({ title: agent.name, value: agent.id })),
           min: 1,
         }),
       )
@@ -102,7 +118,7 @@ export const install = Command.make(
         const base = Predicate.isObject(current) ? current : {}
         const installed: string[] = []
 
-        const replaced = mapStrings(base, text => {
+        const replaced = mapStrings(base, (text) => {
           if (!text.includes(HOOK_COMMAND)) {
             return text
           }
@@ -114,7 +130,7 @@ export const install = Command.make(
         if (installed.length === 0) {
           yield* fs.writeFileString(file, render(mergeJson(base, agent.content(command))))
           result = 'updated'
-        } else if (installed.every(text => text === command)) {
+        } else if (installed.every((text) => text === command)) {
           result = 'unchanged'
         } else {
           yield* fs.writeFileString(file, render(replaced))
@@ -126,9 +142,15 @@ export const install = Command.make(
     }
 
     yield* Console.log('')
-    yield* Console.log(`${dim('The hook runs')} ${bold(command)} ${dim('whenever the agent finishes a turn.')}`)
+    yield* Console.log(
+      `${dim('The hook runs')} ${bold(command)} ${dim('whenever the agent finishes a turn.')}`,
+    )
   }),
-).pipe(Command.withDescription('Write the agent hook configs that run `uncheck hooks run` after every agent turn'))
+).pipe(
+  Command.withDescription(
+    'Write the agent hook configs that run `uncheck hooks run` after every agent turn',
+  ),
+)
 
 const HOOK_COMMAND = 'uncheck hooks run'
 
@@ -142,11 +164,13 @@ function mapStrings(value: unknown, f: (text: string) => string): unknown {
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => mapStrings(item, f))
+    return value.map((item) => mapStrings(item, f))
   }
 
   if (Predicate.isObject(value)) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, f)]))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, mapStrings(item, f)]),
+    )
   }
 
   return value
