@@ -192,11 +192,11 @@ const savePatch = Effect.fn(function* (cwd: string, patch: string, files: Readon
 })
 
 /**
- * Puts the unstaged hunks back on top of the fixes. A three-way merge into a copy of the index
- * follows the lines the fixes moved and keeps the hunks unstaged, then the merged files are
- * checked out of that copy. When a fix and a hunk touch the same lines, the fixes are undone on
- * every staged file, which makes the files what the patch was taken from, so it applies as it is.
- * Never fails, since it runs as a finalizer: what it could not do is reported and returned.
+ * Puts the unstaged hunks back on top of the fixes. `--3way` follows what the fixes did, and it
+ * runs on a copy of the index so the hunks stay unstaged. When a fix and a hunk touch the same
+ * lines, the fixes are undone on every staged file, which makes the files what the patch was taken
+ * from, so it applies as it is. Never fails, since it runs as a finalizer: what it could not do is
+ * reported and returned.
  */
 const putBack = Effect.fn(function* (
   cwd: string,
@@ -206,23 +206,19 @@ const putBack = Effect.fn(function* (
   before: string,
 ) {
   const fs = yield* FileSystem.FileSystem
-  const merged = { GIT_INDEX_FILE: repo.merged }
 
   const result = yield* Effect.gen(function* () {
-    const clean = yield* fs.copyFile(repo.index, repo.merged).pipe(
+    const restored = yield* fs.copyFile(repo.index, repo.merged).pipe(
       Effect.andThen(
-        git(cwd, ['apply', '--3way', '--cached', '--whitespace=nowarn', repo.patch], merged),
+        git(cwd, ['apply', '--3way', '--whitespace=nowarn', repo.patch], {
+          GIT_INDEX_FILE: repo.merged,
+        }),
       ),
       Effect.as(true),
-      Effect.catchTag('GitFailed', () => Effect.succeed(false)),
+      Effect.orElseSucceed(() => false),
     )
 
-    if (clean) {
-      yield* Effect.forEach(
-        argvBatches(partial),
-        (batch) => git(cwd, ['checkout', '--', ...batch], merged),
-        { discard: true },
-      )
+    if (restored) {
       yield* Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`))
       return 'restored' as const
     }
