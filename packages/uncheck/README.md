@@ -56,13 +56,13 @@ Tools are resolved from `node_modules` the way Node does, or through Yarn's PnP 
 
 ### Typecheck in monorepos
 
-Every `tsconfig.json` in the project is discovered (through `git ls-files`, so ignored folders are skipped) and its `references` are followed recursively to build the project graph:
+Every `tsconfig.json` in the project is discovered (through `git ls-files`, so ignored folders are skipped) and its `references` are followed recursively, whatever the referenced configs are named, to build the project graph:
 
 - Projects that use `references`, or are referenced, are built with `tsc -b` on the roots of that graph. `tsc` builds the referenced projects first, in dependency order, exactly like running `tsc -b` in each package.
 - Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p --noEmit`, up to four at a time, so they never write build output.
-- Circular references are reported as an error.
+- Circular references anywhere in the graph are reported as an error.
 
-When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
+When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Configs that are only referenced count too, such as `tsconfig.app.json` in a Vite, Nx or Angular solution layout, and a changed tsconfig selects every project it applies to through `extends`, also from a config package linked into `node_modules`. A selected project in the reference graph is built with `tsc -b` through the roots that depend on it, so the projects using a changed library are checked again; packages that import each other from source without `references` are not followed. Files `tsc` never checks, such as Markdown or CSS, select no project.
 
 ## Presets
 
@@ -108,17 +108,17 @@ The tsconfig presets target ES2022 and load no runtime types, so name yours: `"t
 
 ```sh
 npx uncheck hooks install                   # pick agents interactively
-npx uncheck hooks install claude cursor     # or name them: claude, codebuddy, cursor, windsurf, copilot
+npx uncheck hooks install claude codebuddy  # or name them: claude, codebuddy, cursor, copilot
 npx uncheck hooks install claude --only=oxlint --only=oxfmt   # a fast hook: lint and format, no typecheck
 ```
 
-This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json`, `.windsurf/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. Whenever the agent finishes a turn, the hook runs:
+This writes the agent's hook config (`.claude/settings.json`, `.codebuddy/settings.json`, `.cursor/hooks.json` or `.github/hooks/uncheck.json`), merging into an existing file so other hooks are kept. Running it again updates only uncheck's own entry, keeping keys you added to it, while permission rules and other commands that merely mention `uncheck hooks run` stay as they are; a file that is not valid JSON is reported and left alone. Each entry gives the hook 600 seconds, since the 30 and 60 second defaults of Copilot and CodeBuddy would cut a typecheck short. Cursor and Copilot CLI also run the hooks in `.claude/settings.json`, so install `cursor` or `copilot` next to `claude` only where they do not read it, or uncheck runs twice per turn. Whenever the agent finishes a turn, the hook runs:
 
 ```sh
 uncheck hooks run --fix
 ```
 
-through your package manager (`pnpm exec`, `yarn`, `bunx` or `npx`, detected from the lockfile). It runs every check on the files changed since the last commit (modified, staged and untracked, everything under the directory outside git), applies fixes, and prints the report on stderr. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop. Windsurf only shows the report.
+through your package manager (`pnpm exec`, `yarn run --silent`, `bunx --no-install` or `npx --no`, detected from the lockfile, so a missing install fails instead of downloading uncheck). Installed below the top of the repository, the command also carries `--dir=<that directory>`, so the hook checks the same place whichever directory the agent last `cd`'d into. It runs every check on the files changed since the last commit (modified, staged and untracked; everything under the current directory outside git), applies fixes, and prints the report on stderr. A change no selected check covers, such as a README edit with `--only=tsc`, passes. When problems remain, the agent is sent back to fix them before it finishes: Claude Code and CodeBuddy through exit code 2, Cursor through a follow-up message, Copilot through a `block` decision. That happens at most once per turn, so an agent that cannot fix something is never trapped in a loop; when problems remain after it, Claude Code and CodeBuddy show you that uncheck still fails.
 
 Running once per turn instead of after every edit keeps the agent fast: a typecheck costs seconds, and one run per turn covers everything the agent touched. When even that is too slow for a project, leave the typecheck to CI: `--only`, `--skip` and `--require` given to `install` are written into the hook command as they are, and reinstalling with other flags updates it, so `install claude --only=oxlint --only=oxfmt` gives a hook that only lints and formats.
 
@@ -130,9 +130,9 @@ npx uncheck staged --fix    # also apply the fixes and stage them
 npx uncheck prepare --pre-commit   # write .git/hooks/pre-commit so every commit runs `uncheck staged --fix`
 ```
 
-`staged` runs the checks on the files staged for commit. The unstaged hunks of partially staged files (`git add -p`) are set aside while the checks run, so what `oxlint` and `oxfmt` see is what gets committed, then put back. The typecheck works differently by nature: `tsc` checks whole projects, so it also reports type errors in files you have not staged. Add `--only=oxlint --only=oxfmt` for a hook that never looks beyond the commit. With `--fix` the fixes are staged too. When a fix conflicts with an unstaged hunk, the fixes are undone and the commit fails, so nothing is ever lost: stage the whole file or stash its unstaged changes and commit again. A run killed before it puts them back leaves copies of the files in the git directory, and the next run stops and says where they are. When the fixes undo every staged change, the commit fails rather than recording an empty one, unless `--allow-empty` is passed.
+`staged` runs the checks on the files staged for commit, regular files only: a staged symlink is skipped, since the tools would follow it to a file the commit does not hold. During a merge only the staged files that differ from the branch being merged in are checked, so the merge commit never carries fixes to the other side's work. The unstaged hunks of partially staged files (`git add -p`) are set aside while the checks run, so what `oxlint` and `oxfmt` see is what gets committed, then put back. The typecheck works differently by nature: `tsc` checks whole projects, so it also reports type errors in files you have not staged. Add `--only=oxlint --only=oxfmt` for a hook that never looks beyond the commit. With `--fix` the fixes are staged too, and only the files they changed. When a fix conflicts with an unstaged hunk, the fixes are undone and the commit fails, so nothing is ever lost: stage the whole file or stash its unstaged changes and commit again. Ctrl-C or a closed terminal still puts them back; a run killed outright before it does leaves copies of the files in the git directory, and the next run stops and says where they are. When the fixes undo every staged change, the commit fails rather than recording an empty one, unless `--allow-empty` is passed. A commit no check has anything to do with, docs only for example, passes; add `--require=<check>` to make it fail instead.
 
-`prepare --pre-commit` replaces lint-staged and simple-git-hooks: it writes the git hook itself, running `uncheck staged --fix` through your package manager, and adds itself to an existing `pre-commit` hook rather than replacing it. With husky 9 or Vite+ (`vp config`) managing the hooks, it writes to `.husky/pre-commit` or `.vite-hooks/pre-commit`, the file their dispatcher runs, rather than to the generated shim in `_/`, which never reaches an added line and is rewritten on the next install. Running it again only ever rewrites the line it wrote itself, so lines you added by hand stay, a repeated copy of its own line is dropped, and in a monorepo each package that prepares gets its own line with its own flags. Without a flag `prepare` sets nothing up. Register it as the `prepare` script so every clone installs the hook:
+`prepare --pre-commit` replaces lint-staged and simple-git-hooks: it writes the git hook itself, running `uncheck staged --fix` through your package manager, and adds itself to an existing `pre-commit` hook rather than replacing it, before the hook's own commands (after its shebang, comments and sourced files), so their failure still blocks the commit and an `exec` or `exit` cannot skip it. With husky 9 or Vite+ (`vp config`) managing the hooks, it writes to `.husky/pre-commit` or `.vite-hooks/pre-commit`, the file their dispatcher runs, rather than to the generated shim in `_/`, which never reaches an added line and is rewritten on the next install. Running it again only ever rewrites the line it wrote itself, so lines you added by hand stay, a repeated copy of its own line is dropped, and in a monorepo each package that prepares gets its own line with its own flags, also when a workspace install runs them all at once. Without a flag `prepare` sets nothing up. Register it as the `prepare` script so every clone installs the hook:
 
 ```json
 {
@@ -142,7 +142,9 @@ npx uncheck prepare --pre-commit   # write .git/hooks/pre-commit so every commit
 }
 ```
 
-`--only`, `--skip` and `--require` given to `prepare` are written into the hook command as for `hooks install`, `--no-fix` gives a hook that only checks, and `--allow-empty` one that lets through a commit the fixes made empty. Outside a git repository `prepare` does nothing, so installs in CI and Docker builds keep working, and `git commit --no-verify` skips the hook.
+Yarn 2+ does not run `prepare` on install, so register the command as `postinstall` there, in a package that is not published: `postinstall` also runs when others install a published package, and fails without uncheck. For a published package, turn it off while packing, for example with `"prepack": "pinst --disable"` and `"postpack": "pinst --enable"`.
+
+`--only`, `--skip` and `--require` given to `prepare` are written into the hook command as for `hooks install`, `--no-fix` gives a hook that only checks, and `--allow-empty` one that lets through a commit the fixes made empty. Outside a git repository `prepare` does nothing, so installs in CI and Docker builds keep working, and `git commit --no-verify` skips the hook. It also writes nothing, says why and lets the install succeed when `core.hooksPath` comes from the global or system git config, which every repository on the machine runs, when the hook is written for another interpreter such as `#!/usr/bin/env node`, and for a package folder whose name holds `"`, `$`, a backtick, `\` or a newline.
 
 In a monorepo where the root and two packages prepare, the hook reads:
 
