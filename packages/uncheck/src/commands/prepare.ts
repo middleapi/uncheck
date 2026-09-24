@@ -162,7 +162,11 @@ export const prepare = Command.make(
       }
 
       // Renaming over a symlinked hook would replace the link, not the script it points to.
-      const target = yield* fs.realPath(file).pipe(Effect.orElseSucceed(() => file))
+      const target = yield* fs.realPath(file).pipe(
+        Effect.catch(() => fs.readLink(file)),
+        Effect.map((link) => path.resolve(path.dirname(file), link)),
+        Effect.orElseSucceed(() => file),
+      )
       const mode = dispatched
         ? yield* fs.stat(target).pipe(
             Effect.map((info) => info.mode & 0o7777),

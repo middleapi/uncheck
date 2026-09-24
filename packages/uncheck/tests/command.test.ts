@@ -1448,7 +1448,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
   )
 
   it.skipIf(process.platform === 'win32')(
-    'updates the script a symlinked hook points to and keeps the link',
+    'writes the script a symlinked hook points to, even one not there yet, and keeps the link',
     async () => {
       const dir = fixture(
         {
@@ -1468,6 +1468,18 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(lstatSync(hook).isSymbolicLink()).toBe(true)
       expect(readFileSync(join(dir, 'scripts/pre-commit'), 'utf8')).toBe(
         '#!/bin/sh\npnpm test\npnpm exec uncheck staged --fix || exit 1\n',
+      )
+      expect(statSync(hook).mode & 0o777).toBe(0o755)
+
+      rmSync(hook)
+      symlinkSync('../../scripts/later', hook)
+
+      const dangling = await run(dir, ['prepare', '--pre-commit'])
+
+      expect(dangling.stdout).toContain('✔ pre-commit .git/hooks/pre-commit created\n')
+      expect(lstatSync(hook).isSymbolicLink()).toBe(true)
+      expect(readFileSync(join(dir, 'scripts/later'), 'utf8')).toBe(
+        `${header}pnpm exec uncheck staged --fix || exit 1\n`,
       )
       expect(statSync(hook).mode & 0o777).toBe(0o755)
     },
