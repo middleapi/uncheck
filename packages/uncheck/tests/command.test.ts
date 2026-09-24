@@ -1180,7 +1180,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
     writeFileSync(join(dir, 'src/other.ts'), 'export const other = 4;\n')
 
-    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout \[2 paths\] failed/)
+    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout-index -f \[2 paths\] failed/)
 
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
       'export const answer: number = 44;\n',
@@ -1240,6 +1240,231 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
       'export const answer: number = 44;\n',
     )
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'checks a symlink turned into a file, never what a staged symlink points to',
+    async () => {
+      const dir = committed(clean)
+
+      symlinkSync('other.ts', join(dir, 'src/link.ts'))
+      gitIn(dir, 'add', 'src/link.ts')
+      gitIn(dir, 'commit', '--quiet', '-m', 'link')
+      rmSync(join(dir, 'src/link.ts'))
+      writeFileSync(join(dir, 'src/link.ts'), 'export const   link = 1\n')
+      symlinkSync('other.ts', join(dir, 'src/alias.ts'))
+      gitIn(dir, 'add', 'src/link.ts', 'src/alias.ts')
+      writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 3\n')
+
+      const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+      expect(result).toBe('ok')
+      expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/link.ts\n')
+      expect(stdout).toContain('✔ staged the fixes to src/link.ts\n')
+      expect(gitIn(dir, 'show', ':src/link.ts')).toBe('export const link = 1;\n')
+      expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 3\n')
+      expect(gitIn(dir, 'status', '--porcelain')).toBe(
+        'A  src/alias.ts\nT  src/link.ts\n M src/other.ts\n',
+      )
+    },
+  )
+
+  it('checks only the files of a merge that differ from the side merged in', async () => {
+    const dir = committed(clean)
+
+    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
+    writeFileSync(join(dir, 'src/theirs.ts'), 'export const   theirs = 1\n')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'add', 'src')
+    gitIn(dir, 'commit', '--quiet', '-m', 'side')
+    gitIn(dir, 'checkout', '--quiet', '-')
+    gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 4\n')
+    gitIn(dir, 'add', 'src/other.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/other.ts\n')
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 4;\n')
+    expect(gitIn(dir, 'show', ':src/theirs.ts')).toBe('export const   theirs = 1\n')
+  })
+
+  it('undoes or stages only what the fixes changed, so a merge can bring in files outside a sparse checkout', async () => {
+    const dir = committed({ ...clean, 'lib/lib.ts': 'export const lib = 1;\n' })
+
+    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
+    writeFileSync(join(dir, 'lib/lib.ts'), 'export const lib = 2;\n')
+    gitIn(dir, 'commit', '--quiet', '-am', 'side')
+    gitIn(dir, 'checkout', '--quiet', '-')
+    gitIn(dir, 'sparse-checkout', 'set', 'src')
+    gitIn(dir, 'merge', '--quiet', '--squash', 'side')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxfmt'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
+    )
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  lib/lib.ts\nMM src/index.ts\n')
+
+    gitIn(dir, 'add', 'src/index.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
+    expect(existsSync(join(dir, 'lib'))).toBe(false)
+    expect(gitIn(dir, 'show', ':lib/lib.ts')).toBe('export const lib = 2;\n')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const answer: number = 43;\n')
+  })
+
+  it('sees no change in a file git keeps with CRLF line endings under text=auto', async () => {
+    const lines = 'export const a = 1;\r\nexport const b = 2;\r\n'
+    const dir = committed({ ...clean, 'src/legacy.ts': lines })
+    const file = join(dir, 'src/legacy.ts')
+
+    writeFileSync(join(dir, '.gitattributes'), '* text=auto\n')
+    gitIn(dir, 'add', '.gitattributes')
+    gitIn(dir, 'commit', '--quiet', '-m', 'attributes')
+    writeFileSync(file, `${lines}export const c = 3;\r\n`)
+    gitIn(dir, 'add', 'src/legacy.ts')
+    writeFileSync(file, `${lines}export const c = 3;\r\nexport const d = 4;\r\n`)
+
+    const { result } = await run(dir, ['staged', '--only=oxlint'])
+
+    expect(result).toBe('ok')
+    expect(readFileSync(file, 'utf8')).toBe(
+      `${lines}export const c = 3;\r\nexport const d = 4;\r\n`,
+    )
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/legacy.ts\n')
+  })
+
+  it('sets unstaged changes aside and back without running the post-checkout hook', async () => {
+    const dir = committed(clean)
+
+    mkdirSync(join(dir, '.git/hooks'), { recursive: true })
+    writeFileSync(
+      join(dir, '.git/hooks/post-checkout'),
+      '#!/bin/sh\ntouch .git/post-checkout-ran\nexit 1\n',
+      { mode: 0o755 },
+    )
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxfmt'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
+    )
+
+    expect(existsSync(join(dir, '.git/post-checkout-ran'))).toBe(false)
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const   answer: number = 42\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const   answer: number = 43\n',
+    )
+  })
+
+  it('only reports what sherif finds, since its fixes reach beyond the staged files', async () => {
+    const dir = workspace()
+
+    gitIn(dir, 'init', '--quiet')
+    gitIn(dir, 'add', '.')
+    gitIn(dir, 'commit', '--quiet', '-m', 'init')
+    writeFileSync(
+      join(dir, 'packages/a/package.json'),
+      JSON.stringify({ name: 'a', version: '1.0.1', dependencies: { react: '^18.0.0' } }),
+    )
+    gitIn(dir, 'add', 'packages/a/package.json')
+    vi.stubEnv('CI', undefined)
+
+    const { result, stdout } = await run(dir, ['staged', '--fix']).finally(() => vi.unstubAllEnvs())
+
+    expect(result).toBeInstanceOf(CheckFailed)
+    expect(stdout).toContain('▶ sherif\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  packages/a/package.json\n')
+  })
+
+  it('passes a commit no check has anything to do with, unless a check is required', async () => {
+    const dir = committed({ ...clean, 'README.md': '# readme\n' })
+
+    writeFileSync(join(dir, 'README.md'), '# readme\n\nmore\n')
+    gitIn(dir, 'add', 'README.md')
+
+    const docs = await run(dir, ['staged', '--only=tsc'])
+
+    expect(docs.result).toBe('ok')
+    expect(docs.stdout).toContain(
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files\n',
+    )
+
+    const required = await run(dir, ['staged', '--only=tsc', '--require=tsc'])
+
+    expect(required.result).toBeInstanceOf(CheckFailed)
+    expect(required.stdout).toContain('✘ tsc no tsconfig.json covers the given files\n')
+  })
+
+  it('checks and fixes staged files whose names start with ! or -', async () => {
+    const dir = committed({ ...clean, 'x.ts': 'export const x = 1;\n' })
+
+    writeFileSync(join(dir, '!x.ts'), 'export const   bang = 1\n')
+    writeFileSync(join(dir, '-x.ts'), 'export const   dash = 1\n')
+    writeFileSync(join(dir, 'x.ts'), 'export const   x = 2\n')
+    gitIn(dir, 'add', '--', '!x.ts', '-x.ts', 'x.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxlint', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt)\n')
+    expect(stdout).toContain('✔ staged the fixes to !x.ts -x.ts x.ts\n')
+    expect(gitIn(dir, 'show', ':./!x.ts')).toBe('export const bang = 1;\n')
+    expect(gitIn(dir, 'show', ':./-x.ts')).toBe('export const dash = 1;\n')
+    expect(gitIn(dir, 'show', ':x.ts')).toBe('export const x = 2;\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'puts unstaged changes back when a closed terminal hangs up during a slow check',
+    async () => {
+      const dir = fixture(
+        {
+          ...clean,
+          'node_modules/oxlint/package.json': { name: 'oxlint', bin: 'lint.js' },
+          'node_modules/oxlint/lint.js':
+            "require('node:fs').writeFileSync('node_modules/started', '')\nsetTimeout(() => {}, 30_000)\n",
+        },
+        [],
+      )
+      const file = join(dir, 'src/index.ts')
+
+      gitIn(dir, 'init', '--quiet')
+      gitIn(dir, 'add', '.')
+      gitIn(dir, 'commit', '--quiet', '-m', 'init')
+      writeFileSync(file, 'export const answer: number = 43;\n')
+      gitIn(dir, 'add', 'src/index.ts')
+      writeFileSync(file, 'export const answer: number = 43;\nexport const more = 1;\n')
+
+      const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+      const check = spawn(process.execPath, [bin, 'staged', '--only=oxlint'], {
+        cwd: dir,
+        stdio: 'ignore',
+      })
+      const exited = once(check, 'exit')
+      onTestFinished(() => {
+        check.kill('SIGKILL')
+      })
+
+      await vi.waitFor(() => expect(existsSync(join(dir, 'node_modules/started'))).toBe(true), {
+        timeout: 10_000,
+      })
+      check.kill('SIGHUP')
+      check.kill('SIGHUP')
+
+      expect(await exited).toEqual([130, null])
+      expect(readFileSync(file, 'utf8')).toBe(
+        'export const answer: number = 43;\nexport const more = 1;\n',
+      )
+      expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\n')
+      expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+    },
+  )
 })
 
 describe('uncheck staged in a package', { timeout: 120_000 }, () => {
@@ -1266,6 +1491,30 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
       'export const answer: number = 42;\n',
     )
     expect(gitIn(dir, 'show', ':src/root.ts')).toBe('export const   root = 11\n')
+  })
+
+  it('puts unstaged changes back with the line endings the package sets', async () => {
+    const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+    const dir = committed({
+      'packages/app/.gitattributes': '*.ts text eol=crlf\n',
+      'packages/app/src/index.ts': crlf(`export const answer: number = 42;\n${lines}`),
+    })
+    const file = join(dir, 'packages/app/src/index.ts')
+
+    writeFileSync(file, crlf(`export const   answer: number = 43\n${lines}`))
+    gitIn(dir, 'add', '.')
+    writeFileSync(file, crlf(`export const   answer: number = 43\n${lines}export const d = 4;\n`))
+
+    const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(
+      `export const answer: number = 43;\n${lines}`,
+    )
+    expect(readFileSync(file, 'utf8')).toBe(
+      crlf(`export const answer: number = 43;\n${lines}export const d = 4;\n`),
+    )
   })
 
   it('reports what git refused to do instead of crashing', async () => {

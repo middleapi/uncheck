@@ -4,6 +4,7 @@ import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
+import { existingFiles } from '../files'
 import { git, gitBytes, GitFailed, gitPaths } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
@@ -34,18 +35,14 @@ export const staged = Command.make(
 
       const cwd = path.resolve(directory)
 
-      // Staged deletions and submodules have nothing to check.
-      const files = yield* gitPaths(cwd, [
-        'diff',
-        '--cached',
-        '--name-only',
-        '--diff-filter=ACMR',
-        '--ignore-submodules=all',
-        '--relative',
-        '-z',
-      ]).pipe(
+      // Only regular files: tools follow a staged symlink to a file the commit does not hold.
+      const listed = yield* stagedFiles(cwd).pipe(
         Effect.catchTag('GitFailed', () => userError('`uncheck staged` needs a git repository')),
       )
+      const merging = yield* mergeInProgress(cwd)
+      // Fixing what a merge takes from the other side would commit changes neither side made.
+      const notTheirs = merging ? new Set(yield* stagedFiles(cwd, 'MERGE_HEAD')) : undefined
+      const files = notTheirs === undefined ? listed : listed.filter((file) => notTheirs.has(file))
 
       yield* Console.log(dim(`uncheck staged in ${cwd}`))
 
@@ -67,81 +64,68 @@ export const staged = Command.make(
         return yield* leftover(saved)
       }
 
-      const bases = yield* partiallyStaged(cwd, files)
-      const partial = [...bases.keys()]
+      const partial = yield* partiallyStaged(cwd, files)
       const before = yield* writeTree(cwd)
       const outcome = yield* Ref.make<Unstaged>('restored')
 
       const { failure, empty } = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
-            yield* Effect.acquireRelease(setAside(aside, partial), () =>
+            yield* Effect.acquireRelease(setAside(aside, partial), (bases) =>
               putBack(aside, files, bases, before).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
             )
           }
 
-          const failed = yield* checkPaths(files, {
+          const failure = yield* checkPaths(files, {
             ...selection,
             cwd,
             fix,
             literal: true,
             staged: true,
-          }).pipe(
-            Effect.map(() => undefined),
-            Effect.catchTag('CheckFailed', (error) => Effect.succeed(error)),
-          )
+          }).pipe(Effect.catchTag('CheckFailed', Effect.succeed))
 
-          if (fix) {
-            yield* Effect.forEach(
-              argvBatches(files),
-              (batch) => git(cwd, ['add', '--', ...batch]),
+          if (!fix) {
+            return { failure, empty: false }
+          }
+
+          const changed = (yield* Effect.forEach(argvBatches(files), (batch) =>
+            gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', '--', ...batch]),
+          )).flat()
+
+          if (changed.length === 0) {
+            return { failure, empty: false }
+          }
+
+          const stage = (env?: Readonly<Record<string, string>>) =>
+            Effect.forEach(
+              argvBatches(changed),
+              (batch) => git(cwd, ['add', '--', ...batch], env),
               { discard: true },
             )
 
-            // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
-            // behind (index.lock until then) needs the fixes too, or it would hold their revert.
-            const active = process.env.GIT_INDEX_FILE
+          yield* stage()
 
-            if (active?.endsWith('.lock') === true) {
-              const lock = path.resolve(
-                cwd,
-                yield* git(cwd, ['rev-parse', '--git-path', 'index.lock']),
-              )
+          // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
+          // behind (index.lock until then) needs the fixes too, or it would hold their revert.
+          const active = process.env.GIT_INDEX_FILE
 
-              if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
-                yield* Effect.forEach(
-                  argvBatches(files),
-                  (batch) => git(cwd, ['add', '--', ...batch], { GIT_INDEX_FILE: lock }),
-                  { discard: true },
-                )
-              }
-            }
+          if (active?.endsWith('.lock') === true) {
+            const lock = path.resolve(
+              cwd,
+              yield* git(cwd, ['rev-parse', '--git-path', 'index.lock']),
+            )
 
-            const after = yield* writeTree(cwd)
-
-            if (after !== before) {
-              const fixed = yield* gitPaths(cwd, [
-                'diff-tree',
-                '-r',
-                '--name-only',
-                '--relative',
-                '-z',
-                before,
-                after,
-              ])
-
-              yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(fixed)}`)
-            }
-
-            return {
-              failure: failed,
-              empty: after === (yield* headTree(cwd)) && !(yield* merging(cwd)),
+            if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
+              yield* stage({ GIT_INDEX_FILE: lock })
             }
           }
 
-          return { failure: failed, empty: false }
+          yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(changed)}`)
+
+          // git records a merge commit even when its tree is the one HEAD already has.
+          return { failure, empty: !merging && (yield* writeTree(cwd)) === (yield* headTree(cwd)) }
         }),
       )
 
@@ -184,8 +168,7 @@ const headTree = (cwd: string) =>
     Effect.catchTag('GitFailed', () => Effect.succeed(undefined)),
   )
 
-// git records a merge commit even when its tree is the one HEAD already has.
-const merging = (cwd: string) =>
+const mergeInProgress = (cwd: string) =>
   git(cwd, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).pipe(
     Effect.as(true),
     Effect.catchTag('GitFailed', () => Effect.succeed(false)),
@@ -198,26 +181,41 @@ const leftover = (saved: string) =>
 
 const REGULAR_FILE_MODE = /^100(?:644|755)$/
 
+const rawDiff = (cwd: string, ...args: ReadonlyArray<string>) =>
+  Effect.map(
+    git(cwd, [
+      'diff',
+      '--raw',
+      '--no-renames',
+      '--ignore-submodules=all',
+      '--relative',
+      '-z',
+      ...args,
+    ]),
+    (output) => {
+      const fields = output.split('\0')
+
+      return Array.from({ length: Math.floor(fields.length / 2) }, (_, index) => {
+        const [fromMode = '', toMode = ''] = fields[index * 2]!.slice(1).split(' ')
+
+        return { file: fields[index * 2 + 1]!, fromMode, toMode }
+      })
+    },
+  )
+
+const stagedFiles = (cwd: string, ...against: ReadonlyArray<string>) =>
+  Effect.map(rawDiff(cwd, '--cached', '--diff-filter=ACMT', ...against), (entries) =>
+    entries.filter((entry) => REGULAR_FILE_MODE.test(entry.toMode)).map((entry) => entry.file),
+  )
+
 const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<string>) {
-  const entries = (yield* git(cwd, [
-    'diff',
-    '--raw',
-    '--no-abbrev',
-    '--no-renames',
-    '--relative',
-    '-z',
-  ])).split('\0')
-  const partial = new Map<string, string>()
+  const partial: string[] = []
   const odd: string[] = []
 
-  for (let index = 0; index + 1 < entries.length; index += 2) {
-    const file = entries[index + 1]!
-
+  for (const { file, fromMode, toMode } of yield* rawDiff(cwd)) {
     if (files.includes(file)) {
-      const [indexMode = '', fileMode = '', indexBlob = ''] = entries[index]!.slice(1).split(' ')
-
-      if (REGULAR_FILE_MODE.test(indexMode) && REGULAR_FILE_MODE.test(fileMode)) {
-        partial.set(file, indexBlob)
+      if (REGULAR_FILE_MODE.test(fromMode) && REGULAR_FILE_MODE.test(toMode)) {
+        partial.push(file)
       } else {
         odd.push(file)
       }
@@ -267,9 +265,13 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
     { discard: true },
   ).pipe(Effect.tapError(() => Effect.ignore(fs.remove(saved, { recursive: true }))))
 
-  yield* Effect.forEach(argvBatches(files), (batch) => git(cwd, ['checkout', '--', ...batch]), {
-    discard: true,
-  }).pipe(
+  // Plumbing, since `git checkout` runs the post-checkout hook and fails when it does. The index
+  // blob is no merge base: git leaves a CRLF blob alone where hash-object normalizes it.
+  const ids = yield* Effect.forEach(argvBatches(files), (batch) =>
+    git(cwd, ['checkout-index', '-f', '--', ...batch]).pipe(
+      Effect.andThen(git(cwd, ['hash-object', '-w', '--', ...batch])),
+    ),
+  ).pipe(
     Effect.tapError(() =>
       Effect.forEach(copies, ([file, copy]) => fs.copyFile(copy, file), { discard: true }).pipe(
         Effect.andThen(fs.remove(saved, { recursive: true })),
@@ -279,6 +281,10 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
   )
   yield* Console.log(
     dim(`○ unstaged changes of ${listFiles(files)} set aside until the checks finish`),
+  )
+
+  return new Map(
+    ids.flatMap((output) => output.split('\n')).map((id, index) => [files[index]!, id]),
   )
 })
 
@@ -296,7 +302,7 @@ const putBack = Effect.fn(function* (
   const result = yield* Effect.gen(function* () {
     const copies = yield* copiesOf(aside, partial)
     const merged = yield* Effect.forEach(partial, (file, index) =>
-      merge(cwd, file, copies[index]![1], bases.get(file)!),
+      merge(aside, file, copies[index]![1], bases.get(file)!),
     )
 
     if (merged.every(Boolean)) {
@@ -306,7 +312,13 @@ const putBack = Effect.fn(function* (
 
     yield* Effect.forEach(
       argvBatches(files),
-      (batch) => git(cwd, ['checkout', before, '--', ...batch]),
+      (batch) => git(cwd, ['reset', '-q', before, '--', ...batch]),
+      { discard: true },
+    )
+    // checkout-index fails on a file a sparse checkout leaves out, which no check could change.
+    yield* Effect.forEach(
+      argvBatches(yield* existingFiles(files, cwd)),
+      (batch) => git(cwd, ['checkout-index', '-f', '--', ...batch]),
       { discard: true },
     )
     yield* Effect.forEach(copies, ([file, copy]) => fs.copyFile(copy, file), { discard: true })
@@ -332,7 +344,12 @@ const putBack = Effect.fn(function* (
 
 // Merges what git stores: a formatter rewriting line endings would conflict with every line of a
 // raw merge. `apply --3way` would run the repository's merge drivers and rerere; `merge-file` does not.
-const merge = Effect.fn(function* (cwd: string, file: string, copy: string, base: string) {
+const merge = Effect.fn(function* (
+  { cwd, prefix }: Aside,
+  file: string,
+  copy: string,
+  base: string,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const target = path.join(cwd, file)
@@ -370,9 +387,10 @@ const merge = Effect.fn(function* (cwd: string, file: string, copy: string, base
     if (clean) {
       const id = yield* git(cwd, ['hash-object', '-w', '--no-filters', '--', result])
 
+      // Unlike hash-object, cat-file takes --path from the top of the repository.
       yield* fs.writeFile(
         target,
-        yield* gitBytes(cwd, ['cat-file', '--filters', `--path=${file}`, id]),
+        yield* gitBytes(cwd, ['cat-file', '--filters', `--path=${prefix}${file}`, id]),
       )
       yield* fs.chmod(target, (yield* fs.stat(copy)).mode)
     }
