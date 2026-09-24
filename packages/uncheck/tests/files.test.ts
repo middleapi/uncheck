@@ -136,6 +136,7 @@ describe('resolvePaths', () => {
       unmatched: [],
     })
     expect(await resolve(dir, ['src/**'])).toEqual(await resolve(dir, ['src']))
+    expect(await resolve(dir, ['src/{.,sub}/*.ts'])).toEqual(await resolve(dir, ['src']))
     expect((await resolve(dir, ['.', '!**/*.json'])).files).not.toContain('.vscode/settings.json')
   })
 
@@ -158,6 +159,24 @@ describe('resolvePaths', () => {
     expect((await resolve(dir, ['app', '!app/(marketing)/**'])).files).toEqual([
       'app/[id].ts',
       'app/marketing/page.ts',
+    ])
+  })
+
+  it('leaves out a linked node_modules that a folder-only ignore rule misses', async () => {
+    const store = fixture({ 'dep/index.js': '' }, [])
+    const dir = fixture({ ...project, '.gitignore': 'node_modules/\ndist/\n' }, [])
+    execFileSync('git', ['init', '--quiet'], { cwd: dir })
+    symlinkSync(store, join(dir, 'node_modules'))
+    symlinkSync(store, join(dir, 'src/node_modules'))
+
+    expect((await resolve(dir, ['.', 'src'])).files).toEqual([
+      '.gitignore',
+      '.prettierignore',
+      'app/[id].ts',
+      'docs/readme.md',
+      'src/a.ts',
+      'src/b.ts',
+      'src/sub/c.ts',
     ])
   })
 
