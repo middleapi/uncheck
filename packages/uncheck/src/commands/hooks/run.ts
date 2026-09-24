@@ -1,7 +1,7 @@
 import process from 'node:process'
 import { stripVTControlCharacters } from 'node:util'
 
-import { Console, Effect, Option, Path, Predicate, Stdio, Stream } from 'effect'
+import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio, Stream } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
 import { StopBlocked, userError } from '../../errors'
@@ -29,6 +29,7 @@ export const run = Command.make(
     ...selectionFlags,
   },
   Effect.fn(function* ({ cwd: given, dir, ...settings }) {
+    const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const stdio = yield* Stdio.Stdio
 
@@ -42,6 +43,12 @@ export const run = Command.make(
       Effect.orElseSucceed((): Record<string, unknown> => ({})),
     )
 
+    // Cursor also stops a turn the user interrupted, or one that failed; fixing it would edit half-done
+    // work and a follow-up would restart the agent.
+    if (payload.status === 'aborted' || payload.status === 'error') {
+      return
+    }
+
     const start = Option.getOrElse(given, () => process.cwd())
     const top = yield* git(start, ['rev-parse', '--show-toplevel']).pipe(
       Effect.orElseSucceed(() => undefined),
@@ -49,6 +56,13 @@ export const run = Command.make(
     const cwd = Option.isSome(dir)
       ? path.join(top ?? start, dir.value)
       : Option.getOrElse(given, () => top ?? start)
+
+    // Checking a folder that is gone would send the agent back to fix a configuration it cannot see.
+    if (Option.isSome(dir) && !(yield* fs.exists(cwd))) {
+      return yield* userError(
+        `--dir=${dir.value} names nothing in ${top ?? start}, run \`uncheck hooks install\` again from the project`,
+      )
+    }
 
     const changed = yield* listChangedFiles(cwd)
 

@@ -15,29 +15,24 @@ export interface Bin {
 
 /**
  * Locates the `binName` executable of `pkg` the way Node resolves packages from `cwd`: the nearest
- * `node_modules/<pkg>`. Reading its manifest directly (instead of `require.resolve`) keeps this
- * independent from the package's `exports` map.
+ * `node_modules/<pkg>`, whose manifest is read directly so its `exports` map does not matter, or,
+ * under Yarn PnP, wherever its resolver finds `<pkg>/package.json`.
  */
 export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName: string = pkg) {
   const path = yield* Path.Path
 
-  // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts.
-  const resolved =
-    process.versions.pnp === undefined
-      ? undefined
-      : yield* Effect.try(() =>
-          createRequire(path.join(cwd, 'package.json')).resolve(`${pkg}/package.json`),
-        ).pipe(Effect.orElseSucceed(() => undefined))
+  for (const dir of ancestors(path, cwd)) {
+    // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts.
+    const manifestPath =
+      process.versions.pnp === undefined
+        ? path.join(dir, 'node_modules', pkg, 'package.json')
+        : yield* Effect.try(() =>
+            createRequire(path.join(dir, 'package.json')).resolve(`${pkg}/package.json`),
+          ).pipe(Effect.orElseSucceed(() => undefined))
 
-  const pkgDirs =
-    resolved === undefined
-      ? ancestors(path, cwd).map((dir) => path.join(dir, 'node_modules', pkg))
-      : [path.dirname(resolved)]
+    const manifest = manifestPath === undefined ? undefined : yield* readJson(manifestPath)
 
-  for (const pkgDir of pkgDirs) {
-    const manifest = yield* readJson(path.join(pkgDir, 'package.json'))
-
-    if (manifest === undefined) {
+    if (manifestPath === undefined || manifest === undefined) {
       continue
     }
 
@@ -48,7 +43,9 @@ export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName
           ? manifest.bin[binName]
           : undefined
 
-    return typeof bin === 'string' ? { name: binName, entry: path.resolve(pkgDir, bin) } : undefined
+    return typeof bin === 'string'
+      ? { name: binName, entry: path.resolve(path.dirname(manifestPath), bin) }
+      : undefined
   }
 
   return undefined

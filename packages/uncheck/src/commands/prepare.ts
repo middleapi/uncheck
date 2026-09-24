@@ -25,6 +25,13 @@ const OLD_ENTERS = /^cd "([^"]*)" && (.*)$/
 /** Git runs a hook through its shebang, where a line of `sh` would be a syntax error. */
 const OTHER_INTERPRETER = /^#!(?!.*\b(?:ba|da|k|z|a)?sh\b)/
 
+/** Invalid UTF-8 reads back as U+FFFD, so writing such a hook back would replace those bytes. */
+const NOT_TEXT = /[\0\uFFFD]/
+
+/** The comments and environment a hook sets up, such as its PATH, which the added line needs too. */
+const SETUP =
+  /^\s*(?:#|$|\\?\.\s|(?:source|export|set|unset)\s|[A-Za-z_]\w*=\S*\s*$|.*(?:&&|;)\s*(?:\\?\.|source)\s)/
+
 /**
  * `sh` still expands `$`, backticks and `\` between double quotes, `"` ends them, and a newline ends
  * the hook line.
@@ -161,8 +168,20 @@ export const prepare = Command.make(
     const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
     const relative = path.relative(cwd, file)
     const shown = relative.startsWith('..') ? file : relative
-    const shared = yield* git(cwd, ['config', '--show-scope', '--get', 'core.hooksPath']).pipe(
+    const hooksPath = (option: string) => git(cwd, ['config', option, '--get', 'core.hooksPath'])
+    const shared = yield* hooksPath('--show-scope').pipe(
       Effect.map((scoped) => /^(global|system)\t/.exec(scoped)?.[1]),
+      // Git before 2.26 has no --show-scope, which must not pass for an unset core.hooksPath.
+      Effect.catchIf(
+        (error) => error._tag === 'GitFailed' && error.exitCode === 129,
+        () =>
+          Effect.findFirst(['global', 'system'], (scope) =>
+            hooksPath(`--${scope}`).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+          ).pipe(Effect.map(Option.getOrUndefined)),
+      ),
       Effect.orElseSucceed(() => undefined),
     )
 
@@ -193,9 +212,12 @@ export const prepare = Command.make(
         Effect.gen(function* () {
           const existing = yield* fs
             .readFileString(target)
-            .pipe(Effect.orElseSucceed(() => undefined))
+            .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
 
-          if (existing !== undefined && OTHER_INTERPRETER.test(existing)) {
+          if (
+            existing !== undefined &&
+            (OTHER_INTERPRETER.test(existing) || NOT_TEXT.test(existing))
+          ) {
             return yield* Effect.fail(`it is not a shell script, have it run \`${line}\` yourself`)
           }
 
@@ -287,13 +309,13 @@ function rewrite(hook: string, line: string, inside: string): string {
   }
 
   // Added after the commands of the hook, the line would set its exit status in their place, and
-  // would never run after an `exec` or `exit`. Before a sourced file it would run twice with husky 8,
-  // whose `_/husky.sh` runs the hook again.
+  // would never run after an `exec` or `exit`. Before the hook's setup it would miss the PATH a GUI
+  // client lacks, and run twice with husky 8, whose sourced `_/husky.sh` runs the hook again.
   const after = lines.reduce(
     (last, text, index) => (ownLine(text) === undefined ? last : index + 1),
     0,
   )
-  const at = after > 0 ? after : lines.findIndex((text) => !/^\s*(?:#|\.\s|$)/.test(text))
+  const at = after > 0 ? after : lines.findIndex((text) => !SETUP.test(text))
 
   if (at === -1) {
     const kept = lines.join('\n')

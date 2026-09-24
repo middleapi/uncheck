@@ -61,7 +61,6 @@ export const resolvePaths = Effect.fn(function* (
   const unmatched: string[] = []
   let universe: ReadonlyArray<string> | undefined
 
-  // Exclusions on their own exclude from everything, like a run without paths.
   for (const pattern of includes.length > 0 ? includes : ['.']) {
     const target = relative(pattern)
 
@@ -124,13 +123,18 @@ const GLOB_CHARACTERS = /[*?[\]{}()]/
 
 /** Dot files match too, as they do for oxfmt and for a directory given as it is. */
 function glob(pattern: string): (file: string) => boolean {
-  const matches = picomatch(pattern, { dot: true })
+  // Without `posix`, picomatch reads `[!a]` as "! or a", and a bare `(…)` is a regex group, so
+  // `app/(marketing)/**` would match `app/marketing`.
+  const matches = picomatch(pattern.replace(/(?<![!?*+@])\(/g, '\\('), {
+    dot: true,
+    posix: true,
+    nonegate: true,
+  })
 
   // The matcher's second parameter asks for a result object, and `filter` passes an index there.
   return (file) => matches(file)
 }
 
-/** The given files that exist, taken literally: file names from git are never patterns. */
 export const existingFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -184,7 +188,6 @@ const walk = Effect.fn(function* (cwd: string) {
   const found: string[] = []
 
   const visit = Effect.fn(function* (dir: string): Effect.fn.Return<void> {
-    // Like git, a folder that cannot be read is left out rather than ending the run.
     const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
 
     yield* Effect.forEach(names, (name) => visitEntry(dir, name), {

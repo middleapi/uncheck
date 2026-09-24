@@ -93,7 +93,7 @@ export const tsc: Check = {
       .map(([configPath]) => configPath)
       .sort()
 
-    const cycle = findCycle(members, (configPath) => references.get(configPath) ?? [])
+    const cycle = findCycle(members, references)
 
     if (cycle !== undefined) {
       return yield* Effect.fail(
@@ -103,13 +103,22 @@ export const tsc: Check = {
       )
     }
 
+    const dependents = new Map<string, string[]>()
+
+    for (const [dependent, referencedConfigs] of references) {
+      for (const configPath of referencedConfigs) {
+        const known = dependents.get(configPath) ?? []
+
+        known.push(dependent)
+        dependents.set(configPath, known)
+      }
+    }
+
     const affected = new Set(selected)
 
     for (const configPath of affected) {
-      for (const [dependent, referencedConfigs] of references) {
-        if (referencedConfigs.includes(configPath)) {
-          affected.add(dependent)
-        }
+      for (const dependent of dependents.get(configPath) ?? []) {
+        affected.add(dependent)
       }
     }
 
@@ -118,7 +127,7 @@ export const tsc: Check = {
 
     return [
       ...(roots.length > 0 ? [{ bin: typescript, args: ['-b', ...roots.map(shown)] }] : []),
-      // A check writes nothing: `-p` would emit JavaScript next to sources that set no `noEmit`.
+      // `-p` would emit JavaScript next to sources that set no `noEmit`.
       ...standalone.map((configPath) => ({
         bin: typescript,
         args: ['-p', shown(configPath), '--noEmit'],
@@ -130,41 +139,27 @@ export const tsc: Check = {
 
 function findCycle(
   nodes: ReadonlyArray<string>,
-  edges: (node: string) => ReadonlyArray<string>,
+  references: ReadonlyMap<string, ReadonlyArray<string>>,
+  trail: ReadonlyArray<string> = [],
+  done = new Set<string>(),
 ): ReadonlyArray<string> | undefined {
-  const done = new Set<string>()
-  const trail: string[] = []
+  for (const node of nodes) {
+    if (trail.includes(node)) {
+      return trail.slice(trail.indexOf(node))
+    }
 
-  function visitAll(starts: ReadonlyArray<string>): ReadonlyArray<string> | undefined {
-    for (const start of starts) {
-      const cycle = visit(start)
+    if (!done.has(node)) {
+      const cycle = findCycle(references.get(node) ?? [], references, [...trail, node], done)
+
+      done.add(node)
 
       if (cycle !== undefined) {
         return cycle
       }
     }
-
-    return undefined
   }
 
-  function visit(node: string): ReadonlyArray<string> | undefined {
-    if (trail.includes(node)) {
-      return trail.slice(trail.indexOf(node))
-    }
-
-    if (done.has(node)) {
-      return undefined
-    }
-
-    trail.push(node)
-    const cycle = visitAll(edges(node))
-    trail.pop()
-    done.add(node)
-
-    return cycle
-  }
-
-  return visitAll(nodes)
+  return undefined
 }
 
 const selectTsconfigs = Effect.fn(function* (
@@ -177,7 +172,7 @@ const selectTsconfigs = Effect.fn(function* (
     { concurrency: 'unbounded' },
   )
 
-  const selected = yield* Effect.filter(
+  return yield* Effect.filter(
     candidates,
     (candidate) =>
       Effect.map(
@@ -188,8 +183,6 @@ const selectTsconfigs = Effect.fn(function* (
       ),
     { concurrency: 'unbounded' },
   )
-
-  return [...selected].sort()
 })
 
 /**
@@ -316,7 +309,9 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
 
   const resolve = (specs: Specs | undefined): string[] =>
     specs?.specs.map((spec) =>
-      path.resolve(specs.dir, spec.replaceAll(CONFIG_DIR, leafDir)).replaceAll('\\', '/'),
+      path
+        .resolve(specs.dir, spec.replaceAll('\\', '/').replaceAll(CONFIG_DIR, leafDir))
+        .replaceAll('\\', '/'),
     ) ?? []
 
   const includeSpecs =

@@ -11,13 +11,17 @@ import { argvBatches } from '../tool'
 import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
-type Unstaged = 'restored' | 'conflicted' | 'stranded'
+type Unstaged = 'restored' | 'stranded' | { readonly conflicted: ReadonlyArray<string> }
 
 export const staged = Command.make(
   'staged',
   {
     cwd: cwdFlag,
-    fix: fixFlag,
+    fix: fixFlag.pipe(
+      Flag.withDescription(
+        'Apply lint fixes (oxlint --fix) and rewrite formatting (oxfmt) in the staged files, then stage them. sherif only reports here: run `uncheck --fix` for its fixes',
+      ),
+    ),
     allowEmpty: Flag.Boolean('allow-empty').pipe(
       Flag.withDefault(false),
       Flag.withDescription(
@@ -47,7 +51,12 @@ export const staged = Command.make(
       yield* Console.log(dim(`uncheck staged in ${cwd}`))
 
       if (files.length === 0) {
-        return yield* Console.log(`${dim('○')} nothing to check, no staged files`)
+        const reason =
+          listed.length > 0
+            ? 'every staged file comes from the branch being merged in'
+            : 'no staged files'
+
+        return yield* Console.log(`${dim('○')} nothing to check, ${reason}`)
       }
 
       const [prefix = '', folder = ''] = (yield* git(cwd, [
@@ -101,7 +110,8 @@ export const staged = Command.make(
           const stage = (env?: Readonly<Record<string, string>>) =>
             Effect.forEach(
               argvBatches(changed),
-              (batch) => git(cwd, ['add', '--', ...batch], env),
+              // `git add` refuses a path outside a sparse checkout even when it is on disk.
+              (batch) => git(cwd, ['update-index', '--', ...batch], env),
               { discard: true },
             )
 
@@ -131,9 +141,9 @@ export const staged = Command.make(
 
       const unstagedOutcome = yield* Ref.get(outcome)
 
-      if (unstagedOutcome === 'conflicted') {
+      if (typeof unstagedOutcome === 'object') {
         return yield* userError(
-          `The fixes conflict with the unstaged changes of ${listFiles(partial)} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`,
+          `The fixes conflict with the unstaged changes of ${listFiles(unstagedOutcome.conflicted)} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`,
         )
       }
 
@@ -231,6 +241,10 @@ const partiallyStaged = Effect.fn(function* (cwd: string, files: ReadonlyArray<s
   return partial
 })
 
+// core.safecrlf would refuse to normalize a CRLF blob git itself leaves alone, although these objects
+// only feed the merge.
+const STORE = ['-c', 'core.safecrlf=false', 'hash-object', '-w']
+
 interface Aside {
   readonly cwd: string
   readonly saved: string
@@ -269,7 +283,7 @@ const setAside = Effect.fn(function* (aside: Aside, files: ReadonlyArray<string>
   // blob is no merge base: git leaves a CRLF blob alone where hash-object normalizes it.
   const ids = yield* Effect.forEach(argvBatches(files), (batch) =>
     git(cwd, ['checkout-index', '-f', '--', ...batch]).pipe(
-      Effect.andThen(git(cwd, ['hash-object', '-w', '--', ...batch])),
+      Effect.andThen(git(cwd, [...STORE, '--', ...batch])),
     ),
   ).pipe(
     Effect.tapError(() =>
@@ -304,8 +318,9 @@ const putBack = Effect.fn(function* (
     const merged = yield* Effect.forEach(partial, (file, index) =>
       merge(aside, file, copies[index]![1], bases.get(file)!),
     )
+    const conflicted = partial.filter((_, index) => !merged[index])
 
-    if (merged.every(Boolean)) {
+    if (conflicted.length === 0) {
       yield* Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`))
       return 'restored' as const
     }
@@ -323,7 +338,7 @@ const putBack = Effect.fn(function* (
     )
     yield* Effect.forEach(copies, ([file, copy]) => fs.copyFile(copy, file), { discard: true })
 
-    return 'conflicted' as const
+    return { conflicted }
   }).pipe(
     Effect.catch((error) => {
       const reason =
@@ -353,12 +368,18 @@ const merge = Effect.fn(function* (
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const target = path.join(cwd, file)
-  const store = (from: string) => git(cwd, ['hash-object', '-w', `--path=${file}`, '--', from])
+  const store = (from: string) => git(cwd, [...STORE, `--path=${file}`, '--', from])
   const checked = yield* store(target)
 
   if (checked === base) {
     yield* fs.copyFile(copy, target)
     return true
+  }
+
+  // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
+  // back through the filters would turn every line ending of the file to LF.
+  if ((yield* git(cwd, ['rev-parse', `:0:${prefix}${file}`])) !== checked) {
+    return false
   }
 
   const temp = yield* fs.makeTempDirectory()

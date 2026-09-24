@@ -132,7 +132,8 @@ export const checkPaths = Effect.fn(function* (
   settings: RunSettings,
 ) {
   const { fix, only, required, skipped, allowUnmatched = false, literal = false } = settings
-  const staged = settings.staged ?? false
+  const appliesFixes = (fixes: Check['fixes']) =>
+    settings.staged === true ? fixes === 'files' : fixes !== false
   const cwd = path.resolve(settings.cwd)
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
@@ -169,12 +170,7 @@ export const checkPaths = Effect.fn(function* (
         return Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: exclusion })
       }
 
-      return plan({
-        cwd,
-        fix: fix && !(staged && fixes === 'workspace'),
-        files,
-        projectFiles,
-      }).pipe(
+      return plan({ cwd, fix: fix && appliesFixes(fixes), files, projectFiles }).pipe(
         Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
         Effect.catchTag('NothingToCheck', ({ reason }) =>
           Effect.succeed<CheckPlan>({
@@ -201,7 +197,6 @@ export const checkPaths = Effect.fn(function* (
   if (ran.length === 0) {
     const reasons = outcomes.map((outcome) => `${outcome.name} ${outcome.reason}`).join(', ')
 
-    // Files a run was given, rather than asked for, may simply be ones no check handles.
     if (files !== undefined && (allowUnmatched || literal)) {
       return yield* Console.log(`${dim('○')} nothing to check: ${reasons}`)
     }
@@ -216,11 +211,11 @@ export const checkPaths = Effect.fn(function* (
     )
 
     const fixable = failed
-      .filter((outcome) => {
-        const fixes = CHECKS.find((check) => check.name === outcome.name)?.fixes
-
-        return outcome.reason === undefined && (staged ? fixes === 'files' : fixes !== false)
-      })
+      .filter(
+        (outcome) =>
+          outcome.reason === undefined &&
+          appliesFixes(CHECKS.find((check) => check.name === outcome.name)!.fixes),
+      )
       .map((outcome) => outcome.name)
       .join(', ')
       .replace(/, ([^,]+)$/, ' and $1')
@@ -267,7 +262,6 @@ const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {
 /** Each process of a type checker can take hundreds of megabytes, so only a few run at once. */
 const MAX_PARALLEL = Math.min(4, availableParallelism())
 
-/** `parallel` commands start once the others are done, and their output is held back to keep its order. */
 const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, cwd: string) {
   const parallel = commands.filter((command) => command.parallel === true)
 
@@ -300,7 +294,7 @@ function runCommand(command: CheckCommand, cwd: string) {
 
   return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
     Effect.andThen(execute(command, cwd)),
-    // A tool that cannot start, or is killed (say by the OOM killer), fails its check, not the run.
+    // A tool killed by a signal (say by the OOM killer) fails `exitCode` with a PlatformError, not a code.
     Effect.catchTag('PlatformError', (error) =>
       Console.log(red(error.cause instanceof Error ? error.cause.message : error.message)).pipe(
         Effect.as(1),

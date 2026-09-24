@@ -5,8 +5,9 @@ import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors'
+import { readJson } from '../../files'
 import { git } from '../../git'
-import { detectExec, invokes } from '../../pm'
+import { detectExec, invokes, YARN_TOP_LEVEL } from '../../pm'
 import { bold, dim, green } from '../../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
 
@@ -14,46 +15,37 @@ import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../un
 // if no hook ran.
 const TIMEOUT_SECONDS = 600
 
+const CLAUDE_FORMAT = {
+  event: 'Stop',
+  timeout: 'timeout',
+  entry: (command: string) => ({ type: 'command', command }),
+  content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
+}
+
 const AGENTS = [
-  {
-    id: 'claude',
-    name: 'Claude Code',
-    path: '.claude/settings.json',
-    entry: (command: string) => ({ type: 'command', command, timeout: TIMEOUT_SECONDS }),
-    content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
-  },
-  {
-    id: 'codebuddy',
-    name: 'CodeBuddy',
-    path: '.codebuddy/settings.json',
-    entry: (command: string) => ({ type: 'command', command, timeout: TIMEOUT_SECONDS }),
-    content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
-  },
+  { id: 'claude', name: 'Claude Code', path: '.claude/settings.json', ...CLAUDE_FORMAT },
+  { id: 'codebuddy', name: 'CodeBuddy', path: '.codebuddy/settings.json', ...CLAUDE_FORMAT },
   {
     id: 'cursor',
     name: 'Cursor',
     path: '.cursor/hooks.json',
-    entry: (command: string) => ({ command, timeout: TIMEOUT_SECONDS }),
+    event: 'stop',
+    timeout: 'timeout',
+    entry: (command: string) => ({ command }),
     content: (entry: object) => ({ version: 1, hooks: { stop: [entry] } }),
   },
   {
     id: 'copilot',
     name: 'GitHub Copilot',
     path: '.github/hooks/uncheck.json',
-    entry: (command: string) => ({
-      type: 'command',
-      bash: command,
-      powershell: command,
-      timeoutSec: TIMEOUT_SECONDS,
-    }),
+    event: 'agentStop',
+    timeout: 'timeoutSec',
+    entry: (command: string) => ({ type: 'command', bash: command, powershell: command }),
     content: (entry: object) => ({ version: 1, hooks: { agentStop: [entry] } }),
   },
 ] as const
 
 const AGENT_IDS = AGENTS.map((agent) => agent.id)
-
-// Must stay within what `invokes` accepts in a flag, or a reinstall adds a second hook.
-const FLAG_VALUE = /^[\w./@+-]*$/
 
 export const install = Command.make(
   'install',
@@ -79,10 +71,21 @@ export const install = Command.make(
     const dir = (yield* git(cwd, ['rev-parse', '--show-prefix']).pipe(
       Effect.orElseSucceed(() => ''),
     )).replace(/\/$/, '')
+    const exec = yield* detectExec(cwd)
+    const manifest = yield* readJson(path.join(cwd, 'package.json'))
+    const launcher =
+      dir === '' &&
+      exec === 'yarn run --silent' &&
+      /^yarn@(?!1\.)/.test(String(manifest?.packageManager))
+        ? YARN_TOP_LEVEL
+        : exec
+    const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
+    const command = `${launcher} ${HOOK_COMMAND} ${flags.join(' ')}`
 
-    if (!FLAG_VALUE.test(dir)) {
+    // A reinstall that cannot recognise the command would add a second hook next to it.
+    if (!invokes(command, HOOK_COMMAND)) {
       return yield* userError(
-        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _./@+-`,
+        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-`,
       )
     }
 
@@ -104,9 +107,11 @@ export const install = Command.make(
       )
     }
 
-    const exec = yield* detectExec(cwd)
-    const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
-    const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
+    if (dir !== '' && selected.includes('copilot')) {
+      return yield* userError(
+        `Copilot reads .github/hooks only at the top of the repository, not in ${dir}: install copilot from there`,
+      )
+    }
 
     const updates = yield* Effect.forEach(
       AGENTS.filter((agent) => selected.includes(agent.id)),
@@ -115,7 +120,7 @@ export const install = Command.make(
           const file = path.join(cwd, agent.path)
           const existing = yield* fs
             .readFileString(file)
-            .pipe(Effect.orElseSucceed(() => undefined))
+            .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
           const text = existing ?? ''
           const errors: ParseError[] = []
           const current: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
@@ -131,13 +136,23 @@ export const install = Command.make(
           }
 
           const base = Predicate.isObject(current) ? current : {}
+          const hooks = Predicate.isObject(base.hooks) ? base.hooks : {}
           const entry = agent.entry(command)
+          const timeout = { [agent.timeout]: TIMEOUT_SECONDS }
           const found: object[] = []
-          const replaced = mapOwnEntries(base, (hook) => {
+          // Copilot takes `timeout` as another name for `timeoutSec`, so either is one the user chose.
+          const replaced = mapOwnEntries(hooks[agent.event], (hook) => {
             found.push(hook)
-            return { ...hook, ...entry }
+            return {
+              ...hook,
+              ...entry,
+              ...('timeout' in hook || 'timeoutSec' in hook ? {} : timeout),
+            }
           })
-          const next = found.length > 0 ? replaced : mergeJson(base, agent.content(entry))
+          const next =
+            found.length > 0
+              ? { ...base, hooks: { ...hooks, [agent.event]: replaced } }
+              : mergeJson(base, agent.content({ ...entry, ...timeout }))
           const result =
             existing === undefined
               ? 'created'

@@ -5,30 +5,31 @@ import { ancestors, readJson } from './files'
 // Hooks never get a terminal to ask in, so plain `npx` and `bunx` would download and run the latest
 // release whenever the project has none, and Yarn 1 wraps a run in lines of its own on stdout, where
 // agents expect nothing but their JSON.
-const EXEC_BY_PACKAGE_MANAGER: Readonly<Record<string, string>> = {
-  pnpm: 'pnpm exec',
-  yarn: 'yarn run --silent',
-  bun: 'bunx --no-install',
-  npm: 'npx --no',
-}
+const EXEC_BY_PACKAGE_MANAGER: ReadonlyMap<string, string> = new Map([
+  ['pnpm', 'pnpm exec'],
+  ['yarn', 'yarn run --silent'],
+  ['bun', 'bunx --no-install'],
+  ['npm', 'npx --no'],
+])
 
-const EXEC_BY_LOCKFILE: ReadonlyArray<readonly [lockfile: string, exec: string]> = [
-  ['pnpm-lock.yaml', 'pnpm exec'],
-  ['yarn.lock', 'yarn run --silent'],
-  ['bun.lock', 'bunx --no-install'],
-  ['bun.lockb', 'bunx --no-install'],
-  ['package-lock.json', 'npx --no'],
-]
+/** Yarn 2+ runs only the binaries of the workspace it is started in, unless told to use the root's. */
+export const YARN_TOP_LEVEL = 'yarn run -T --silent'
 
-/** Every prefix `detectExec` returns or once returned, so a generated command line can be recognised again. */
+const PACKAGE_MANAGER_BY_LOCKFILE = [
+  ['pnpm-lock.yaml', 'pnpm'],
+  ['yarn.lock', 'yarn'],
+  ['bun.lock', 'bun'],
+  ['bun.lockb', 'bun'],
+  ['package-lock.json', 'npm'],
+] as const
+
+/** Every prefix uncheck writes or once wrote, so a generated command line can be recognised again. */
 const EXECS: ReadonlyArray<string> = [
-  ...new Set([
-    ...Object.values(EXEC_BY_PACKAGE_MANAGER),
-    ...EXEC_BY_LOCKFILE.map(([, exec]) => exec),
-    'yarn',
-    'bunx',
-    'npx',
-  ]),
+  ...EXEC_BY_PACKAGE_MANAGER.values(),
+  YARN_TOP_LEVEL,
+  'yarn',
+  'bunx',
+  'npx',
 ]
 
 const FLAGS = /^(?: --[\w=./@+-]+)*$/
@@ -56,21 +57,21 @@ export const detectExec = Effect.fn(function* (cwd: string) {
     const manifest = yield* readJson(path.join(dir, 'package.json'))
     const declared =
       typeof manifest?.packageManager === 'string'
-        ? EXEC_BY_PACKAGE_MANAGER[manifest.packageManager.split('@')[0] ?? '']
+        ? EXEC_BY_PACKAGE_MANAGER.get(manifest.packageManager.split('@')[0]!)
         : undefined
 
     if (declared !== undefined) {
       return declared
     }
 
-    const lockfile = yield* Effect.findFirst(EXEC_BY_LOCKFILE, ([file]) =>
+    const lockfile = yield* Effect.findFirst(PACKAGE_MANAGER_BY_LOCKFILE, ([file]) =>
       fs.exists(path.join(dir, file)).pipe(Effect.orElseSucceed(() => false)),
     )
 
     if (Option.isSome(lockfile)) {
-      return lockfile.value[1]
+      return EXEC_BY_PACKAGE_MANAGER.get(lockfile.value[1])!
     }
   }
 
-  return 'npx --no'
+  return EXEC_BY_PACKAGE_MANAGER.get('npm')!
 })
