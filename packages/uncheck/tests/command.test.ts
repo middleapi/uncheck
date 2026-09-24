@@ -1532,6 +1532,18 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
 describe('uncheck prepare', { timeout: 120_000 }, () => {
   const header = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
 
+  let globalConfig = ''
+
+  beforeEach(() => {
+    globalConfig = join(fixture({ '.gitconfig': '' }, []), '.gitconfig')
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig)
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('writes the pre-commit hook through the detected package manager and updates it in place', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
     gitIn(dir, 'init', '--quiet')
@@ -1622,6 +1634,18 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     const settled = await run(dir, ['prepare', '--pre-commit'])
 
     expect(settled.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+
+    const chained = 'npx uncheck staged --only=oxfmt && pnpm test'
+    const advisory = 'pnpm exec uncheck staged --fix || echo "not blocking"'
+
+    writeFileSync(hook, `#!/bin/sh\n${chained}\n${advisory}\n`)
+
+    const handWritten = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(handWritten.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `#!/bin/sh\npnpm exec uncheck staged --fix || exit 1\n${chained}\n${advisory}\n`,
+    )
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -1677,6 +1701,45 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(commit()).toEqual({ status: 1, ran: [root, a] })
     },
   )
+
+  it('keeps the line of every package when they all prepare at once, as a workspace install does', async () => {
+    const packages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const folders = ['.', ...packages.map((name) => `packages/${name}`)]
+    const dir = fixture(
+      {
+        'pnpm-lock.yaml': '',
+        ...Object.fromEntries(folders.map((folder) => [`${folder}/package.json`, '{}\n'])),
+      },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+
+    const exits = await Promise.all(
+      folders.map((folder) => {
+        const prepared = spawn(process.execPath, [bin, 'prepare', '--pre-commit'], {
+          cwd: join(dir, folder),
+          stdio: 'ignore',
+        })
+
+        return once(prepared, 'exit')
+      }),
+    )
+
+    expect(exits.map(([code]) => code)).toEqual(folders.map(() => 0))
+    expect(readFileSync(join(dir, '.git/hooks/pre-commit'), 'utf8').split('\n').sort()).toEqual(
+      [
+        ...header.split('\n'),
+        'pnpm exec uncheck staged --fix || exit 1',
+        ...packages.map(
+          (name) => `(cd "packages/${name}" && pnpm exec uncheck staged --fix) || exit 1`,
+        ),
+      ].sort(),
+    )
+    expect(readdirSync(join(dir, '.git/hooks')).filter((name) => name.endsWith('.lock'))).toEqual(
+      [],
+    )
+  })
 
   it.skipIf(process.platform === 'win32')(
     'swaps in the new hook whole, so a commit already running it finishes the old one',
@@ -1745,7 +1808,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
       expect(lstatSync(hook).isSymbolicLink()).toBe(true)
       expect(readFileSync(join(dir, 'scripts/pre-commit'), 'utf8')).toBe(
-        '#!/bin/sh\npnpm test\npnpm exec uncheck staged --fix || exit 1\n',
+        '#!/bin/sh\npnpm exec uncheck staged --fix || exit 1\npnpm test\n',
       )
       expect(statSync(hook).mode & 0o777).toBe(0o755)
 
@@ -1805,6 +1868,30 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(again.stdout).toContain(`✔ pre-commit ${hook} unchanged\n`)
   })
 
+  it('switches the lines older versions wrote to the current runner in place', async () => {
+    const npm = fixture({ 'package.json': '{}\n', 'package-lock.json': '{}\n' }, [])
+    gitIn(npm, 'init', '--quiet')
+    const npmHook = join(npm, '.git/hooks/pre-commit')
+    writeFileSync(npmHook, `${header}npx uncheck staged --fix || exit 1\npnpm test\n`)
+
+    await run(npm, ['prepare', '--pre-commit'])
+
+    expect(readFileSync(npmHook, 'utf8')).toBe(
+      `${header}npx --no uncheck staged --fix || exit 1\npnpm test\n`,
+    )
+
+    const yarn = fixture({ 'package.json': '{}\n', 'yarn.lock': '' }, [])
+    gitIn(yarn, 'init', '--quiet')
+    const yarnHook = join(yarn, '.git/hooks/pre-commit')
+    writeFileSync(yarnHook, '#!/bin/sh\nyarn uncheck staged --fix\npnpm test\n')
+
+    await run(yarn, ['prepare', '--pre-commit'])
+
+    expect(readFileSync(yarnHook, 'utf8')).toBe(
+      '#!/bin/sh\nyarn run --silent uncheck staged --fix || exit 1\npnpm test\n',
+    )
+  })
+
   it('takes the runner from the packageManager field and reports an unwritable hook', async () => {
     const dir = fixture({ 'package.json': { packageManager: 'bun@1.2.0' } }, [])
     gitIn(dir, 'init', '--quiet')
@@ -1826,7 +1913,9 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(refused.result).toBe('ok')
     expect(refused.stdout).toContain('✘ pre-commit .git/hooks/pre-commit not written,')
     expect(
-      readdirSync(join(blocked, '.git/hooks')).filter((name) => name.includes('uncheck')),
+      readdirSync(join(blocked, '.git/hooks')).filter(
+        (name) => name.includes('uncheck') || name.endsWith('.lock'),
+      ),
     ).toEqual([])
   })
 
@@ -1844,7 +1933,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      '#!/bin/sh\necho hi\n(cd "packages/app" && yarn run --silent uncheck staged --fix) || exit 1\n',
+      '#!/bin/sh\n(cd "packages/app" && yarn run --silent uncheck staged --fix) || exit 1\necho hi',
     )
 
     if (process.platform !== 'win32') {
@@ -1856,6 +1945,67 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(skipped.result).toBe('ok')
     expect(skipped.stdout).toBe('○ no git repository found, nothing to prepare\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'runs before the commands of an existing hook, so they still fail it and cannot skip it',
+    async () => {
+      const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+      gitIn(dir, 'init', '--quiet')
+      const hook = join(dir, '.git/hooks/pre-commit')
+      const bin = fixture({ pnpm: '#!/bin/sh\necho "$*" >> "$LOG"\ntest "$1" = exec\n' }, [])
+      const log = join(bin, 'log')
+      chmodSync(join(bin, 'pnpm'), 0o755)
+      writeFileSync(join(dir, '.git/hooks/env'), `PATH="${bin}:$PATH"\n`)
+      writeFileSync(hook, '#!/bin/sh\n# lint\n. "$(dirname "$0")/env"\nexec pnpm lint-staged\n')
+
+      await run(dir, ['prepare', '--pre-commit'])
+
+      expect(readFileSync(hook, 'utf8')).toBe(
+        '#!/bin/sh\n# lint\n. "$(dirname "$0")/env"\npnpm exec uncheck staged --fix || exit 1\nexec pnpm lint-staged\n',
+      )
+
+      const { status } = spawnSync('sh', ['.git/hooks/pre-commit'], {
+        cwd: dir,
+        env: { ...process.env, LOG: log },
+      })
+
+      expect(status).toBe(1)
+      expect(readFileSync(log, 'utf8')).toBe('exec uncheck staged --fix\nlint-staged\n')
+    },
+  )
+
+  it('leaves a hook in another language alone and says what it should run', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+    const script = '#!/usr/bin/env node\nconsole.log("checked")\n'
+    writeFileSync(hook, script, { mode: 0o755 })
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      '✘ pre-commit .git/hooks/pre-commit not written, it is not a shell script, have it run `pnpm exec uncheck staged --fix || exit 1` yourself\n',
+    )
+    expect(readFileSync(hook, 'utf8')).toBe(script)
+  })
+
+  it('writes nothing for a package whose folder name sh would expand', async () => {
+    const dir = fixture(
+      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/a$b/package.json': '{}\n' },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+
+    const { result, stdout } = await run(join(dir, 'packages/a$b'), ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      `✘ pre-commit ${hook} not written, sh would misread the folder name "packages/a$b" between double quotes\n`,
+    )
+    expect(existsSync(hook)).toBe(false)
   })
 
   it('writes the hook the husky 9 and Vite+ dispatcher runs, not their generated shim', async () => {
@@ -1898,7 +2048,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(nested.stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      `pnpm test\npnpm exec uncheck staged --fix || exit 1\n${app}\n`,
+      `pnpm exec uncheck staged --fix || exit 1\n${app}\npnpm test\n`,
     )
     expect(readFileSync(join(dir, '.husky/_/pre-commit'), 'utf8')).toBe(shim)
 
@@ -1945,15 +2095,15 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(commit()).toEqual({
         status: 0,
         ran: [
-          `${top} test`,
           `${top} exec uncheck staged --fix`,
           `${top}/packages/app exec uncheck staged --fix --only=oxlint`,
+          `${top} test`,
         ],
       })
 
       writeFileSync(join(dir, 'fail'), '')
 
-      expect(commit()).toEqual({ status: 1, ran: [`${top} test`] })
+      expect(commit()).toEqual({ status: 1, ran: [`${top} exec uncheck staged --fix`] })
 
       chmodSync(hook, 0o755)
 
@@ -1979,9 +2129,14 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(existsSync(join(vite, '.vite-hooks/_/pre-commit'))).toBe(false)
   })
 
-  it('writes into a core.hooksPath set by hand as it is', async () => {
+  it('writes into a core.hooksPath set by hand as it is, even one holding an `h` script', async () => {
     const dir = fixture(
-      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' },
+      {
+        'package.json': '{}\n',
+        'pnpm-lock.yaml': '',
+        'packages/app/package.json': '{}\n',
+        '.githooks/h': 'echo "help"\n',
+      },
       [],
     )
     gitIn(dir, 'init', '--quiet')
@@ -1999,10 +2154,34 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       `${header}pnpm exec uncheck staged --fix || exit 1\n(cd "packages/app" && pnpm exec uncheck staged --fix) || exit 1\n`,
     )
     expect(existsSync(join(dir, '.git/hooks/pre-commit'))).toBe(false)
+    expect(existsSync(join(dir, 'pre-commit'))).toBe(false)
 
     if (process.platform !== 'win32') {
       expect(statSync(hook).mode & 0o111).toBe(0o111)
     }
+  })
+
+  it('leaves the core.hooksPath of the global git config alone, since every repository runs it', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const shared = fixture({ 'pre-commit': '#!/bin/sh\necho "scanning for secrets"\n' }, [])
+    gitIn(dir, 'config', '--file', globalConfig, 'core.hooksPath', shared)
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      `✘ pre-commit ${join(shared, 'pre-commit')} not written, core.hooksPath is set in the global git config, so every repository runs it\n`,
+    )
+    expect(readFileSync(join(shared, 'pre-commit'), 'utf8')).toBe(
+      '#!/bin/sh\necho "scanning for secrets"\n',
+    )
+
+    gitIn(dir, 'config', 'core.hooksPath', '.githooks')
+
+    const local = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(local.stdout).toContain('✔ pre-commit .githooks/pre-commit created\n')
   })
 })
 
