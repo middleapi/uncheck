@@ -1,3 +1,6 @@
+import { mkdirSync, symlinkSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { NodeServices } from '@effect/platform-node'
 import { Effect } from 'effect'
 
@@ -20,6 +23,8 @@ function plan(dir: string, files?: string[]): Promise<string[] | string> {
 }
 
 const NOT_COVERED = 'no tsconfig.json covers the given files'
+// oxlint-disable-next-line no-template-curly-in-string
+const CONFIG_DIR = '${configDir}'
 
 describe('tsc project references', () => {
   it('checks standalone projects with tsc -p', async () => {
@@ -101,6 +106,32 @@ describe('tsc project references', () => {
     expect(await plan(dir)).toBe(
       'circular project references between b/tsconfig.json, c/tsconfig.json',
     )
+  })
+
+  it('follows references as written, leaving the configDir token alone like tsc', async () => {
+    const dir = fixture({
+      'app/tsconfig.json': { references: [{ path: `${CONFIG_DIR}/../lib` }] },
+      'app/lib/tsconfig.json': {},
+      'lib/tsconfig.json': {},
+    })
+
+    expect(await plan(dir)).toEqual(['-b app/tsconfig.json', '-p lib/tsconfig.json --noEmit'])
+  })
+
+  it('reads backslashes in extends and references as separators, like tsc', async () => {
+    const dir = fixture({
+      'tsconfig.base.json': { compilerOptions: { allowJs: true }, include: [`${CONFIG_DIR}/src`] },
+      'tsconfig.json': { files: [], references: [{ path: '.\\packages\\b' }] },
+      'packages/a/tsconfig.json': { extends: '..\\..\\tsconfig.base.json' },
+      'packages/b/tsconfig.json': {
+        extends: '..\\..\\tsconfig.base.json',
+        references: [{ path: '..\\a' }],
+      },
+    })
+
+    expect(await plan(dir)).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['packages/a/src/index.js'])).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['packages/a/scripts/build.ts'])).toBe(NOT_COVERED)
   })
 })
 
@@ -234,5 +265,111 @@ describe('tsc project selection', () => {
       '-p packages/b/tsconfig.json --noEmit',
     ])
     expect(await plan(dir, ['README.md', 'packages/a/styles.css'])).toBe(NOT_COVERED)
+  })
+
+  it('selects the configs a solution-style root references, whatever their name, through the root', async () => {
+    const dir = fixture({
+      'tsconfig.json': {
+        files: [],
+        references: [{ path: './tsconfig.app.json' }, { path: './tsconfig.node.json' }],
+      },
+      'tsconfig.app.json': { include: ['src'] },
+      'tsconfig.node.json': { include: ['vite.config.ts'] },
+    })
+
+    expect(await plan(dir, ['src/main.ts'])).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['vite.config.ts'])).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['tsconfig.app.json'])).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['scripts/release.ts'])).toBe(NOT_COVERED)
+  })
+
+  it('never selects a referenced config that does not exist, leaving the reference to tsc -b', async () => {
+    const dir = fixture({
+      'tsconfig.json': { include: ['src'], references: [{ path: './packages/gone' }] },
+    })
+
+    expect(await plan(dir)).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['src/index.ts'])).toEqual(['-b tsconfig.json'])
+    expect(await plan(dir, ['packages/gone/index.ts'])).toBe(NOT_COVERED)
+  })
+
+  it('builds every root that depends on a selected project, and no other', async () => {
+    const dir = fixture({
+      'lib/tsconfig.json': {},
+      'app/tsconfig.json': { references: [{ path: '../lib' }] },
+      'web/tsconfig.json': { references: [{ path: '../lib' }] },
+      'core/tsconfig.json': {},
+      'cli/tsconfig.json': { references: [{ path: '../core' }] },
+      'solo/tsconfig.json': {},
+    })
+
+    expect(await plan(dir, ['lib/src/index.ts'])).toEqual([
+      '-b app/tsconfig.json web/tsconfig.json',
+    ])
+    expect(await plan(dir, ['app/src/index.ts'])).toEqual(['-b app/tsconfig.json'])
+    expect(await plan(dir, ['core/src/index.ts', 'solo/src/index.ts'])).toEqual([
+      '-b cli/tsconfig.json',
+      '-p solo/tsconfig.json --noEmit',
+    ])
+  })
+
+  it('selects the projects a changed config applies to, also through a workspace package linked into node_modules', async () => {
+    const dir = fixture({
+      'tsconfig.base.json': { compilerOptions: { strict: true } },
+      'tsconfig.json': { include: ['scripts'] },
+      'packages/config/package.json': { name: '@repo/config' },
+      'packages/config/strict.json': { compilerOptions: { noUncheckedIndexedAccess: true } },
+      'packages/a/tsconfig.json': { extends: '../../tsconfig.base.json', include: ['src'] },
+      'packages/b/tsconfig.json': {
+        extends: ['../../tsconfig.base.json', '@repo/config/strict.json'],
+        include: ['src'],
+      },
+    })
+    mkdirSync(join(dir, 'node_modules/@repo'))
+    symlinkSync(join(dir, 'packages/config'), join(dir, 'node_modules/@repo/config'))
+    const a = '-p packages/a/tsconfig.json --noEmit'
+    const b = '-p packages/b/tsconfig.json --noEmit'
+
+    expect(await plan(dir, ['tsconfig.base.json'])).toEqual([a, b])
+    expect(await plan(dir, ['packages/config/strict.json'])).toEqual([b])
+    expect(await plan(dir, ['packages/a/tsconfig.json'])).toEqual([a])
+    expect(await plan(dir, ['tsconfig.json'])).toEqual(['-p tsconfig.json --noEmit'])
+    expect(await plan(dir, ['packages/config/package.json'])).toBe(NOT_COVERED)
+  })
+
+  it('applies a base reached through two extends branches in both, like tsc, and stops at circular extends', async () => {
+    const dir = fixture({
+      'tsconfig.base.json': { include: [`${CONFIG_DIR}/lib`] },
+      'tsconfig.b.json': { extends: './tsconfig.base.json', include: [`${CONFIG_DIR}/src`] },
+      'tsconfig.c.json': { extends: './tsconfig.base.json' },
+      'pkg/tsconfig.json': { extends: ['../tsconfig.b.json', '../tsconfig.c.json'] },
+      'loop/tsconfig.json': { extends: './tsconfig.other.json' },
+      'loop/tsconfig.other.json': { extends: './tsconfig.json', include: ['src'] },
+    })
+
+    expect(await plan(dir, ['pkg/lib/index.ts'])).toEqual(['-p pkg/tsconfig.json --noEmit'])
+    expect(await plan(dir, ['pkg/src/index.ts'])).toBe(NOT_COVERED)
+    expect(await plan(dir, ['loop/src/index.ts'])).toEqual(['-p loop/tsconfig.json --noEmit'])
+  })
+
+  it('takes the inputs tsc takes: no declarationDir, minified scripts or upper-case extensions, but an included node_modules folder', async () => {
+    const dir = fixture({
+      'tsconfig.json': {
+        compilerOptions: { allowJs: true, declarationDir: 'src/types' },
+        include: ['src', 'vendor/*', 'plugins/jquery*', 'node_modules/x'],
+      },
+    })
+    const covers = (file: string) => plan(dir, [file]).then(Array.isArray)
+
+    expect(await covers('src/index.ts')).toBe(true)
+    expect(await covers('src/types/index.d.ts')).toBe(false)
+    expect(await covers('vendor/jquery.js')).toBe(true)
+    expect(await covers('vendor/jquery.min.js')).toBe(false)
+    expect(await covers('vendor/jquery.min.jsx')).toBe(true)
+    expect(await covers('plugins/jquery.ui.js')).toBe(true)
+    expect(await covers('plugins/jquery.min.js')).toBe(false)
+    expect(await covers('src/UPPER.TS')).toBe(false)
+    expect(await covers('node_modules/x/index.ts')).toBe(true)
+    expect(await covers('node_modules/y/index.ts')).toBe(false)
   })
 })

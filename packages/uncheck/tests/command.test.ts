@@ -195,6 +195,27 @@ describe('uncheck', { timeout: 120_000 }, () => {
     expect(broken.stdout).toContain('TS2322')
   })
 
+  it('checks standalone projects side by side but prints their output in plan order', async () => {
+    const dir = fixture(
+      {
+        'packages/a/tsconfig.json': standaloneTsconfig,
+        'packages/a/src/index.ts': 'export const a: number = 1;\n',
+        'packages/b/tsconfig.json': standaloneTsconfig,
+        'packages/b/src/index.ts': 'export const b: number = "2";\n',
+        'packages/c/tsconfig.json': standaloneTsconfig,
+        'packages/c/src/index.ts': 'export const c: number = 3;\n',
+      },
+      ['typescript'],
+    )
+
+    const { result, stdout } = await run(dir, ['--only=tsc'])
+
+    expect(result).toBeInstanceOf(CheckFailed)
+    expect(stdout).toMatch(
+      /▶ tsc -p packages\/a\/tsconfig\.json --noEmit\n▶ tsc -p packages\/b\/tsconfig\.json --noEmit\npackages\/b\/src\/index\.ts[^▶]*TS2322[^▶]*▶ tsc -p packages\/c\/tsconfig\.json --noEmit\n✘ tsc failed/,
+    )
+  })
+
   it('forwards paths to oxlint and oxfmt and narrows tsc to the projects containing them', async () => {
     const dir = fixture({
       '.oxlintrc.json': oxlintrc,
