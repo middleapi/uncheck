@@ -18,6 +18,10 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
 
     return `git ${shown.join(' ')}`
   }
+
+  get summary(): string {
+    return `${this.command} failed: ${this.stderr}`
+  }
 }
 
 /**
@@ -74,4 +78,23 @@ export function git(
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */
 export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
   return Effect.map(git(cwd, args), (output) => output.split('\0').filter((entry) => entry !== ''))
+}
+
+/**
+ * The folder of `cwd` below the top of the working tree, `''` or ending in `/`, and where git keeps
+ * each of `names`. Fails outside a working tree.
+ */
+export function gitLocation(cwd: string, names: ReadonlyArray<string> = []) {
+  const gitPathArgs = names.flatMap((name) => ['--git-path', name])
+
+  return Effect.map(
+    git(cwd, ['rev-parse', '--show-toplevel', '--show-prefix', ...gitPathArgs]),
+    (output) => {
+      // A newline in a path shifts the lines git prints, so they are counted from both ends.
+      const [, ...lines] = output.split('\n')
+      const paths = lines.splice(lines.length - names.length)
+
+      return { prefix: lines.join('\n'), paths }
+    },
+  )
 }

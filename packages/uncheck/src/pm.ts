@@ -12,8 +12,7 @@ const EXEC_BY_PACKAGE_MANAGER: ReadonlyMap<string, string> = new Map([
   ['npm', 'npx --no'],
 ])
 
-/** Yarn 2+ runs only the binaries of the workspace it is started in, unless told to use the root's. */
-export const YARN_TOP_LEVEL = 'yarn run -T --silent'
+const YARN_TOP_LEVEL = 'yarn run -T --silent'
 
 const PACKAGE_MANAGER_BY_LOCKFILE = [
   ['pnpm-lock.yaml', 'pnpm'],
@@ -49,16 +48,24 @@ export function invokes(text: string, command: string): boolean {
  * The `npx`-like prefix that runs a project binary, from the package manager the nearest project
  * declares in `packageManager` or, failing that, its lockfile.
  */
-export const detectExec = Effect.fn(function* (cwd: string) {
+export const detectExec = Effect.fn(function* (cwd: string, { fromAnyWorkspace = false } = {}) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
 
   for (const dir of ancestors(path, cwd)) {
     const manifest = yield* readJson(path.join(dir, 'package.json'))
+    const packageManager =
+      typeof manifest?.packageManager === 'string' ? manifest.packageManager : undefined
+
+    // Yarn 2+ runs only the binaries of the workspace it is started in, unless told to use the root's.
+    if (fromAnyWorkspace && packageManager !== undefined && /^yarn@(?!1\.)/.test(packageManager)) {
+      return YARN_TOP_LEVEL
+    }
+
     const declared =
-      typeof manifest?.packageManager === 'string'
-        ? EXEC_BY_PACKAGE_MANAGER.get(manifest.packageManager.split('@')[0]!)
-        : undefined
+      packageManager === undefined
+        ? undefined
+        : EXEC_BY_PACKAGE_MANAGER.get(packageManager.split('@')[0]!)
 
     if (declared !== undefined) {
       return declared

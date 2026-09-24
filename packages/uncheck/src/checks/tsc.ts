@@ -175,11 +175,15 @@ const selectTsconfigs = Effect.fn(function* (
   return yield* Effect.filter(
     candidates,
     (candidate) =>
-      Effect.map(
-        loadTsconfigInputs(candidate),
-        (inputs) =>
-          inputs.configRealPaths.some((config) => jsonFiles.includes(config)) ||
-          files.some((file) => includesFile(inputs, file)),
+      Effect.flatMap(loadTsconfigInputs(candidate), (inputs) =>
+        files.some((file) => includesFile(inputs, file))
+          ? Effect.succeed(true)
+          : jsonFiles.length === 0
+            ? Effect.succeed(false)
+            : Effect.map(
+                Effect.forEach(inputs.configs, realPath, { concurrency: 'unbounded' }),
+                (configs) => configs.some((config) => jsonFiles.includes(config)),
+              ),
       ),
     { concurrency: 'unbounded' },
   )
@@ -240,7 +244,7 @@ interface InputPattern {
 }
 
 interface TsconfigInputs {
-  readonly configRealPaths: ReadonlyArray<string>
+  readonly configs: ReadonlyArray<string>
   readonly files: ReadonlyArray<string>
   readonly include: ReadonlyArray<InputPattern>
   readonly exclude: ReadonlyArray<InputPattern>
@@ -266,28 +270,30 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
   const chain = yield* loadExtendsChain(configPath, new Set())
   const leafDir = path.dirname(configPath)
 
-  let files: Specs | undefined
-  let include: Specs | undefined
-  let exclude: Specs | undefined
-  let outDir: Specs | undefined
-  let declarationDir: Specs | undefined
+  const last: Partial<
+    Record<'files' | 'include' | 'exclude' | 'outDir' | 'declarationDir', Specs>
+  > = {}
   let allowJs = false
 
   for (const { dir, raw } of chain) {
-    if (isStringArray(raw.files)) {
-      files = { dir, specs: raw.files }
-    }
+    for (const key of ['files', 'include', 'exclude'] as const) {
+      const specs = raw[key]
 
-    if (isStringArray(raw.include)) {
-      include = { dir, specs: raw.include }
-    }
-
-    if (isStringArray(raw.exclude)) {
-      exclude = { dir, specs: raw.exclude }
+      if (isStringArray(specs)) {
+        last[key] = { dir, specs }
+      }
     }
 
     if (Predicate.isObject(raw.compilerOptions)) {
       const { compilerOptions } = raw
+
+      for (const key of ['outDir', 'declarationDir'] as const) {
+        const spec = compilerOptions[key]
+
+        if (typeof spec === 'string') {
+          last[key] = { dir, specs: [spec] }
+        }
+      }
 
       if (typeof compilerOptions.allowJs === 'boolean') {
         allowJs = compilerOptions.allowJs
@@ -296,16 +302,10 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
       if (compilerOptions.checkJs === true) {
         allowJs = true
       }
-
-      if (typeof compilerOptions.outDir === 'string') {
-        outDir = { dir, specs: [compilerOptions.outDir] }
-      }
-
-      if (typeof compilerOptions.declarationDir === 'string') {
-        declarationDir = { dir, specs: [compilerOptions.declarationDir] }
-      }
     }
   }
+
+  const { files, include, exclude, outDir, declarationDir } = last
 
   const resolve = (specs: Specs | undefined): string[] =>
     specs?.specs.map((spec) =>
@@ -323,9 +323,7 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
     exclude === undefined ? [...resolve(outDir), ...resolve(declarationDir)] : resolve(exclude)
 
   return {
-    configRealPaths: yield* Effect.forEach(chain, ({ file }) => realPath(file), {
-      concurrency: 'unbounded',
-    }),
+    configs: chain.map(({ file }) => file),
     files: resolve(files),
     include: includeSpecs.flatMap((spec) => {
       const regex = compileGlob(spec, 'files')

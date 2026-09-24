@@ -1,3 +1,4 @@
+import type { PlatformError } from 'effect'
 import { Data, Effect } from 'effect'
 import { CliError } from 'effect/unstable/cli'
 
@@ -19,4 +20,8 @@ export class StopBlocked extends Data.TaggedError('StopBlocked') {}
 
 export function userError(userMessage: string): Effect.Effect<never, CliError.UserError> {
   return Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
+}
+
+export function platformMessage(error: PlatformError.PlatformError): string {
+  return error.cause instanceof Error ? error.cause.message : error.message
 }

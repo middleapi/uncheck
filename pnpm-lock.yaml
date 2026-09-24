@@ -214,24 +214,21 @@ importers:
       '@effect/platform-node':
         specifier: ^4.0.0-rc.116
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
-      '@types/picomatch':
-        specifier: ^4.0.3
-        version: 4.0.3
       effect:
         specifier: ^4.0.0-rc.116
         version: 4.0.0-rc.116
       jsonc-parser:
         specifier: ^3.3.1
         version: 3.3.1
+      minimatch:
+        specifier: ^10.2.6
+        version: 10.2.6
       oxfmt:
         specifier: ^0.68.0
         version: 0.68.0
       oxlint:
         specifier: ^1.83.0
         version: 1.83.0
-      picomatch:
-        specifier: ^4.0.7
-        version: 4.0.7
       sherif:
         specifier: ^1.13.0
         version: 1.13.0
@@ -1118,9 +1115,6 @@ packages:
   '@types/node@26.6.2':
     resolution: {integrity: sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g==}
 
-  '@types/picomatch@4.0.3':
-    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
-
   '@types/resolve@1.20.2':
     resolution: {integrity: sha512-60BCwRFOZCQhDncwQdxxeOEEkbc5dIMccYLwbxsS4TUNeVECQ/pBJ0j09mrHOl/JJvpRPGwO9SvE4nR2Nb/a4Q==}
 
@@ -1322,6 +1316,10 @@ packages:
   axios@1.20.0:
     resolution: {integrity: sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==}
 
+  balanced-match@4.0.4:
+    resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
+    engines: {node: 18 || 20 || >=22}
+
   baseline-browser-mapping@2.11.25:
     resolution: {integrity: sha512-gMmEShwwq7FJqMwvfRwvCl00v4kN+KOfJqXn+f4nrufak5gNHJOksd/60Dvjuz7sI8Y5WiSFBa8FEYr+zoyqCw==}
     engines: {node: '>=6.0.0'}
@@ -1333,6 +1331,10 @@ packages:
 
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
+
+  brace-expansion@5.0.12:
+    resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
+    engines: {node: 20 || >=22}
 
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
@@ -1799,6 +1801,10 @@ packages:
   mime-types@2.1.35:
     resolution: {integrity: sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==}
     engines: {node: '>= 0.6'}
+
+  minimatch@10.2.6:
+    resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
+    engines: {node: 18 || 20 || >=22}
 
   minipass@3.3.6:
     resolution: {integrity: sha512-DxiNidxSEK+tHG6zOIklvNOwm3hvCrbUrdtzY74U6HKTJxvIDfOUL5W5P2Ghd3DTkhhKPYGqeNUIh5qcM4YBfw==}
@@ -3019,8 +3025,6 @@ snapshots:
     dependencies:
       undici-types: 8.9.0
 
-  '@types/picomatch@4.0.3': {}
-
   '@types/resolve@1.20.2': {}
 
   '@types/ws@8.18.1':
@@ -3166,11 +3170,17 @@ snapshots:
       - debug
       - supports-color
 
+  balanced-match@4.0.4: {}
+
   baseline-browser-mapping@2.11.25: {}
 
   binary-extensions@2.3.0: {}
 
   boolbase@1.0.0: {}
+
+  brace-expansion@5.0.12:
+    dependencies:
+      balanced-match: 4.0.4
 
   braces@3.0.3:
     dependencies:
@@ -3717,6 +3727,10 @@ snapshots:
   mime-types@2.1.35:
     dependencies:
       mime-db: 1.52.0
+
+  minimatch@10.2.6:
+    dependencies:
+      brace-expansion: 5.0.12
 
   minipass@3.3.6:
     dependencies:

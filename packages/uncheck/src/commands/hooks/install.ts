@@ -5,9 +5,9 @@ import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors'
-import { readJson } from '../../files'
-import { git } from '../../git'
-import { detectExec, invokes, YARN_TOP_LEVEL } from '../../pm'
+import { readTextIfExists } from '../../files'
+import { gitLocation } from '../../git'
+import { detectExec, invokes } from '../../pm'
 import { bold, dim, green } from '../../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
 
@@ -18,8 +18,9 @@ const TIMEOUT_SECONDS = 600
 const CLAUDE_FORMAT = {
   event: 'Stop',
   timeout: 'timeout',
+  root: {},
   entry: (command: string) => ({ type: 'command', command }),
-  content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
+  group: (entry: object) => ({ hooks: [entry] }),
 }
 
 const AGENTS = [
@@ -31,8 +32,9 @@ const AGENTS = [
     path: '.cursor/hooks.json',
     event: 'stop',
     timeout: 'timeout',
+    root: { version: 1 },
     entry: (command: string) => ({ command }),
-    content: (entry: object) => ({ version: 1, hooks: { stop: [entry] } }),
+    group: (entry: object) => entry,
   },
   {
     id: 'copilot',
@@ -40,8 +42,9 @@ const AGENTS = [
     path: '.github/hooks/uncheck.json',
     event: 'agentStop',
     timeout: 'timeoutSec',
+    root: { version: 1 },
     entry: (command: string) => ({ type: 'command', bash: command, powershell: command }),
-    content: (entry: object) => ({ version: 1, hooks: { agentStop: [entry] } }),
+    group: (entry: object) => entry,
   },
 ] as const
 
@@ -68,19 +71,13 @@ export const install = Command.make(
 
     // Agents run the hook wherever they last `cd`'d, so a project below the top of the repository
     // is named relative to it.
-    const dir = (yield* git(cwd, ['rev-parse', '--show-prefix']).pipe(
+    const dir = yield* gitLocation(cwd).pipe(
+      Effect.map(({ prefix }) => prefix.replace(/\/$/, '')),
       Effect.orElseSucceed(() => ''),
-    )).replace(/\/$/, '')
-    const exec = yield* detectExec(cwd)
-    const manifest = yield* readJson(path.join(cwd, 'package.json'))
-    const launcher =
-      dir === '' &&
-      exec === 'yarn run --silent' &&
-      /^yarn@(?!1\.)/.test(String(manifest?.packageManager))
-        ? YARN_TOP_LEVEL
-        : exec
+    )
+    const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' })
     const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
-    const command = `${launcher} ${HOOK_COMMAND} ${flags.join(' ')}`
+    const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
 
     // A reinstall that cannot recognise the command would add a second hook next to it.
     if (!invokes(command, HOOK_COMMAND)) {
@@ -118,9 +115,7 @@ export const install = Command.make(
       (agent) =>
         Effect.gen(function* () {
           const file = path.join(cwd, agent.path)
-          const existing = yield* fs
-            .readFileString(file)
-            .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
+          const existing = yield* readTextIfExists(file)
           const text = existing ?? ''
           const errors: ParseError[] = []
           const current: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
@@ -139,9 +134,10 @@ export const install = Command.make(
           const hooks = Predicate.isObject(base.hooks) ? base.hooks : {}
           const entry = agent.entry(command)
           const timeout = { [agent.timeout]: TIMEOUT_SECONDS }
+          const entries = hooks[agent.event]
           const found: object[] = []
           // Copilot takes `timeout` as another name for `timeoutSec`, so either is one the user chose.
-          const replaced = mapOwnEntries(hooks[agent.event], (hook) => {
+          const replaced = mapOwnEntries(entries, (hook) => {
             found.push(hook)
             return {
               ...hook,
@@ -149,10 +145,20 @@ export const install = Command.make(
               ...('timeout' in hook || 'timeoutSec' in hook ? {} : timeout),
             }
           })
-          const next =
-            found.length > 0
-              ? { ...base, hooks: { ...hooks, [agent.event]: replaced } }
-              : mergeJson(base, agent.content({ ...entry, ...timeout }))
+          const next = {
+            ...base,
+            ...(found.length > 0 ? {} : agent.root),
+            hooks: {
+              ...hooks,
+              [agent.event]:
+                found.length > 0
+                  ? replaced
+                  : [
+                      ...(Array.isArray(entries) ? entries : []),
+                      agent.group({ ...entry, ...timeout }),
+                    ],
+            },
+          }
           const result =
             existing === undefined
               ? 'created'
@@ -204,22 +210,4 @@ function mapOwnEntries(value: unknown, f: (hook: Record<string, unknown>) => obj
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, mapOwnEntries(item, f)]),
   )
-}
-
-function mergeJson(base: unknown, addition: unknown): unknown {
-  if (Array.isArray(base) && Array.isArray(addition)) {
-    return [...base, ...addition]
-  }
-
-  if (Predicate.isObject(base) && Predicate.isObject(addition)) {
-    const merged: Record<string, unknown> = { ...base }
-
-    for (const [key, value] of Object.entries(addition)) {
-      merged[key] = key in base ? mergeJson(base[key], value) : value
-    }
-
-    return merged
-  }
-
-  return addition
 }

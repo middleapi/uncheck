@@ -3,8 +3,9 @@ import { randomBytes } from 'node:crypto'
 import { Console, Effect, FileSystem, Option, Path, Result, Schedule } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
-import { userError } from '../errors'
-import { git } from '../git'
+import { platformMessage, userError } from '../errors'
+import { readTextIfExists } from '../files'
+import { git, gitLocation } from '../git'
 import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
@@ -132,23 +133,18 @@ export const prepare = Command.make(
 
     const cwd = path.resolve(directory)
 
-    const repository = yield* git(cwd, [
-      'rev-parse',
-      '--show-toplevel',
-      '--show-prefix',
-      '--git-path',
-      'hooks',
-    ]).pipe(Effect.option)
+    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.option)
 
     // A `prepare` script runs on every install, including where there is no repository to hook.
     if (Option.isNone(repository)) {
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
-    // A newline in a path shifts the lines git prints, so they are split to land it in `inside`.
-    const [, ...printed] = repository.value.split('\n')
-    const hooks = printed.pop() ?? ''
-    const inside = printed.join('\n').replace(/\/$/, '')
+    const {
+      prefix,
+      paths: [hooks = ''],
+    } = repository.value
+    const inside = prefix.replace(/\/$/, '')
     const exec = yield* detectExec(cwd)
     const command = [
       exec,
@@ -175,13 +171,14 @@ export const prepare = Command.make(
       Effect.catchIf(
         (error) => error._tag === 'GitFailed' && error.exitCode === 129,
         () =>
-          Effect.findFirst(['global', 'system'], (scope) =>
+          Effect.findFirst(['local', 'global', 'system'], (scope) =>
             hooksPath(`--${scope}`).pipe(
               Effect.as(true),
               Effect.orElseSucceed(() => false),
             ),
           ).pipe(Effect.map(Option.getOrUndefined)),
       ),
+      Effect.map((scope) => (scope === 'local' ? undefined : scope)),
       Effect.orElseSucceed(() => undefined),
     )
 
@@ -210,9 +207,7 @@ export const prepare = Command.make(
       return yield* locked(
         target,
         Effect.gen(function* () {
-          const existing = yield* fs
-            .readFileString(target)
-            .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
+          const existing = yield* readTextIfExists(target)
 
           if (
             existing !== undefined &&
@@ -248,13 +243,7 @@ export const prepare = Command.make(
         }),
       )
     }).pipe(
-      Effect.mapError((error) =>
-        typeof error === 'string'
-          ? error
-          : error.cause instanceof Error
-            ? error.cause.message
-            : error.message,
-      ),
+      Effect.mapError((error) => (typeof error === 'string' ? error : platformMessage(error))),
       Effect.result,
     )
 

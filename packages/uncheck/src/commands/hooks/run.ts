@@ -51,16 +51,14 @@ export const run = Command.make(
 
     const start = Option.getOrElse(given, () => process.cwd())
     const top = yield* git(start, ['rev-parse', '--show-toplevel']).pipe(
-      Effect.orElseSucceed(() => undefined),
+      Effect.orElseSucceed(() => start),
     )
-    const cwd = Option.isSome(dir)
-      ? path.join(top ?? start, dir.value)
-      : Option.getOrElse(given, () => top ?? start)
+    const cwd = Option.isSome(dir) ? path.join(top, dir.value) : Option.getOrElse(given, () => top)
 
     // Checking a folder that is gone would send the agent back to fix a configuration it cannot see.
     if (Option.isSome(dir) && !(yield* fs.exists(cwd))) {
       return yield* userError(
-        `--dir=${dir.value} names nothing in ${top ?? start}, run \`uncheck hooks install\` again from the project`,
+        `--dir=${dir.value} names nothing in ${top}, run \`uncheck hooks install\` again from the project`,
       )
     }
 

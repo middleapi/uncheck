@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs'
+
 import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
-import picomatch from 'picomatch/posix'
+import { Minimatch } from 'minimatch'
 
 import { gitPaths } from './git'
 
@@ -18,7 +20,9 @@ export type ProjectFiles = Effect.Effect<
  */
 export function listProjectFiles(cwd: string): ProjectFiles {
   return gitPaths(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
-    Effect.map((files) => files.filter((file) => !file.split('/').includes('node_modules'))),
+    Effect.map((files) =>
+      files.filter((file) => !file.startsWith('node_modules/') && !file.includes('/node_modules/')),
+    ),
     Effect.catch(() => walk(cwd)),
     Effect.map((files) => [...files].sort()),
   )
@@ -36,10 +40,13 @@ export function listChangedFiles(
   never,
   ChildProcessSpawner.ChildProcessSpawner
 > {
-  return Effect.all([
-    gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
-    gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
-  ]).pipe(
+  return Effect.all(
+    [
+      gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
+      gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+    ],
+    { concurrency: 'unbounded' },
+  ).pipe(
     Effect.map(([tracked, untracked]) => [...new Set([...tracked, ...untracked])].sort()),
     Effect.orElseSucceed(() => undefined),
   )
@@ -110,10 +117,11 @@ export const resolvePaths = Effect.fn(function* (
       return (file: string) => file === target || file.startsWith(`${target}/`) || matches(file)
     })
 
-  const files = yield* Effect.filter(
-    [...matched].filter((file) => !excludes.some((excluded) => excluded(file))),
-    (file) => fs.exists(path.resolve(cwd, file)).pipe(Effect.orElseSucceed(() => false)),
-    { concurrency: 'unbounded' },
+  // One fiber per file costs far more than the check itself on a large project.
+  const files = yield* Effect.sync(() =>
+    [...matched].filter(
+      (file) => !excludes.some((excluded) => excluded(file)) && existsSync(path.resolve(cwd, file)),
+    ),
   )
 
   return { files: files.sort(), unmatched }
@@ -123,16 +131,14 @@ const GLOB_CHARACTERS = /[*?[\]{}()]/
 
 /** Dot files match too, as they do for oxfmt and for a directory given as it is. */
 function glob(pattern: string): (file: string) => boolean {
-  // Without `posix`, picomatch reads `[!a]` as "! or a", and a bare `(…)` is a regex group, so
-  // `app/(marketing)/**` would match `app/marketing`.
-  const matches = picomatch(pattern.replace(/(?<![!?*+@])\(/g, '\\('), {
+  const matcher = new Minimatch(pattern, {
     dot: true,
-    posix: true,
     nonegate: true,
+    nocomment: true,
+    platform: 'linux',
   })
 
-  // The matcher's second parameter asks for a result object, and `filter` passes an index there.
-  return (file) => matches(file)
+  return (file) => matcher.match(file)
 }
 
 export const existingFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
@@ -222,4 +228,12 @@ const walk = Effect.fn(function* (cwd: string) {
   yield* visit(root)
 
   return found
+})
+
+export const readTextIfExists = Effect.fn(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem
+
+  return yield* fs
+    .readFileString(file)
+    .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
 })

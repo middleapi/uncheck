@@ -9,7 +9,7 @@ import { Argument, Command, Flag } from 'effect/unstable/cli'
 import { oxfmt, oxlint } from '../checks/oxc'
 import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
-import { CheckFailed, userError } from '../errors'
+import { CheckFailed, platformMessage, userError } from '../errors'
 import { existingFiles, listProjectFiles, resolvePaths } from '../files'
 import { bold, dim, green, listFiles, red } from '../style'
 import { captureLines, execute } from '../tool'
@@ -134,7 +134,7 @@ export const checkPaths = Effect.fn(function* (
   const { fix, only, required, skipped, allowUnmatched = false, literal = false } = settings
   const appliesFixes = (fixes: Check['fixes']) =>
     settings.staged === true ? fixes === 'files' : fixes !== false
-  const cwd = path.resolve(settings.cwd)
+  const { cwd } = settings
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
@@ -296,9 +296,7 @@ function runCommand(command: CheckCommand, cwd: string) {
     Effect.andThen(execute(command, cwd)),
     // A tool killed by a signal (say by the OOM killer) fails `exitCode` with a PlatformError, not a code.
     Effect.catchTag('PlatformError', (error) =>
-      Console.log(red(error.cause instanceof Error ? error.cause.message : error.message)).pipe(
-        Effect.as(1),
-      ),
+      Console.log(red(platformMessage(error))).pipe(Effect.as(1)),
     ),
   )
 }

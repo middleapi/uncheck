@@ -82,6 +82,10 @@ function text(lines: string[]): string {
   return stripVTControlCharacters(lines.map((line) => `${line}\n`).join(''))
 }
 
+const cliBin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+
+const CLAUDE_STOP = JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false })
+
 const oxlintrc = { rules: { 'no-var': 'error' } }
 
 const standaloneTsconfig = {
@@ -880,6 +884,19 @@ function committed(files: Record<string, string | object>) {
   return dir
 }
 
+/** Commits `files` on a new `side` branch and goes back to the branch before it. */
+function commitOnSide(dir: string, files: Record<string, string>) {
+  gitIn(dir, 'checkout', '--quiet', '-b', 'side')
+
+  for (const [file, content] of Object.entries(files)) {
+    writeFileSync(join(dir, file), content)
+  }
+
+  gitIn(dir, 'add', '-A')
+  gitIn(dir, 'commit', '--quiet', '-m', 'side')
+  gitIn(dir, 'checkout', '--quiet', '-')
+}
+
 const clean = {
   '.oxlintrc.json': oxlintrc,
   'tsconfig.json': standaloneTsconfig,
@@ -888,12 +905,10 @@ const clean = {
 }
 
 function installPreCommitHook(dir: string, args: string, folder = '.') {
-  const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
-
   mkdirSync(join(dir, '.git/hooks'), { recursive: true })
   writeFileSync(
     join(dir, '.git/hooks/pre-commit'),
-    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${bin}" ${args}) || exit 1\n`,
+    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${cliBin}" ${args}) || exit 1\n`,
     { mode: 0o755 },
   )
 }
@@ -904,11 +919,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
     writeFileSync(join(dir, 'src/fresh.ts'), 'export const fresh = 3;\n')
 
-    const claude = await run(
-      dir,
-      ['hooks', 'run', '--fix'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
-    )
+    const claude = await run(dir, ['hooks', 'run', '--fix'], CLAUDE_STOP)
 
     expect(claude.result).toBe('blocked')
     expect(claude.stdout).toBe('')
@@ -968,11 +979,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const dir = committed(clean)
     writeFileSync(join(dir, 'README.md'), '# Project\n')
 
-    const optional = await run(
-      dir,
-      ['hooks', 'run', '--fix', '--only=tsc'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
-    )
+    const optional = await run(dir, ['hooks', 'run', '--fix', '--only=tsc'], CLAUDE_STOP)
 
     expect(optional.result).toBe('ok')
     expect(optional.stderr).toContain('○ nothing to check')
@@ -980,7 +987,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const required = await run(
       dir,
       ['hooks', 'run', '--fix', '--only=tsc', '--require=tsc'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      CLAUDE_STOP,
     )
 
     expect(required.result).toBe('blocked')
@@ -997,7 +1004,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const { result, stderr } = await run(
       dir,
       ['hooks', 'run', '--fix', '--only=oxfmt'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      CLAUDE_STOP,
     )
 
     expect(result).toBe('ok')
@@ -1013,11 +1020,9 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
       'packages/web/src/index.ts': 'export const web = 1;\n',
     })
     writeFileSync(join(dir, 'src/index.ts'), 'export const answer: string = 1;\n')
-
-    const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
-    const moved = spawnSync(process.execPath, [bin, 'hooks', 'run', '--fix'], {
+    const moved = spawnSync(process.execPath, [cliBin, 'hooks', 'run', '--fix'], {
       cwd: join(dir, 'docs'),
-      input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      input: CLAUDE_STOP,
       encoding: 'utf8',
     })
 
@@ -1030,7 +1035,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const { result, stderr } = await run(
       join(dir, 'packages/web'),
       ['hooks', 'run', '--fix', '--only=oxfmt', '--dir=packages/app'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      CLAUDE_STOP,
     )
 
     expect(result).toBe('ok')
@@ -1048,11 +1053,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer = 1\n')
 
     await expect(
-      run(
-        dir,
-        ['hooks', 'run', '--fix', '--dir=packages/gone'],
-        JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
-      ),
+      run(dir, ['hooks', 'run', '--fix', '--dir=packages/gone'], CLAUDE_STOP),
     ).rejects.toThrow(/--dir=packages\/gone names nothing/)
   })
 
@@ -1107,7 +1108,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const fast = await run(
       dir,
       ['hooks', 'run', '--fix', '--only=oxlint', '--only=oxfmt'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      CLAUDE_STOP,
     )
 
     expect(fast.result).toBe('ok')
@@ -1251,10 +1252,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('lets a merge through when the fixes turn its tree back into what HEAD has', async () => {
     const dir = committed(clean)
 
-    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
-    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
-    gitIn(dir, 'commit', '--quiet', '-am', 'side')
-    gitIn(dir, 'checkout', '--quiet', '-')
+    commitOnSide(dir, { 'src/other.ts': 'export const other = 3;\n' })
     gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
     writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
     gitIn(dir, 'add', 'src/other.ts')
@@ -1552,12 +1550,10 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('checks only the files of a merge that differ from the side merged in', async () => {
     const dir = committed(clean)
 
-    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
-    writeFileSync(join(dir, 'src/theirs.ts'), 'export const   theirs = 1\n')
-    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
-    gitIn(dir, 'add', 'src')
-    gitIn(dir, 'commit', '--quiet', '-m', 'side')
-    gitIn(dir, 'checkout', '--quiet', '-')
+    commitOnSide(dir, {
+      'src/theirs.ts': 'export const   theirs = 1\n',
+      'src/other.ts': 'export const other = 3;\n',
+    })
     gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
 
     expect((await run(dir, ['staged', '--fix', '--only=oxfmt'])).stdout).toContain(
@@ -1578,10 +1574,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('undoes or stages only what the fixes changed, so a merge can bring in files outside a sparse checkout', async () => {
     const dir = committed({ ...clean, 'lib/lib.ts': 'export const lib = 1;\n' })
 
-    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
-    writeFileSync(join(dir, 'lib/lib.ts'), 'export const lib = 2;\n')
-    gitIn(dir, 'commit', '--quiet', '-am', 'side')
-    gitIn(dir, 'checkout', '--quiet', '-')
+    commitOnSide(dir, { 'lib/lib.ts': 'export const lib = 2;\n' })
     gitIn(dir, 'sparse-checkout', 'set', 'src')
     gitIn(dir, 'merge', '--quiet', '--squash', 'side')
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
@@ -1607,10 +1600,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   it('stages fixes to a conflict a merge left outside a sparse checkout', async () => {
     const dir = committed({ ...clean, 'lib/lib.ts': 'export const lib = 1;\n' })
 
-    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
-    writeFileSync(join(dir, 'lib/lib.ts'), 'export const lib = 2;\n')
-    gitIn(dir, 'commit', '--quiet', '-am', 'side')
-    gitIn(dir, 'checkout', '--quiet', '-')
+    commitOnSide(dir, { 'lib/lib.ts': 'export const lib = 2;\n' })
     writeFileSync(join(dir, 'lib/lib.ts'), 'export const lib = 3;\n')
     gitIn(dir, 'commit', '--quiet', '-am', 'main')
     gitIn(dir, 'sparse-checkout', 'set', 'src')
@@ -1768,9 +1758,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
       writeFileSync(file, 'export const answer: number = 43;\n')
       gitIn(dir, 'add', 'src/index.ts')
       writeFileSync(file, 'export const answer: number = 43;\nexport const more = 1;\n')
-
-      const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
-      const check = spawn(process.execPath, [bin, 'staged', '--only=oxlint'], {
+      const check = spawn(process.execPath, [cliBin, 'staged', '--only=oxlint'], {
         cwd: dir,
         stdio: 'ignore',
       })
@@ -2041,11 +2029,10 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       [],
     )
     gitIn(dir, 'init', '--quiet')
-    const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
 
     const exits = await Promise.all(
       folders.map((folder) => {
-        const prepared = spawn(process.execPath, [bin, 'prepare', '--pre-commit'], {
+        const prepared = spawn(process.execPath, [cliBin, 'prepare', '--pre-commit'], {
           cwd: join(dir, folder),
           stdio: 'ignore',
         })
