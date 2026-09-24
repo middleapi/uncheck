@@ -1,58 +1,50 @@
-import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'effect'
+import { isDeepStrictEqual } from 'node:util'
+
+import { Console, Effect, FileSystem, Path, Predicate, Stdio } from 'effect'
 import { Argument, Command, Prompt } from 'effect/unstable/cli'
-import { parse as parseJsonc } from 'jsonc-parser'
+import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors'
-import { detectExec } from '../../pm'
+import { readJson, readTextIfExists } from '../../files'
+import { gitLocation } from '../../git'
+import { detectExec, invokes } from '../../pm'
 import { bold, dim, green } from '../../style'
-import {
-  cwdFlag,
-  onlyFlag,
-  requireFlag,
-  selectionArgs,
-  skipFlag,
-  validateSelection,
-} from '../uncheck'
+import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
+
+// Copilot (30 s) and CodeBuddy (60 s) kill a typecheck at their default timeout and end the turn as
+// if no hook ran.
+const TIMEOUT_SECONDS = 600
+
+const CLAUDE_FORMAT = {
+  event: 'Stop',
+  timeout: 'timeout',
+  root: {},
+  entry: (command: string) => ({ type: 'command', command }),
+  group: (entry: object) => ({ hooks: [entry] }),
+}
 
 const AGENTS = [
-  {
-    id: 'claude',
-    name: 'Claude Code',
-    path: '.claude/settings.json',
-    content: (command: string) => ({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
-    }),
-  },
-  {
-    id: 'codebuddy',
-    name: 'CodeBuddy',
-    path: '.codebuddy/settings.json',
-    content: (command: string) => ({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
-    }),
-  },
+  { id: 'claude', name: 'Claude Code', path: '.claude/settings.json', ...CLAUDE_FORMAT },
+  { id: 'codebuddy', name: 'CodeBuddy', path: '.codebuddy/settings.json', ...CLAUDE_FORMAT },
   {
     id: 'cursor',
     name: 'Cursor',
     path: '.cursor/hooks.json',
-    content: (command: string) => ({ version: 1, hooks: { stop: [{ command }] } }),
-  },
-  {
-    id: 'windsurf',
-    name: 'Windsurf',
-    path: '.windsurf/hooks.json',
-    content: (command: string) => ({
-      hooks: { post_cascade_response: [{ command, show_output: true }] },
-    }),
+    event: 'stop',
+    timeout: 'timeout',
+    root: { version: 1 },
+    entry: (command: string) => ({ command }),
+    group: (entry: object) => entry,
   },
   {
     id: 'copilot',
     name: 'GitHub Copilot',
     path: '.github/hooks/uncheck.json',
-    content: (command: string) => ({
-      version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: command, powershell: command }] },
-    }),
+    event: 'agentStop',
+    timeout: 'timeoutSec',
+    root: { version: 1 },
+    entry: (command: string) => ({ type: 'command', bash: command, powershell: command }),
+    group: (entry: object) => entry,
   },
 ] as const
 
@@ -62,9 +54,7 @@ export const install = Command.make(
   'install',
   {
     cwd: cwdFlag,
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
     agents: Argument.Literals('agents', AGENT_IDS).pipe(
       Argument.variadic(),
       Argument.withDescription(
@@ -78,6 +68,27 @@ export const install = Command.make(
     const stdio = yield* Stdio.Stdio
 
     yield* validateSelection(selection)
+
+    // Agents run the hook wherever they last `cd`'d, so a project below the top of the repository
+    // is named relative to it.
+    const dir = yield* gitLocation(cwd).pipe(
+      Effect.map(({ prefix }) => prefix.replace(/\/$/, '')),
+      Effect.orElseSucceed(() => ''),
+    )
+    const manifest = yield* readJson(path.join(cwd, 'package.json'))
+    const declaresUncheck = [manifest?.dependencies, manifest?.devDependencies].some(
+      (dependencies) => Predicate.isObject(dependencies) && 'uncheck' in dependencies,
+    )
+    const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' || !declaresUncheck })
+    const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
+    const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
+
+    // A reinstall that cannot recognise the command would add a second hook next to it.
+    if (!invokes(command, HOOK_COMMAND)) {
+      return yield* userError(
+        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-`,
+      )
+    }
 
     let selected: ReadonlyArray<(typeof AGENT_IDS)[number]> = agents
 
@@ -97,45 +108,76 @@ export const install = Command.make(
       )
     }
 
-    const exec = yield* detectExec(cwd)
-    const command = `${exec} ${HOOK_COMMAND} ${['--fix', ...selectionArgs(selection)].join(' ')}`
+    if (dir !== '' && selected.includes('copilot')) {
+      return yield* userError(
+        `Copilot reads .github/hooks only at the top of the repository, not in ${dir}: install copilot from there`,
+      )
+    }
 
-    for (const agent of AGENTS) {
-      if (!selected.includes(agent.id)) {
-        continue
-      }
+    const updates = yield* Effect.forEach(
+      AGENTS.filter((agent) => selected.includes(agent.id)),
+      (agent) =>
+        Effect.gen(function* () {
+          const file = path.join(cwd, agent.path)
+          const existing = yield* readTextIfExists(file)
+          const text = existing ?? ''
+          const errors: ParseError[] = []
+          const current: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
 
-      const file = path.join(cwd, agent.path)
-      const existing = yield* fs.readFileString(file).pipe(Effect.option)
-      let result: 'created' | 'updated' | 'unchanged'
+          if (text.trim() !== '' && (errors.length > 0 || !Predicate.isObject(current))) {
+            const [error] = errors
+            const problem =
+              error === undefined
+                ? 'is not a JSON object'
+                : `has ${printParseErrorCode(error.error)} on line ${text.slice(0, error.offset).split('\n').length}`
 
-      if (Option.isNone(existing)) {
-        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-        yield* fs.writeFileString(file, render(agent.content(command)))
-        result = 'created'
-      } else {
-        const current: unknown = parseJsonc(existing.value, undefined, { allowTrailingComma: true })
-        const base = Predicate.isObject(current) ? current : {}
-        const installed: string[] = []
-
-        const replaced = mapStrings(base, (text) => {
-          if (!text.includes(HOOK_COMMAND)) {
-            return text
+            return yield* userError(`${agent.path} ${problem}, fix it and run again`)
           }
 
-          installed.push(text)
-          return command
-        })
+          const base = Predicate.isObject(current) ? current : {}
+          const hooks = Predicate.isObject(base.hooks) ? base.hooks : {}
+          const entry = agent.entry(command)
+          const timeout = { [agent.timeout]: TIMEOUT_SECONDS }
+          const entries = hooks[agent.event]
+          const found: object[] = []
+          // Copilot takes `timeout` as another name for `timeoutSec`, so either is one the user chose.
+          const replaced = mapOwnEntries(entries, (hook) => {
+            found.push(hook)
+            return {
+              ...hook,
+              ...entry,
+              ...('timeout' in hook || 'timeoutSec' in hook ? {} : timeout),
+            }
+          })
+          const next = {
+            ...base,
+            ...(found.length > 0 ? {} : agent.root),
+            hooks: {
+              ...hooks,
+              [agent.event]:
+                found.length > 0
+                  ? replaced
+                  : [
+                      ...(Array.isArray(entries) ? entries : []),
+                      agent.group({ ...entry, ...timeout }),
+                    ],
+            },
+          }
+          const result =
+            existing === undefined
+              ? 'created'
+              : isDeepStrictEqual(next, base)
+                ? 'unchanged'
+                : 'updated'
 
-        if (installed.length === 0) {
-          yield* fs.writeFileString(file, render(mergeJson(base, agent.content(command))))
-          result = 'updated'
-        } else if (installed.every((text) => text === command)) {
-          result = 'unchanged'
-        } else {
-          yield* fs.writeFileString(file, render(replaced))
-          result = 'updated'
-        }
+          return { agent, file, next, result }
+        }),
+    )
+
+    for (const { agent, file, next, result } of updates) {
+      if (result !== 'unchanged') {
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+        yield* fs.writeFileString(file, `${JSON.stringify(next, null, 2)}\n`)
       }
 
       yield* Console.log(`${green('✔')} ${bold(agent.name)} ${dim(`${agent.path} ${result}`)}`)
@@ -154,42 +196,22 @@ export const install = Command.make(
 
 const HOOK_COMMAND = 'uncheck hooks run'
 
-function render(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`
-}
+function mapOwnEntries(value: unknown, f: (hook: Record<string, unknown>) => object): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => mapOwnEntries(item, f))
+  }
 
-function mapStrings(value: unknown, f: (text: string) => string): unknown {
-  if (typeof value === 'string') {
+  if (!Predicate.isObject(value)) {
+    return value
+  }
+
+  if (
+    Object.values(value).some((item) => typeof item === 'string' && invokes(item, HOOK_COMMAND))
+  ) {
     return f(value)
   }
 
-  if (Array.isArray(value)) {
-    return value.map((item) => mapStrings(item, f))
-  }
-
-  if (Predicate.isObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, mapStrings(item, f)]),
-    )
-  }
-
-  return value
-}
-
-function mergeJson(base: unknown, addition: unknown): unknown {
-  if (Array.isArray(base) && Array.isArray(addition)) {
-    return [...base, ...addition]
-  }
-
-  if (Predicate.isObject(base) && Predicate.isObject(addition)) {
-    const merged: Record<string, unknown> = { ...base }
-
-    for (const [key, value] of Object.entries(addition)) {
-      merged[key] = key in base ? mergeJson(base[key], value) : value
-    }
-
-    return merged
-  }
-
-  return addition
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, mapOwnEntries(item, f)]),
+  )
 }

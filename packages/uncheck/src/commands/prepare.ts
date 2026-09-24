@@ -1,20 +1,14 @@
 import { randomBytes } from 'node:crypto'
 
-import { Console, Effect, FileSystem, Option, Path } from 'effect'
+import { Console, Effect, FileSystem, Option, Path, Result, Schedule } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
-import { userError } from '../errors'
-import { git } from '../git'
-import { detectExec, EXECS } from '../pm'
+import { platformMessage, userError } from '../errors'
+import { readTextIfExists } from '../files'
+import { git, gitLocation } from '../git'
+import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
-import {
-  cwdFlag,
-  onlyFlag,
-  requireFlag,
-  selectionArgs,
-  skipFlag,
-  validateSelection,
-} from './uncheck'
+import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
 
 const HOOK_COMMAND = 'uncheck staged'
 const HEADER = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
@@ -28,6 +22,26 @@ const EXIT = ' || exit 1'
  */
 const ENTERS = /^\(cd "([^"]*)" && (.*)\)$/
 const OLD_ENTERS = /^cd "([^"]*)" && (.*)$/
+
+/** Git runs a hook through its shebang, where a line of `sh` would be a syntax error. */
+const OTHER_INTERPRETER = /^#!(?!.*\b(?:ba|da|k|z|a)?sh\b)/
+
+/** Invalid UTF-8 reads back as U+FFFD, so writing such a hook back would replace those bytes. */
+const NOT_TEXT = /[\0\uFFFD]/
+
+/** The comments and environment a hook sets up, such as its PATH, which the added line needs too. */
+const SETUP =
+  /^\s*(?:#|$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
+
+/** A setup line that runs on into the next, where the added line would join it. */
+const CONTINUES =
+  /^(?!\s*#)(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$)/
+
+/**
+ * `sh` still expands `$`, backticks and `\` between double quotes, `"` ends them, and a newline ends
+ * the hook line.
+ */
+const UNQUOTABLE = /["$`\\\n]/
 
 function hookLine(inside: string, command: string): string {
   return inside === '' ? `${command}${EXIT}` : `(cd "${inside}" && ${command})${EXIT}`
@@ -45,13 +59,7 @@ function ownLine(text: string): { readonly inside: string; readonly command: str
   const enters = ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
   const command = enters?.[2] ?? body
 
-  const runs = ['', ...EXECS.map((exec) => `${exec} `)].some((prefix) => {
-    const rest = command.startsWith(prefix) ? command.slice(prefix.length) : undefined
-
-    return rest === HOOK_COMMAND || rest?.startsWith(`${HOOK_COMMAND} `) === true
-  })
-
-  return runs ? { inside: enters?.[1] ?? '', command } : undefined
+  return invokes(command, HOOK_COMMAND) ? { inside: enters?.[1] ?? '', command } : undefined
 }
 
 // `sh` reads a script while running it, so a hook rewritten in place makes a commit already running
@@ -70,6 +78,26 @@ const replaceFile = Effect.fn(function* (file: string, content: string, mode: nu
     Effect.onError(() => Effect.ignore(fs.remove(temporary))),
   )
 })
+
+// A workspace install runs the `prepare` script of every package at once, all rewriting one hook.
+function locked<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const lock = `${file}.lock`
+
+    return yield* Effect.acquireUseRelease(
+      fs.writeFileString(lock, '', { flag: 'wx' }).pipe(
+        Effect.retry({
+          while: (error) => error.reason._tag === 'AlreadyExists',
+          schedule: Schedule.spaced('20 millis'),
+          times: 500,
+        }),
+      ),
+      () => effect,
+      () => Effect.ignore(fs.remove(lock)),
+    )
+  })
+}
 
 export const prepare = Command.make(
   'prepare',
@@ -93,9 +121,7 @@ export const prepare = Command.make(
         'Have the hook let a commit through when the fixes undo every staged change, which makes it empty',
       ),
     ),
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
   },
   Effect.fn(function* ({ cwd: directory, preCommit, fix, allowEmpty, ...selection }) {
     const fs = yield* FileSystem.FileSystem
@@ -111,17 +137,18 @@ export const prepare = Command.make(
 
     const cwd = path.resolve(directory)
 
-    const repository = yield* Effect.all([
-      git(cwd, ['rev-parse', '--show-toplevel']),
-      git(cwd, ['rev-parse', '--git-path', 'hooks']),
-    ]).pipe(Effect.option)
+    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.option)
 
     // A `prepare` script runs on every install, including where there is no repository to hook.
     if (Option.isNone(repository)) {
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
-    const [top, hooks] = repository.value.map((line) => line.trim())
+    const {
+      prefix,
+      paths: [hooks = ''],
+    } = repository.value
+    const inside = prefix.replace(/\/$/, '')
     const exec = yield* detectExec(cwd)
     const command = [
       exec,
@@ -130,35 +157,48 @@ export const prepare = Command.make(
       ...(allowEmpty ? ['--allow-empty'] : []),
       ...selectionArgs(selection),
     ].join(' ')
-
-    // Git runs hooks at the top of the working tree, so a project below it is entered first.
-    const inside = path.relative(top!, yield* fs.realPath(cwd)).replaceAll('\\', '/')
     const line = hookLine(inside, command)
 
-    // husky 9 and Vite+ point core.hooksPath at generated shims that source the `h` dispatcher, which
-    // exits before any line appended to a shim and runs the hook in the folder above instead.
-    const configured = path.resolve(cwd, hooks!)
-    const dispatched = yield* fs
-      .exists(path.join(configured, 'h'))
-      .pipe(Effect.orElseSucceed(() => false))
+    // husky 9 and Vite+ point core.hooksPath at a `_` folder of generated shims that source the `h`
+    // dispatcher, which exits before any line appended to a shim and runs the hook in the folder above.
+    const configured = path.resolve(cwd, hooks)
+    const dispatched =
+      path.basename(configured) === '_' &&
+      (yield* fs.exists(path.join(configured, 'h')).pipe(Effect.orElseSucceed(() => false)))
     const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
     const relative = path.relative(cwd, file)
     const shown = relative.startsWith('..') ? file : relative
-    const existing = yield* fs.readFileString(file).pipe(Effect.option)
-    const next = Option.isNone(existing)
-      ? `${HEADER}${line}\n`
-      : rewrite(existing.value, line, inside)
-    const result = Option.isNone(existing)
-      ? 'created'
-      : next === existing.value
-        ? 'unchanged'
-        : 'updated'
+    // A scope option turns includes off, and an included file can set a global core.hooksPath.
+    const hooksPath = (option: string) =>
+      git(cwd, ['config', option, '--includes', '--get', 'core.hooksPath'])
+    const shared = yield* hooksPath('--show-scope').pipe(
+      Effect.map((scoped) => /^(global|system)\t/.exec(scoped)?.[1]),
+      // Git before 2.26 has no --show-scope, which must not pass for an unset core.hooksPath.
+      Effect.catchIf(
+        (error) => error._tag === 'GitFailed' && error.exitCode === 129,
+        () =>
+          Effect.findFirst(['local', 'global', 'system'], (scope) =>
+            hooksPath(`--${scope}`).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+          ).pipe(Effect.map(Option.getOrUndefined)),
+      ),
+      Effect.map((scope) => (scope === 'local' ? undefined : scope)),
+      Effect.orElseSucceed(() => undefined),
+    )
 
-    const refused = yield* Effect.gen(function* () {
-      // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would leave
-      // every clone with a change to commit.
-      if (result === 'unchanged') {
-        return dispatched ? undefined : yield* fs.chmod(file, 0o755)
+    const written = yield* Effect.gen(function* () {
+      if (shared !== undefined) {
+        return yield* Effect.fail(
+          `core.hooksPath is set in the ${shared} git config, so every repository runs it`,
+        )
+      }
+
+      if (UNQUOTABLE.test(inside)) {
+        return yield* Effect.fail(
+          `sh would misread the folder name ${JSON.stringify(inside)} between double quotes`,
+        )
       }
 
       // Renaming over a symlinked hook would replace the link, not the script it points to.
@@ -167,30 +207,60 @@ export const prepare = Command.make(
         Effect.map((link) => path.resolve(path.dirname(file), link)),
         Effect.orElseSucceed(() => file),
       )
-      const mode = dispatched
-        ? yield* fs.stat(target).pipe(
-            Effect.map((info) => info.mode & 0o7777),
-            Effect.orElseSucceed(() => undefined),
-          )
-        : 0o755
 
       yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-      yield* replaceFile(target, next, mode)
+
+      return yield* locked(
+        target,
+        Effect.gen(function* () {
+          const existing = yield* readTextIfExists(target)
+
+          if (
+            existing !== undefined &&
+            (OTHER_INTERPRETER.test(existing) || NOT_TEXT.test(existing))
+          ) {
+            return yield* Effect.fail(`it is not a shell script, have it run \`${line}\` yourself`)
+          }
+
+          const next = rewrite(existing ?? HEADER, line, inside)
+          const result =
+            existing === undefined ? 'created' : next === existing ? 'unchanged' : 'updated'
+
+          // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would
+          // leave every clone with a change to commit.
+          if (result === 'unchanged') {
+            if (!dispatched) {
+              yield* fs.chmod(target, 0o755)
+            }
+
+            return result
+          }
+
+          const mode = dispatched
+            ? yield* fs.stat(target).pipe(
+                Effect.map((info) => info.mode & 0o7777),
+                Effect.orElseSucceed(() => undefined),
+              )
+            : 0o755
+
+          yield* replaceFile(target, next, mode)
+
+          return result
+        }),
+      )
     }).pipe(
-      Effect.as(undefined),
-      Effect.catch((error) =>
-        Effect.succeed(error.cause instanceof Error ? error.cause.message : error.message),
-      ),
+      Effect.mapError((error) => (typeof error === 'string' ? error : platformMessage(error))),
+      Effect.result,
     )
 
-    // `prepare` runs on every install, so an unwritable hook says so rather than failing the install.
-    if (refused !== undefined) {
+    // `prepare` runs on every install, so a hook it may not write says so rather than failing it.
+    if (Result.isFailure(written)) {
       return yield* Console.log(
-        `${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${refused}`)}`,
+        `${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${written.failure}`)}`,
       )
     }
 
-    yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${result}`)}`)
+    yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${written.success}`)}`)
     yield* Console.log('')
     yield* Console.log(
       `${dim('The hook runs')} ${bold(command)} ${dim('before every commit, `git commit --no-verify` skips it.')}`,
@@ -198,14 +268,14 @@ export const prepare = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    'Set up git hooks, for the `prepare` script in package.json so every clone gets them: --pre-commit writes the hook that runs `uncheck staged --fix`',
+    'Set up git hooks, for the `prepare` script in package.json (`postinstall` with Yarn 2+) so every clone gets them: --pre-commit writes the hook that runs `uncheck staged --fix`',
   ),
 )
 
 /**
- * Puts `line` into an existing hook, so running `prepare` again is idempotent: the line for this
- * directory is updated wherever it sits, duplicates of it are dropped, and everything else is kept,
- * including the commands of other packages in the same repository and whatever the user added.
+ * Puts `line` into a hook, so running `prepare` again is idempotent: the line for this directory is
+ * updated wherever it sits, duplicates of it are dropped, and everything else is kept, including the
+ * commands of other packages in the same repository and whatever the user added.
  */
 function rewrite(hook: string, line: string, inside: string): string {
   let placed = false
@@ -228,13 +298,28 @@ function rewrite(hook: string, line: string, inside: string): string {
 
     return [line]
   })
-  const next = lines.join('\n')
 
   if (placed) {
-    return next
+    return lines.join('\n')
   }
 
-  const kept = next === '' || next.endsWith('\n') ? next : `${next}\n`
+  // Added after the commands of the hook, the line would set its exit status in their place, and
+  // would never run after an `exec` or `exit`. Before the hook's setup it would miss the PATH a GUI
+  // client lacks, and run twice with husky 8, whose sourced `_/husky.sh` runs the hook again.
+  const after = lines.reduce(
+    (last, text, index) => (ownLine(text) === undefined ? last : index + 1),
+    0,
+  )
+  const at =
+    after > 0 ? after : lines.findIndex((text) => !SETUP.test(text) || CONTINUES.test(text))
 
-  return `${kept}${line}\n`
+  if (at === -1) {
+    const kept = lines.join('\n')
+
+    return `${kept === '' || kept.endsWith('\n') ? kept : `${kept}\n`}${line}\n`
+  }
+
+  lines.splice(at, 0, line)
+
+  return lines.join('\n')
 }

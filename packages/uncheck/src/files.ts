@@ -1,14 +1,14 @@
-import { posix } from 'node:path'
+import { existsSync } from 'node:fs'
 
-import type { PlatformError } from 'effect'
 import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
+import { Minimatch } from 'minimatch'
 
 import { gitPaths } from './git'
 
 export type ProjectFiles = Effect.Effect<
   ReadonlyArray<string>,
-  PlatformError.PlatformError,
+  never,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 >
 
@@ -20,7 +20,8 @@ export type ProjectFiles = Effect.Effect<
  */
 export function listProjectFiles(cwd: string): ProjectFiles {
   return gitPaths(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
-    Effect.map((files) => files.filter((file) => !file.split('/').includes('node_modules'))),
+    // git lists a linked node_modules as one file, which a `node_modules/` ignore rule misses.
+    Effect.map((files) => files.filter((file) => !/(?:^|\/)node_modules(?:\/|$)/.test(file))),
     Effect.catch(() => walk(cwd)),
     Effect.map((files) => [...files].sort()),
   )
@@ -38,18 +39,16 @@ export function listChangedFiles(
   never,
   ChildProcessSpawner.ChildProcessSpawner
 > {
-  return Effect.all([
-    gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
-    gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
-  ]).pipe(
+  return Effect.all(
+    [
+      gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
+      gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+    ],
+    { concurrency: 'unbounded' },
+  ).pipe(
     Effect.map(([tracked, untracked]) => [...new Set([...tracked, ...untracked])].sort()),
     Effect.orElseSucceed(() => undefined),
   )
-}
-
-export interface ResolvedPaths {
-  readonly files: ReadonlyArray<string>
-  readonly unmatched: ReadonlyArray<string>
 }
 
 /** Turns the given paths into the project files they name, so every tool checks the same files. */
@@ -63,15 +62,12 @@ export const resolvePaths = Effect.fn(function* (
   const relative = (pattern: string) =>
     path.relative(cwd, path.resolve(cwd, pattern)).replaceAll('\\', '/')
 
+  const includes = patterns.filter((pattern) => !pattern.startsWith('!'))
   const matched = new Set<string>()
   const unmatched: string[] = []
   let universe: ReadonlyArray<string> | undefined
 
-  for (const pattern of patterns) {
-    if (pattern.startsWith('!')) {
-      continue
-    }
-
+  for (const pattern of includes.length > 0 ? includes : ['.']) {
     const target = relative(pattern)
 
     // An existing path is taken as it is, so `app/[id].ts` names that file rather than a glob.
@@ -85,59 +81,84 @@ export const resolvePaths = Effect.fn(function* (
       continue
     }
 
-    if (kind === 'Directory') {
-      universe ??= yield* projectFiles
-      const inside =
-        target === '' ? universe : universe.filter((file) => file.startsWith(`${target}/`))
-
-      for (const file of inside) {
-        matched.add(file)
-      }
-
-      if (inside.length === 0) {
-        unmatched.push(pattern)
-      }
-
+    if (kind !== 'Directory' && !GLOB_CHARACTERS.test(target)) {
+      unmatched.push(pattern)
       continue
     }
 
-    if (GLOB_CHARACTERS.test(target)) {
-      universe ??= yield* projectFiles
-      const hits = universe.filter((file) => posix.matchesGlob(file, target))
+    universe ??= yield* projectFiles
+    const hits = universe.filter(
+      kind === 'Directory'
+        ? (file) => target === '' || file.startsWith(`${target}/`)
+        : glob(target),
+    )
 
-      for (const hit of hits) {
-        matched.add(hit)
-      }
-
-      if (hits.length === 0) {
-        unmatched.push(pattern)
-      }
-
-      continue
+    for (const hit of hits) {
+      matched.add(hit)
     }
 
-    unmatched.push(pattern)
+    if (hits.length === 0) {
+      unmatched.push(pattern)
+    }
   }
 
   const excludes = patterns
     .filter((pattern) => pattern.startsWith('!'))
-    .map((pattern) => relative(pattern.slice(1)))
-  const excluded = (file: string) =>
-    excludes.some(
-      (exclude) =>
-        file === exclude || file.startsWith(`${exclude}/`) || posix.matchesGlob(file, exclude),
-    )
+    .map((pattern) => {
+      const target = relative(pattern.slice(1))
 
-  const files = yield* Effect.filter(
-    [...matched].filter((file) => !excluded(file)),
-    (file) => fs.exists(path.resolve(cwd, file)).pipe(Effect.orElseSucceed(() => false)),
-    { concurrency: 'unbounded' },
+      if (target === '') {
+        return () => true
+      }
+
+      const matches = glob(target)
+
+      return (file: string) => file === target || file.startsWith(`${target}/`) || matches(file)
+    })
+
+  // One fiber per file costs far more than the check itself on a large project.
+  const files = yield* Effect.sync(() =>
+    [...matched].filter(
+      (file) => !excludes.some((excluded) => excluded(file)) && existsSync(path.resolve(cwd, file)),
+    ),
   )
 
   return { files: files.sort(), unmatched }
 })
 
 const GLOB_CHARACTERS = /[*?[\]{}()]/
+
+/** Dot files match too, as they do for oxfmt and for a directory given as it is. */
+function glob(pattern: string): (file: string) => boolean {
+  // Level 2 drops the `.` of `src/{.,deep}/*.ts` as path.matchesGlob does.
+  const matcher = new Minimatch(pattern, {
+    dot: true,
+    nonegate: true,
+    nocomment: true,
+    optimizationLevel: 2,
+    platform: 'linux',
+  })
+
+  return (file) => matcher.match(file)
+}
+
+export const existingFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+
+  // A concurrent `Effect.filter` keeps files in the order their checks finish, not the given one.
+  const isFile = yield* Effect.forEach(
+    files,
+    (file) =>
+      fs.stat(path.resolve(cwd, file)).pipe(
+        Effect.map((info) => info.type === 'File'),
+        Effect.orElseSucceed(() => false),
+      ),
+    { concurrency: 64 },
+  )
+
+  return files.filter((_, index) => isFile[index])
+})
 
 export function ancestors(path: Path.Path, from: string): string[] {
   const dirs = [path.resolve(from)]
@@ -173,10 +194,8 @@ const walk = Effect.fn(function* (cwd: string) {
   const root = path.resolve(cwd)
   const found: string[] = []
 
-  const visit = Effect.fn(function* (
-    dir: string,
-  ): Effect.fn.Return<void, PlatformError.PlatformError> {
-    const names = yield* fs.readDirectory(dir)
+  const visit = Effect.fn(function* (dir: string): Effect.fn.Return<void> {
+    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
 
     yield* Effect.forEach(names, (name) => visitEntry(dir, name), {
       concurrency: 16,
@@ -184,10 +203,7 @@ const walk = Effect.fn(function* (cwd: string) {
     })
   })
 
-  const visitEntry = Effect.fn(function* (
-    dir: string,
-    name: string,
-  ): Effect.fn.Return<void, PlatformError.PlatformError> {
+  const visitEntry = Effect.fn(function* (dir: string, name: string): Effect.fn.Return<void> {
     if (name.startsWith('.') || SKIPPED_DIRECTORIES.has(name)) {
       return
     }
@@ -196,7 +212,15 @@ const walk = Effect.fn(function* (cwd: string) {
     const info = yield* fs.stat(full).pipe(Effect.orElseSucceed(() => undefined))
 
     if (info?.type === 'Directory') {
-      yield* visit(full)
+      // `stat` follows links, and a link back up the tree would be walked forever.
+      const linked = yield* fs.readLink(full).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      )
+
+      if (!linked) {
+        yield* visit(full)
+      }
     } else if (info?.type === 'File') {
       found.push(path.relative(root, full).replaceAll('\\', '/'))
     }
@@ -205,4 +229,12 @@ const walk = Effect.fn(function* (cwd: string) {
   yield* visit(root)
 
   return found
+})
+
+export const readTextIfExists = Effect.fn(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem
+
+  return yield* fs
+    .readFileString(file)
+    .pipe(Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed(undefined)))
 })

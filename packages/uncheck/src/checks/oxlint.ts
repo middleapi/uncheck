@@ -6,7 +6,7 @@ import type { Check } from '../types'
 
 export const oxlint: Check = {
   name: 'oxlint',
-  fixes: true,
+  fixes: 'files',
   plan: Effect.fn(function* ({ cwd, fix, files }) {
     const bin = yield* resolveBin('oxlint', cwd)
 

@@ -18,6 +18,10 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
 
     return `git ${shown.join(' ')}`
   }
+
+  get summary(): string {
+    return `${this.command} failed: ${this.stderr}`
+  }
 }
 
 /**
@@ -68,10 +72,33 @@ export function git(
   args: ReadonlyArray<string>,
   env?: Readonly<Record<string, string>>,
 ) {
-  return Effect.map(gitBytes(cwd, args, env), (output) => output.toString())
+  return Effect.map(gitBytes(cwd, args, env), (output) => output.toString().replace(/\n$/, ''))
 }
 
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */
 export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
   return Effect.map(git(cwd, args), (output) => output.split('\0').filter((entry) => entry !== ''))
+}
+
+/**
+ * The folder of `cwd` below the top of the working tree, `''` or ending in `/`, and where git keeps
+ * each of `names`. Fails outside a working tree.
+ */
+export function gitLocation(cwd: string, names: ReadonlyArray<string> = []) {
+  const args = [
+    'rev-parse',
+    '--is-inside-work-tree',
+    '--show-prefix',
+    ...names.flatMap((name) => ['--git-path', name]),
+  ]
+
+  return Effect.flatMap(git(cwd, args), (output) => {
+    // A newline in the prefix shifts the lines git prints, so they are counted from both ends.
+    const [inside, ...lines] = output.split('\n')
+    const paths = lines.splice(lines.length - names.length)
+
+    return inside === 'true'
+      ? Effect.succeed({ prefix: lines.join('\n'), paths })
+      : Effect.fail(new GitFailed({ args, exitCode: 128, stderr: 'not inside a work tree' }))
+  })
 }

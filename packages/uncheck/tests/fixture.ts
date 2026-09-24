@@ -40,6 +40,11 @@ export function fixture(
   }
 
   for (const [relative, content] of Object.entries({ ...defaults, ...files })) {
+    // The tools are symlinks into the shared pnpm store, so writing below one corrupts every install.
+    if (tools.some((tool) => relative.startsWith(`node_modules/${tool}/`))) {
+      throw new Error(`${relative} would be written into the installed ${relative.split('/')[1]}`)
+    }
+
     mkdirSync(dirname(join(dir, relative)), { recursive: true })
     writeFileSync(
       join(dir, relative),

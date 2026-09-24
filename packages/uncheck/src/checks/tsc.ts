@@ -1,20 +1,22 @@
 import { posix } from 'node:path'
 import process from 'node:process'
 
-import { Data, Effect, FileSystem, Graph, Option, Path, Predicate } from 'effect'
+import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
 
 import { CannotCheck, NothingToCheck } from '../errors'
 import { ancestors, readJson } from '../files'
 import { resolveBin } from '../tool'
-import type { Check, CheckCommand } from '../types'
+import type { Check } from '../types'
 
 /**
- * TypeScript replaces this token in `extends`, `references` and file specs with the folder of the
- * leaf config.
+ * TypeScript replaces this token at the start of `files`, `include`, `exclude` and path-valued
+ * compiler options with the folder of the leaf config, but never in `extends` or `references`.
  */
 // oxlint-disable-next-line no-template-curly-in-string
 const CONFIG_DIR = '${configDir}'
+
+const NOT_COVERED = 'no tsconfig.json covers the given files'
 
 export const tsc: Check = {
   name: 'tsc',
@@ -25,12 +27,10 @@ export const tsc: Check = {
 
     const targets = files
       ?.map((file) => path.resolve(cwd, file))
-      .filter((file) => CHECKABLE_EXTENSIONS.has(posix.extname(file).toLowerCase()))
+      .filter((file) => CHECKABLE_EXTENSIONS.has(posix.extname(file)))
 
     if (targets !== undefined && targets.length === 0) {
-      return yield* Effect.fail(
-        new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }),
-      )
+      return yield* Effect.fail(new NothingToCheck({ reason: NOT_COVERED }))
     }
 
     const [typescript, tsconfigs] = yield* Effect.all(
@@ -54,12 +54,25 @@ export const tsc: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'no tsconfig.json found' }))
     }
 
-    const selected = targets === undefined ? tsconfigs : yield* selectTsconfigs(tsconfigs, targets)
+    const references = new Map<string, ReadonlyArray<string>>()
+    const queue = [...tsconfigs]
+
+    while (queue.length > 0) {
+      const configPath = queue.pop()!
+
+      if (!references.has(configPath) && (yield* fs.exists(configPath))) {
+        const referencedConfigs = yield* readReferences(configPath)
+
+        references.set(configPath, referencedConfigs)
+        queue.push(...referencedConfigs)
+      }
+    }
+
+    const selected =
+      targets === undefined ? tsconfigs : yield* selectTsconfigs([...references.keys()], targets)
 
     if (selected.length === 0) {
-      return yield* Effect.fail(
-        new NothingToCheck({ reason: 'no tsconfig.json covers the given files' }),
-      )
+      return yield* Effect.fail(new NothingToCheck({ reason: NOT_COVERED }))
     }
 
     if (typescript === undefined) {
@@ -70,144 +83,121 @@ export const tsc: Check = {
       )
     }
 
-    const bin = typescript
+    const shown = (configPath: string) => path.relative(cwd, configPath)
+    const referenced = new Set([...references.values()].flat())
+    const members = [...references]
+      .filter(
+        ([configPath, referencedConfigs]) =>
+          referencedConfigs.length > 0 || referenced.has(configPath),
+      )
+      .map(([configPath]) => configPath)
+      .sort()
 
-    const projects = new Map<string, TsProject>()
-    const queue = [...selected]
+    const cycle = findCycle(members, references)
 
-    while (queue.length > 0) {
-      const configPath = queue.pop()!
+    if (cycle !== undefined) {
+      return yield* Effect.fail(
+        new CannotCheck({
+          reason: `circular project references between ${cycle.map(shown).join(', ')}`,
+        }),
+      )
+    }
 
-      if (!projects.has(configPath)) {
-        const references = yield* readReferences(configPath)
+    const dependents = new Map<string, string[]>()
 
-        projects.set(configPath, { path: configPath, references })
-        queue.push(...references)
+    for (const [dependent, referencedConfigs] of references) {
+      for (const configPath of referencedConfigs) {
+        const known = dependents.get(configPath) ?? []
+
+        known.push(dependent)
+        dependents.set(configPath, known)
       }
     }
 
-    const plan = yield* planTypecheck(selected, projects).pipe(
-      Effect.catchTag('CircularProjectReferences', (error) => {
-        const cycle = error.projects
-          .map((configPath) => path.relative(cwd, configPath) || '.')
-          .join(', ')
-        return Effect.fail(
-          new CannotCheck({ reason: `circular project references between ${cycle}` }),
-        )
-      }),
-    )
+    const affected = new Set(selected)
 
-    const commands: CheckCommand[] = []
-
-    if (plan.build.length > 0) {
-      commands.push({
-        bin,
-        args: ['-b', ...plan.build.map((configPath) => path.relative(cwd, configPath) || '.')],
-      })
+    for (const configPath of affected) {
+      for (const dependent of dependents.get(configPath) ?? []) {
+        affected.add(dependent)
+      }
     }
 
-    for (const configPath of plan.check) {
-      commands.push({ bin, args: ['-p', path.relative(cwd, configPath) || '.'] })
-    }
+    const roots = members.filter((member) => !referenced.has(member) && affected.has(member))
+    const standalone = selected.filter((configPath) => !members.includes(configPath)).sort()
 
-    return commands
+    return [
+      ...(roots.length > 0 ? [{ bin: typescript, args: ['-b', ...roots.map(shown)] }] : []),
+      // `-p` would emit JavaScript next to sources that set no `noEmit`.
+      ...standalone.map((configPath) => ({
+        bin: typescript,
+        args: ['-p', shown(configPath), '--noEmit'],
+        parallel: true,
+      })),
+    ]
   }),
 }
 
-const CHECKABLE_EXTENSIONS = new Set([
-  '.ts',
-  '.tsx',
-  '.mts',
-  '.cts',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.json',
-])
-
-interface TsProject {
-  readonly path: string
-  readonly references: ReadonlyArray<string>
-}
-
-interface TypecheckPlan {
-  readonly build: ReadonlyArray<string>
-  readonly check: ReadonlyArray<string>
-}
-
-class CircularProjectReferences extends Data.TaggedError('CircularProjectReferences')<{
-  readonly projects: ReadonlyArray<string>
-}> {}
-
-/**
- * Splits the discovered `entries` into what `tsc -b` must build and what `tsc -p` can check on its own.
- *
- * Every project that has references, or is referenced, belongs to the build graph.
- * Only the graph's roots are passed to `tsc -b` since it builds their references transitively.
- */
-function planTypecheck(
-  entries: ReadonlyArray<string>,
-  projects: ReadonlyMap<string, TsProject>,
-): Effect.Effect<TypecheckPlan, CircularProjectReferences> {
-  const members = new Set<string>()
-  const referenced = new Set<string>()
-
-  for (const project of projects.values()) {
-    if (project.references.length === 0) {
-      continue
+function findCycle(
+  nodes: ReadonlyArray<string>,
+  references: ReadonlyMap<string, ReadonlyArray<string>>,
+  trail: ReadonlyArray<string> = [],
+  done = new Set<string>(),
+): ReadonlyArray<string> | undefined {
+  for (const node of nodes) {
+    if (trail.includes(node)) {
+      return trail.slice(trail.indexOf(node))
     }
 
-    members.add(project.path)
+    if (!done.has(node)) {
+      const cycle = findCycle(references.get(node) ?? [], references, [...trail, node], done)
 
-    for (const reference of project.references) {
-      members.add(reference)
-      referenced.add(reference)
-    }
-  }
+      done.add(node)
 
-  const nodes = [...members].sort()
-
-  const graph = Graph.directed<string, null>((mutable) => {
-    const indexes = new Map(nodes.map((node) => [node, Graph.addNode(mutable, node)] as const))
-
-    for (const node of nodes) {
-      for (const reference of projects.get(node)?.references ?? []) {
-        Graph.addEdge(mutable, indexes.get(node)!, indexes.get(reference)!, null)
+      if (cycle !== undefined) {
+        return cycle
       }
     }
-  })
-
-  const cycle = Graph.findCycle(graph)
-
-  if (Option.isSome(cycle)) {
-    // The path closes on its first node, drop that repetition.
-    const path = cycle.value.path
-      .slice(0, -1)
-      .map((index) => Option.getOrThrow(Graph.getNode(graph, index)))
-
-    return Effect.fail(new CircularProjectReferences({ projects: path }))
   }
 
-  return Effect.succeed({
-    build: nodes.filter((member) => !referenced.has(member)),
-    check: entries.filter((entry) => !members.has(entry)).sort(),
-  })
+  return undefined
 }
 
-function selectTsconfigs(
-  entries: ReadonlyArray<string>,
+const selectTsconfigs = Effect.fn(function* (
+  candidates: ReadonlyArray<string>,
   files: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
-  return Effect.filter(
-    entries,
-    (entry) =>
-      Effect.map(loadTsconfigInputs(entry), (inputs) =>
-        files.some((file) => includesFile(inputs, file)),
+) {
+  const jsonFiles = yield* Effect.forEach(
+    files.filter((file) => posix.extname(file) === '.json'),
+    realPath,
+    { concurrency: 'unbounded' },
+  )
+
+  return yield* Effect.filter(
+    candidates,
+    (candidate) =>
+      Effect.flatMap(loadTsconfigInputs(candidate), (inputs) =>
+        files.some((file) => includesFile(inputs, file))
+          ? Effect.succeed(true)
+          : jsonFiles.length === 0
+            ? Effect.succeed(false)
+            : Effect.map(
+                Effect.forEach(inputs.configs, realPath, { concurrency: 'unbounded' }),
+                (configs) => configs.some((config) => jsonFiles.includes(config)),
+              ),
       ),
     { concurrency: 'unbounded' },
-  ).pipe(Effect.map((selected) => [...selected].sort()))
-}
+  )
+})
+
+/**
+ * A shared config is often extended through a workspace package linked into `node_modules`, while
+ * the given files name it by its real path.
+ */
+const realPath = Effect.fn(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem
+
+  return yield* fs.realPath(file).pipe(Effect.orElseSucceed(() => file))
+})
 
 interface RawTsconfig {
   readonly extends?: unknown
@@ -242,7 +232,7 @@ const readReferences = Effect.fn(function* (configPath: string) {
       return []
     }
 
-    const target = path.resolve(configDir, reference.path.replaceAll(CONFIG_DIR, configDir))
+    const target = path.resolve(configDir, reference.path.replaceAll('\\', '/'))
 
     return [target.endsWith('.json') ? target : path.join(target, 'tsconfig.json')]
   })
@@ -254,7 +244,7 @@ interface InputPattern {
 }
 
 interface TsconfigInputs {
-  readonly dir: string
+  readonly configs: ReadonlyArray<string>
   readonly files: ReadonlyArray<string>
   readonly include: ReadonlyArray<InputPattern>
   readonly exclude: ReadonlyArray<InputPattern>
@@ -263,7 +253,7 @@ interface TsconfigInputs {
 
 const TS_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts']
 const JS_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs']
-const DEFAULT_EXCLUDES = ['node_modules', 'bower_components', 'jspm_packages']
+const CHECKABLE_EXTENSIONS = new Set([...TS_EXTENSIONS, ...JS_EXTENSIONS, '.json'])
 
 interface Specs {
   readonly dir: string
@@ -280,27 +270,30 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
   const chain = yield* loadExtendsChain(configPath, new Set())
   const leafDir = path.dirname(configPath)
 
-  let files: Specs | undefined
-  let include: Specs | undefined
-  let exclude: Specs | undefined
-  let outDir: Specs | undefined
+  const last: Partial<
+    Record<'files' | 'include' | 'exclude' | 'outDir' | 'declarationDir', Specs>
+  > = {}
   let allowJs = false
 
   for (const { dir, raw } of chain) {
-    if (isStringArray(raw.files)) {
-      files = { dir, specs: raw.files }
-    }
+    for (const key of ['files', 'include', 'exclude'] as const) {
+      const specs = raw[key]
 
-    if (isStringArray(raw.include)) {
-      include = { dir, specs: raw.include }
-    }
-
-    if (isStringArray(raw.exclude)) {
-      exclude = { dir, specs: raw.exclude }
+      if (isStringArray(specs)) {
+        last[key] = { dir, specs }
+      }
     }
 
     if (Predicate.isObject(raw.compilerOptions)) {
       const { compilerOptions } = raw
+
+      for (const key of ['outDir', 'declarationDir'] as const) {
+        const spec = compilerOptions[key]
+
+        if (typeof spec === 'string') {
+          last[key] = { dir, specs: [spec] }
+        }
+      }
 
       if (typeof compilerOptions.allowJs === 'boolean') {
         allowJs = compilerOptions.allowJs
@@ -309,16 +302,16 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
       if (compilerOptions.checkJs === true) {
         allowJs = true
       }
-
-      if (typeof compilerOptions.outDir === 'string') {
-        outDir = { dir, specs: [compilerOptions.outDir] }
-      }
     }
   }
 
+  const { files, include, exclude, outDir, declarationDir } = last
+
   const resolve = (specs: Specs | undefined): string[] =>
     specs?.specs.map((spec) =>
-      path.resolve(specs.dir, spec.replaceAll(CONFIG_DIR, leafDir)).replaceAll('\\', '/'),
+      path
+        .resolve(specs.dir, spec.replaceAll('\\', '/').replaceAll(CONFIG_DIR, leafDir))
+        .replaceAll('\\', '/'),
     ) ?? []
 
   const includeSpecs =
@@ -327,15 +320,10 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
       : resolve(include)
 
   const excludeSpecs =
-    exclude === undefined
-      ? [
-          ...DEFAULT_EXCLUDES.map((name) => `${leafDir.replaceAll('\\', '/')}/${name}`),
-          ...resolve(outDir),
-        ]
-      : resolve(exclude)
+    exclude === undefined ? [...resolve(outDir), ...resolve(declarationDir)] : resolve(exclude)
 
   return {
-    dir: leafDir,
+    configs: chain.map(({ file }) => file),
     files: resolve(files),
     include: includeSpecs.flatMap((spec) => {
       const regex = compileGlob(spec, 'files')
@@ -353,7 +341,7 @@ function includesFile(inputs: TsconfigInputs, file: string): boolean {
     return true
   }
 
-  const extension = posix.extname(target).toLowerCase()
+  const extension = posix.extname(target)
   const json = extension === '.json'
 
   if (!json && !inputs.extensions.has(extension)) {
@@ -371,19 +359,22 @@ function includesFile(inputs: TsconfigInputs, file: string): boolean {
 }
 
 interface ChainEntry {
+  readonly file: string
   readonly dir: string
   readonly raw: RawTsconfig
 }
 
+/**
+ * Only a config that is still being resolved closes a cycle: like tsc, a base that two `extends`
+ * branches share applies in both.
+ */
 const loadExtendsChain = Effect.fn(function* (
   configPath: string,
-  visited: Set<string>,
+  resolving: ReadonlySet<string>,
 ): Effect.fn.Return<ReadonlyArray<ChainEntry>, never, FileSystem.FileSystem | Path.Path> {
-  if (visited.has(configPath)) {
+  if (resolving.has(configPath)) {
     return []
   }
-
-  visited.add(configPath)
 
   const path = yield* Path.Path
   const raw = yield* readTsconfig(configPath)
@@ -392,17 +383,17 @@ const loadExtendsChain = Effect.fn(function* (
     typeof raw.extends === 'string' ? [raw.extends] : isStringArray(raw.extends) ? raw.extends : []
 
   const bases = yield* Effect.forEach(specs, (spec) =>
-    resolveExtends(spec, dir).pipe(
+    resolveExtends(spec.replaceAll('\\', '/'), dir).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed<ReadonlyArray<ChainEntry>>([]),
-          onSome: (base) => loadExtendsChain(base, visited),
+          onSome: (base) => loadExtendsChain(base, new Set(resolving).add(configPath)),
         }),
       ),
     ),
   )
 
-  return [...bases.flat(), { dir, raw }]
+  return [...bases.flat(), { file: configPath, dir, raw }]
 })
 
 const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
@@ -467,6 +458,7 @@ const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
 })
 
 const IMPLICIT_EXCLUDE = '(?!(?:node_modules|bower_components|jspm_packages)(?:/|$))'
+const FILES_ASTERISK = '(?:[^./]|(?:\\.(?!min\\.js$))?)*'
 const FILES_DOUBLE_ASTERISK = `(?:/${IMPLICIT_EXCLUDE}[^/.][^/]*)*?`
 const EXCLUDE_DOUBLE_ASTERISK = '(?:/.+?)?'
 const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin'
@@ -475,7 +467,8 @@ const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'd
  * Turns an absolute `include` or `exclude` pattern into the regular expression `tsc` uses for it:
  * `*` and `?` never cross a directory, a leading wildcard never matches a dot file, `**` skips
  * `node_modules` and dot folders, and a pattern without extension or wildcard means the whole folder.
- * `exclude` patterns also match every path below them.
+ * In `include`, `*` never matches a name ending in `.min.js`; `exclude` patterns also match every
+ * path below them.
  */
 function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | undefined {
   const components = pattern.replace(/\/+$/, '').split('/')
@@ -517,21 +510,21 @@ function filesComponent(component: string): string {
   let rest = component
 
   if (rest.startsWith('*')) {
-    source += '(?:[^./][^/]*)?'
+    source += `(?:[^./]${FILES_ASTERISK})?`
     rest = rest.slice(1)
   } else if (rest.startsWith('?')) {
     source += '[^./]'
     rest = rest.slice(1)
   }
 
-  source += wildcards(rest)
+  source += wildcards(rest, FILES_ASTERISK)
 
   return /[*?]/.test(component) ? IMPLICIT_EXCLUDE + source : source
 }
 
-function wildcards(component: string): string {
+function wildcards(component: string, asterisk = '[^/]*'): string {
   return component.replace(/[.*?+^${}()|[\]\\]/g, (char) =>
-    char === '*' ? '[^/]*' : char === '?' ? '[^/]' : `\\${char}`,
+    char === '*' ? asterisk : char === '?' ? '[^/]' : `\\${char}`,
   )
 }
 

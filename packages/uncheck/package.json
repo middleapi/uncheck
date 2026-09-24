@@ -55,6 +55,7 @@
     "@effect/platform-node": "^4.0.0-rc.116",
     "effect": "^4.0.0-rc.116",
     "jsonc-parser": "^3.3.1",
+    "minimatch": "^10.2.6",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
     "sherif": "^1.13.0",
@@ -62,8 +63,8 @@
   },
   "peerDependencies": {
     "oxfmt": "*",
-    "oxlint": "*",
-    "sherif": "*",
+    "oxlint": ">=1.60.0",
+    "sherif": ">=1.10.0",
     "typescript": "*"
   },
   "peerDependenciesMeta": {
@@ -81,6 +82,6 @@
     }
   },
   "engines": {
-    "node": ">=22.20 <23 || >=24.8"
+    "node": ">=22.20"
   }
 }

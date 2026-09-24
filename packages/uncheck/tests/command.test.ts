@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import {
@@ -81,6 +82,10 @@ function text(lines: string[]): string {
   return stripVTControlCharacters(lines.map((line) => `${line}\n`).join(''))
 }
 
+const cliBin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+
+const CLAUDE_STOP = JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false })
+
 const oxlintrc = { rules: { 'no-var': 'error' } }
 
 const standaloneTsconfig = {
@@ -132,7 +137,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     ])
     expect(check.stdout).toContain('no-var')
     expect(check.stdout).toContain('✘ 2 of 3 checks failed: oxlint, oxfmt')
-    expect(check.stdout).toContain('run `uncheck --fix` to apply oxlint and oxfmt fixes')
+    expect(check.stdout).toContain('rerun with `--fix` to apply oxlint and oxfmt fixes')
 
     const fix = await run(dir, ['--fix'])
 
@@ -156,7 +161,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     ).toBe(true)
     expect(clean.stdout).toContain('▶ oxlint\n')
     expect(clean.stdout).toContain('▶ oxfmt --check\n')
-    expect(clean.stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(clean.stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(clean.stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)')
   })
 
@@ -170,12 +175,17 @@ describe('uncheck', { timeout: 120_000 }, () => {
       'packages/app/tsconfig.json': compositeTsconfig(['../lib']),
       'packages/app/src/index.ts':
         'import { answer } from "../../lib/src/index";\n\nexport const double: number = answer * 2;\n',
+      'tools/tsconfig.json': standaloneTsconfig,
+      'tools/src/index.ts':
+        'import { answer } from "../../packages/lib/dist/index";\n\nexport const tool: number = answer;\n',
     })
 
     const { result, stdout } = await run(dir)
 
     expect(result).toBe('ok')
-    expect(stdout).toContain('▶ tsc -b packages/app/tsconfig.json\n▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain(
+      '▶ tsc -b packages/app/tsconfig.json\n▶ tsc -p tools/tsconfig.json --noEmit\n▶ tsc -p tsconfig.json --noEmit\n',
+    )
     expect(stdout).not.toContain('packages/lib/tsconfig.json')
 
     writeFileSync(join(dir, 'packages/lib/src/index.ts'), 'export const answer: number = "42";\n')
@@ -191,6 +201,27 @@ describe('uncheck', { timeout: 120_000 }, () => {
     ])
     expect(broken.stdout).toContain('packages/lib/src/index.ts')
     expect(broken.stdout).toContain('TS2322')
+  })
+
+  it('checks standalone projects side by side but prints their output in plan order', async () => {
+    const dir = fixture(
+      {
+        'packages/a/tsconfig.json': standaloneTsconfig,
+        'packages/a/src/index.ts': 'export const a: number = 1;\n',
+        'packages/b/tsconfig.json': standaloneTsconfig,
+        'packages/b/src/index.ts': 'export const b: number = "2";\n',
+        'packages/c/tsconfig.json': standaloneTsconfig,
+        'packages/c/src/index.ts': 'export const c: number = 3;\n',
+      },
+      ['typescript'],
+    )
+
+    const { result, stdout } = await run(dir, ['--only=tsc'])
+
+    expect(result).toBeInstanceOf(CheckFailed)
+    expect(stdout).toMatch(
+      /▶ tsc -p packages\/a\/tsconfig\.json --noEmit\n▶ tsc -p packages\/b\/tsconfig\.json --noEmit\npackages\/b\/src\/index\.ts[^▶]*TS2322[^▶]*▶ tsc -p packages\/c\/tsconfig\.json --noEmit\n✘ tsc failed/,
+    )
   })
 
   it('forwards paths to oxlint and oxfmt and narrows tsc to the projects containing them', async () => {
@@ -228,7 +259,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
       '▶ oxlint --fix --no-error-on-unmatched-pattern scripts/hello.ts\n',
     )
     expect(single.stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern scripts/hello.ts\n')
-    expect(single.stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(single.stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(single.stdout).not.toContain('tsc -b')
 
     const all = await run(dir, ['.'])
@@ -285,7 +316,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const walked = await run(plain)
 
     expect(walked.result).toBeInstanceOf(CheckFailed)
-    expect(walked.stdout).toContain('▶ tsc -p ignored/tsconfig.json\n')
+    expect(walked.stdout).toContain('▶ tsc -p ignored/tsconfig.json --noEmit\n')
 
     const repo = fixture(files, ['typescript'])
     execFileSync('git', ['init', '--quiet'], { cwd: repo })
@@ -350,6 +381,33 @@ describe('uncheck', { timeout: 120_000 }, () => {
       'nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
     )
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'fails a check whose tool is killed and still runs the others',
+    async () => {
+      const dir = fixture(
+        {
+          '.oxlintrc.json': oxlintrc,
+          'tsconfig.json': standaloneTsconfig,
+          'src/index.ts': 'export const answer: number = 42;\n',
+          'node_modules/oxlint/package.json': { name: 'oxlint', bin: { oxlint: 'bin.js' } },
+          'node_modules/oxlint/bin.js': "process.kill(process.pid, 'SIGKILL')\n",
+        },
+        ['oxfmt', 'typescript'],
+      )
+
+      const { result, stdout } = await run(dir)
+
+      expect(result).toBeInstanceOf(CheckFailed)
+      expect(stdout).toContain(
+        "▶ oxlint\nProcess interrupted due to receipt of signal: 'SIGKILL'\n",
+      )
+      expect(stdout).toContain('✘ oxlint failed')
+      expect(stdout).toContain('✔ tsc passed')
+      expect(stdout).toContain('✘ 1 of 3 checks failed: oxlint')
+      expect(stdout).not.toContain('PlatformError')
+    },
+  )
 })
 
 /** A workspace sherif has something to say about, with its install step off so the fix stays offline. */
@@ -403,7 +461,7 @@ describe('uncheck sherif', { timeout: 120_000 }, () => {
     expect(check.stdout).toContain('unordered-dependencies')
     expect(check.stdout).toContain('multiple-dependency-versions')
     expect(check.stdout).toContain(
-      '✘ 1 of 1 checks failed: sherif\n  run `uncheck --fix` to apply sherif fixes',
+      '✘ 1 of 1 checks failed: sherif\n  rerun with `--fix` to apply sherif fixes',
     )
 
     const fix = await run(dir, ['--fix'])
@@ -555,14 +613,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
   it('writes stop hook configs for the named agents through the detected package manager', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
 
-    const { result, stdout } = await run(dir, [
-      'hooks',
-      'install',
-      'claude',
-      'cursor',
-      'windsurf',
-      'copilot',
-    ])
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'claude', 'cursor', 'copilot'])
 
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ Claude Code .claude/settings.json created\n')
@@ -572,18 +623,17 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     const hook = 'pnpm exec uncheck hooks run --fix'
 
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: hook, timeout: 600 }] }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.cursor/hooks.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { stop: [{ command: hook }] },
-    })
-    expect(JSON.parse(readFileSync(join(dir, '.windsurf/hooks.json'), 'utf8'))).toEqual({
-      hooks: { post_cascade_response: [{ command: hook, show_output: true }] },
+      hooks: { stop: [{ command: hook, timeout: 600 }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: hook, powershell: hook }] },
+      hooks: {
+        agentStop: [{ type: 'command', bash: hook, powershell: hook, timeoutSec: 600 }],
+      },
     })
 
     const again = await run(dir, ['hooks', 'install', 'claude'])
@@ -599,25 +649,43 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
         '.claude/settings.json': `{
   // keep me
   "permissions": { "allow": ["Bash(pnpm test)"] },
-  "hooks": { "PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo done" }] }] },
+  "hooks": {
+    "PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo done" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "notify-send done" }] }],
+  },
 }
 `,
       },
       [],
     )
+    const hook = 'npx --no uncheck hooks run --fix --require=tsc --skip=sherif'
 
-    const { result, stdout } = await run(dir, ['hooks', 'install', 'codebuddy', 'claude'])
+    await expect(run(dir, ['hooks', 'install', '--require=tsc'])).rejects.toThrow(
+      'Pass the agents to configure, for example: uncheck hooks install claude codebuddy cursor copilot',
+    )
+
+    const { result, stdout } = await run(dir, [
+      'hooks',
+      'install',
+      'codebuddy',
+      'claude',
+      '--require=tsc',
+      '--skip=sherif',
+    ])
 
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
     expect(stdout).toContain('✔ CodeBuddy .codebuddy/settings.json created\n')
-    expect(stdout).toContain('npx uncheck hooks run --fix')
+    expect(stdout).toContain(hook)
 
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
       permissions: { allow: ['Bash(pnpm test)'] },
       hooks: {
         PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo done' }] }],
-        Stop: [{ hooks: [{ type: 'command', command: 'npx uncheck hooks run --fix' }] }],
+        Stop: [
+          { hooks: [{ type: 'command', command: 'notify-send done' }] },
+          { hooks: [{ type: 'command', command: hook, timeout: 600 }] },
+        ],
       },
     })
   })
@@ -630,7 +698,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
 
   it('writes the check flags into the hook command and updates an installed hook', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'yarn.lock': '' }, [])
-    const fast = 'yarn uncheck hooks run --fix --only=oxlint --only=oxfmt'
+    const fast = 'yarn run --silent uncheck hooks run --fix --only=oxlint --only=oxfmt'
 
     const { result, stdout } = await run(dir, [
       'hooks',
@@ -644,26 +712,183 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(fast)
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: fast }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: fast, timeout: 600 }] }] },
     })
 
-    const all = 'yarn uncheck hooks run --fix'
+    const all = 'yarn run --silent uncheck hooks run --fix'
     const again = await run(dir, ['hooks', 'install', 'claude', 'copilot'])
 
     expect(again.result).toBe('ok')
     expect(again.stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
     expect(again.stdout).toContain('✔ GitHub Copilot .github/hooks/uncheck.json updated\n')
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: all }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: all, timeout: 600 }] }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: all, powershell: all }] },
+      hooks: {
+        agentStop: [{ type: 'command', bash: all, powershell: all, timeoutSec: 600 }],
+      },
     })
 
     await expect(
       run(dir, ['hooks', 'install', 'claude', '--only=oxlint', '--skip=oxlint']),
     ).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
+  })
+
+  it('updates its own entry in place and leaves strings that only mention the hook alone', async () => {
+    const mentions = {
+      _comment: 'the Stop hook runs npx uncheck hooks run --fix',
+      permissions: { allow: ['Bash(npx uncheck hooks run:*)'] },
+      hooks: {
+        PostToolUse: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: 'cd packages/web && npx uncheck hooks run --fix && notify',
+              },
+              { type: 'command', command: 'npx uncheck hooks run --fix --only=oxfmt' },
+            ],
+          },
+        ],
+      },
+    }
+    const dir = fixture({ 'package.json': '{}\n', '.claude/settings.json': mentions }, [])
+    const hook = { type: 'command', command: 'npx --no uncheck hooks run --fix', timeout: 600 }
+
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      ...mentions,
+      hooks: { ...mentions.hooks, Stop: [{ hooks: [hook] }] },
+    })
+
+    const older = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: 'npx uncheck hooks run --fix --only=oxlint',
+                statusMessage: 'Checking',
+              },
+            ],
+          },
+        ],
+      },
+    }
+
+    writeFileSync(join(dir, '.claude/settings.json'), JSON.stringify(older))
+
+    const upgraded = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(upgraded.stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ ...hook, statusMessage: 'Checking' }] }] },
+    })
+
+    const again = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+
+    writeFileSync(
+      join(dir, '.claude/settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ ...hook, timeout: 1800 }] }] } }),
+    )
+    mkdirSync(join(dir, '.github/hooks'), { recursive: true })
+    writeFileSync(
+      join(dir, '.github/hooks/uncheck.json'),
+      JSON.stringify({ hooks: { agentStop: [{ bash: hook.command, timeout: 1800 }] } }),
+    )
+
+    const raised = await run(dir, ['hooks', 'install', 'claude', 'copilot'])
+
+    expect(raised.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+    expect(
+      JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8')).hooks.agentStop,
+    ).toEqual([{ type: 'command', bash: hook.command, powershell: hook.command, timeout: 1800 }])
+  })
+
+  it('runs the root binary of a Yarn 2+ workspace from wherever the agent moved to', async () => {
+    const dir = fixture({ 'package.json': { packageManager: 'yarn@4.18.0' }, 'yarn.lock': '' }, [])
+
+    const { stdout } = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(stdout).toContain('The hook runs yarn run -T --silent uncheck hooks run --fix ')
+
+    const again = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+
+    const workspace = committed({
+      'package.json': { packageManager: 'yarn@4.18.0', devDependencies: { uncheck: '*' } },
+      'yarn.lock': '',
+      'packages/app/package.json': { name: 'app' },
+      'packages/lib/package.json': { name: 'lib', devDependencies: { uncheck: '*' } },
+    })
+
+    expect(
+      (await run(join(workspace, 'packages/app'), ['hooks', 'install', 'claude'])).stdout,
+    ).toContain('The hook runs yarn run -T --silent uncheck hooks run --fix --dir=packages/app ')
+    expect(
+      (await run(join(workspace, 'packages/lib'), ['hooks', 'install', 'claude'])).stdout,
+    ).toContain('The hook runs yarn run --silent uncheck hooks run --fix --dir=packages/lib ')
+  })
+
+  it('refuses a config that is not a JSON object and leaves every file as it is', async () => {
+    const broken = '{\n  permissions: { "deny": ["Read(.env)"] },\n  "model": "opus"\n}\n'
+    const dir = fixture(
+      { 'package.json': '{}\n', '.cursor/hooks.json': broken, '.github/hooks/uncheck.json': '[]' },
+      [],
+    )
+
+    await expect(run(dir, ['hooks', 'install', 'claude', 'cursor'])).rejects.toThrow(
+      '.cursor/hooks.json has InvalidSymbol on line 2, fix it and run again',
+    )
+    await expect(run(dir, ['hooks', 'install', 'copilot'])).rejects.toThrow(
+      '.github/hooks/uncheck.json is not a JSON object',
+    )
+    expect(readFileSync(join(dir, '.cursor/hooks.json'), 'utf8')).toBe(broken)
+    expect(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8')).toBe('[]')
+    expect(existsSync(join(dir, '.claude/settings.json'))).toBe(false)
+
+    writeFileSync(join(dir, '.cursor/hooks.json'), '\n')
+
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'cursor'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Cursor .cursor/hooks.json updated\n')
+  })
+
+  it('names the directory below the top of the repository in the hook command', async () => {
+    const dir = committed({ 'package.json': '{}\n', 'packages/web/package.json': '{}\n' })
+    mkdirSync(join(dir, 'packages/my web'))
+
+    const { result, stdout } = await run(join(dir, 'packages/web'), ['hooks', 'install', 'claude'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Claude Code .claude/settings.json created\n')
+    expect(
+      JSON.parse(readFileSync(join(dir, 'packages/web/.claude/settings.json'), 'utf8')),
+    ).toMatchObject({
+      hooks: {
+        Stop: [{ hooks: [{ command: 'npx --no uncheck hooks run --fix --dir=packages/web' }] }],
+      },
+    })
+
+    const again = await run(join(dir, 'packages/web'), ['hooks', 'install', 'claude'])
+
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+    await expect(run(join(dir, 'packages/my web'), ['hooks', 'install', 'claude'])).rejects.toThrow(
+      /cannot name packages\/my web/,
+    )
+    await expect(run(join(dir, 'packages/web'), ['hooks', 'install', 'copilot'])).rejects.toThrow(
+      /Copilot reads \.github\/hooks only at the top of the repository/,
+    )
   })
 })
 
@@ -690,6 +915,19 @@ function committed(files: Record<string, string | object>) {
   return dir
 }
 
+/** Commits `files` on a new `side` branch and goes back to the branch before it. */
+function commitOnSide(dir: string, files: Record<string, string>) {
+  gitIn(dir, 'checkout', '--quiet', '-b', 'side')
+
+  for (const [file, content] of Object.entries(files)) {
+    writeFileSync(join(dir, file), content)
+  }
+
+  gitIn(dir, 'add', '-A')
+  gitIn(dir, 'commit', '--quiet', '-m', 'side')
+  gitIn(dir, 'checkout', '--quiet', '-')
+}
+
 const clean = {
   '.oxlintrc.json': oxlintrc,
   'tsconfig.json': standaloneTsconfig,
@@ -698,12 +936,10 @@ const clean = {
 }
 
 function installPreCommitHook(dir: string, args: string, folder = '.') {
-  const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
-
   mkdirSync(join(dir, '.git/hooks'), { recursive: true })
   writeFileSync(
     join(dir, '.git/hooks/pre-commit'),
-    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${bin}" ${args}) || exit 1\n`,
+    `#!/bin/sh\n(cd "${folder}" && "${process.execPath}" "${cliBin}" ${args}) || exit 1\n`,
     { mode: 0o755 },
   )
 }
@@ -714,18 +950,14 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
     writeFileSync(join(dir, 'src/fresh.ts'), 'export const fresh = 3;\n')
 
-    const claude = await run(
-      dir,
-      ['hooks', 'run', '--fix'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
-    )
+    const claude = await run(dir, ['hooks', 'run', '--fix'], CLAUDE_STOP)
 
     expect(claude.result).toBe('blocked')
     expect(claude.stdout).toBe('')
     expect(claude.stderr).toContain(
       '▶ oxlint --fix --no-error-on-unmatched-pattern src/fresh.ts src/index.ts\n',
     )
-    expect(claude.stderr).toContain('▶ tsc -p tsconfig.json\n')
+    expect(claude.stderr).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(claude.stderr).toContain('TS2322')
     expect(claude.stderr).toContain('✘ 1 of 3 checks failed: tsc')
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
@@ -739,7 +971,9 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     )
 
     expect(continuing.result).toBe('ok')
-    expect(continuing.stdout).toBe('')
+    expect(JSON.parse(continuing.stdout)).toEqual({
+      systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+    })
     expect(continuing.stderr).toContain('TS2322')
 
     const cursor = await run(
@@ -762,15 +996,116 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(copilot.result).toBe('ok')
     expect(JSON.parse(copilot.stdout)).toMatchObject({ decision: 'block' })
 
-    const windsurf = await run(
+    const copilotInClaudeFormat = await run(
       dir,
       ['hooks', 'run', '--fix'],
-      JSON.stringify({ agent_action_name: 'post_cascade_response' }),
+      JSON.stringify({ hook_event_name: 'Stop', stop_reason: 'end_turn', stop_hook_active: false }),
     )
 
-    expect(windsurf.result).toBe('ok')
-    expect(windsurf.stdout).toBe('')
-    expect(windsurf.stderr).toContain('TS2322')
+    expect(copilotInClaudeFormat.result).toBe('ok')
+    expect(JSON.parse(copilotInClaudeFormat.stdout)).toMatchObject({ decision: 'block' })
+  })
+
+  it('passes a change no selected check covers, unless that check is required', async () => {
+    const dir = committed(clean)
+    writeFileSync(join(dir, 'README.md'), '# Project\n')
+
+    const optional = await run(dir, ['hooks', 'run', '--fix', '--only=tsc'], CLAUDE_STOP)
+
+    expect(optional.result).toBe('ok')
+    expect(optional.stderr).toContain('○ nothing to check')
+
+    const required = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=tsc', '--require=tsc'],
+      CLAUDE_STOP,
+    )
+
+    expect(required.result).toBe('blocked')
+  })
+
+  it('never takes a deleted file for a pattern that matches its neighbours', async () => {
+    const dir = committed({
+      ...clean,
+      'app/[id].ts': 'export const id = 1;\n',
+      'app/i.ts': 'export const   i = 1\n',
+    })
+    rmSync(join(dir, 'app/[id].ts'))
+
+    const { result, stderr } = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=oxfmt'],
+      CLAUDE_STOP,
+    )
+
+    expect(result).toBe('ok')
+    expect(stderr).not.toContain('app/i.ts')
+    expect(readFileSync(join(dir, 'app/i.ts'), 'utf8')).toBe('export const   i = 1\n')
+  })
+
+  it('checks the top of the repository wherever the agent moved to, or the directory in --dir', async () => {
+    const dir = committed({
+      ...clean,
+      'docs/guide.md': '# Guide\n',
+      'packages/app/src/index.ts': 'export const app = 1;\n',
+      'packages/web/src/index.ts': 'export const web = 1;\n',
+    })
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: string = 1;\n')
+    const moved = spawnSync(process.execPath, [cliBin, 'hooks', 'run', '--fix'], {
+      cwd: join(dir, 'docs'),
+      input: CLAUDE_STOP,
+      encoding: 'utf8',
+    })
+
+    expect(moved.status).toBe(2)
+    expect(moved.stderr).toContain('TS2322')
+
+    writeFileSync(join(dir, 'packages/app/src/index.ts'), 'export const   app = 2\n')
+    writeFileSync(join(dir, 'packages/web/src/index.ts'), 'export const   web = 2\n')
+
+    const { result, stderr } = await run(
+      join(dir, 'packages/web'),
+      ['hooks', 'run', '--fix', '--only=oxfmt', '--dir=packages/app'],
+      CLAUDE_STOP,
+    )
+
+    expect(result).toBe('ok')
+    expect(stderr).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(readFileSync(join(dir, 'packages/app/src/index.ts'), 'utf8')).toBe(
+      'export const app = 2;\n',
+    )
+    expect(readFileSync(join(dir, 'packages/web/src/index.ts'), 'utf8')).toBe(
+      'export const   web = 2\n',
+    )
+  })
+
+  it('reports a --dir that names nothing instead of sending the agent back', async () => {
+    const dir = committed(clean)
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer = 1\n')
+
+    await expect(
+      run(dir, ['hooks', 'run', '--fix', '--dir=packages/gone'], CLAUDE_STOP),
+    ).rejects.toThrow(/--dir=packages\/gone names nothing/)
+  })
+
+  it('leaves a Cursor turn the user stopped, or that failed, alone', async () => {
+    const dir = committed(clean)
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: string = 1\n')
+
+    for (const status of ['aborted', 'error']) {
+      const { result, stdout } = await run(
+        dir,
+        ['hooks', 'run', '--fix'],
+        JSON.stringify({ hook_event_name: 'stop', status, loop_count: 0 }),
+      )
+
+      expect(result).toBe('ok')
+      expect(stdout).toBe('')
+    }
+
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const   answer: string = 1\n',
+    )
   })
 
   it('stays silent when nothing changed and passes quietly when the changes are clean', async () => {
@@ -804,7 +1139,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     const fast = await run(
       dir,
       ['hooks', 'run', '--fix', '--only=oxlint', '--only=oxfmt'],
-      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      CLAUDE_STOP,
     )
 
     expect(fast.result).toBe('ok')
@@ -852,7 +1187,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     )
     expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
     expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
-    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)\n')
     expect(stdout).toContain(
       '✔ staged the fixes to src/index.ts\n○ unstaged changes of src/index.ts restored\n',
@@ -872,7 +1207,8 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
   })
 
   it('undoes the fixes when they conflict with unstaged changes, so nothing is lost', async () => {
-    const dir = committed(clean)
+    const far = Array.from({ length: 30 }, (_, index) => `export const f${index} = ${index};\n`)
+    const dir = committed({ ...clean, 'src/far.ts': far.join('') })
 
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
     gitIn(dir, 'add', 'src/index.ts')
@@ -880,6 +1216,12 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
     writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
     gitIn(dir, 'add', 'src/other.ts')
+    writeFileSync(join(dir, 'src/far.ts'), ['export const f0   =   0;\n', ...far.slice(1)].join(''))
+    gitIn(dir, 'add', 'src/far.ts')
+    writeFileSync(
+      join(dir, 'src/far.ts'),
+      ['export const f0   =   0;\n', ...far.slice(1, -1), 'export const f29 = 30;\n'].join(''),
+    )
 
     await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(
       /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
@@ -930,21 +1272,22 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(allowed.stdout).toContain('✔ staged the fixes to src/other.ts\n')
     expect(gitIn(dir, 'diff', '--cached', '--name-only')).toBe('')
 
-    const unborn = fixture(clean)
+    const unborn = fixture({ ...clean, 'src/index.ts': 'export const   answer: number = 42\n' })
 
     gitIn(unborn, 'init', '--quiet')
     gitIn(unborn, 'add', '.')
 
-    expect((await run(unborn, ['staged', '--fix'])).result).toBe('ok')
+    const first = await run(unborn, ['staged', '--fix'])
+
+    expect(first.result).toBe('ok')
+    expect(first.stdout).toContain('✔ staged the fixes to src/index.ts\n')
+    expect(gitIn(unborn, 'show', ':src/index.ts')).toBe('export const answer: number = 42;\n')
   })
 
   it('lets a merge through when the fixes turn its tree back into what HEAD has', async () => {
     const dir = committed(clean)
 
-    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
-    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
-    gitIn(dir, 'commit', '--quiet', '-am', 'side')
-    gitIn(dir, 'checkout', '--quiet', '-')
+    commitOnSide(dir, { 'src/other.ts': 'export const other = 3;\n' })
     gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
     writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
     gitIn(dir, 'add', 'src/other.ts')
@@ -1151,7 +1494,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     writeFileSync(join(dir, 'src/index.ts'), 'export const answer: number = 44;\n')
     writeFileSync(join(dir, 'src/other.ts'), 'export const other = 4;\n')
 
-    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout \[2 paths\] failed/)
+    await expect(run(dir, ['staged'])).rejects.toThrow(/git checkout-index -f \[2 paths\] failed/)
 
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
       'export const answer: number = 44;\n',
@@ -1159,6 +1502,69 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const other = 4;\n')
     expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\nMM src/other.ts\n')
     expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+  })
+
+  it('keeps the unstaged changes aside and stops the commit when they cannot be put back', async () => {
+    const rest = 'export const b = 1;\nexport const c = 1;\nexport const d = 1;\nexport const e ='
+    const dir = committed({ ...clean, 'src/index.ts': `export const a = 1;\n${rest} 1;\n` })
+
+    mkdirSync(join(dir, '.git/info'), { recursive: true })
+    writeFileSync(join(dir, '.git/info/attributes'), 'src/index.ts filter=once\n')
+    gitIn(dir, 'config', 'filter.once.clean', 'cat')
+    gitIn(
+      dir,
+      'config',
+      'filter.once.smudge',
+      'if [ -e .git/smudged ]; then exit 1; else touch .git/smudged; cat; fi',
+    )
+    gitIn(dir, 'config', 'filter.once.required', 'true')
+    writeFileSync(join(dir, 'src/index.ts'), `export const   a = 2\n${rest} 1;\n`)
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), `export const   a = 2\n${rest} 2;\n`)
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxfmt'])).rejects.toThrow(
+      /The unstaged changes of src\/index\.ts could not be put back/,
+    )
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe(`export const a = 2;\n${rest} 1;\n`)
+    expect(readFileSync(join(dir, '.git/uncheck-unstaged/src/index.ts'), 'utf8')).toBe(
+      `export const   a = 2\n${rest} 2;\n`,
+    )
+  })
+
+  it('keeps an edit saved to a partially staged file while the checks run', async () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `export const v${index} = ${index};\n`)
+    const dir = fixture(
+      {
+        'src/lines.ts': lines.join(''),
+        'node_modules/oxlint/package.json': { name: 'oxlint', bin: 'lint.js' },
+        'node_modules/oxlint/lint.js':
+          "const fs = require('node:fs')\nfs.writeFileSync('src/lines.ts', fs.readFileSync('src/lines.ts', 'utf8').replace('v15 = 15', 'v15 = 1500'))\n",
+      },
+      [],
+    )
+    const file = join(dir, 'src/lines.ts')
+    const staged = ['export const v0 = 100;\n', ...lines.slice(1)]
+
+    gitIn(dir, 'init', '--quiet')
+    gitIn(dir, 'add', '.')
+    gitIn(dir, 'commit', '--quiet', '-m', 'init')
+
+    writeFileSync(file, staged.join(''))
+    gitIn(dir, 'add', 'src/lines.ts')
+    writeFileSync(file, [...staged.slice(0, -1), 'export const v29 = 2900;\n'].join(''))
+
+    const { result } = await run(dir, ['staged', '--only=oxlint'])
+
+    expect(result).toBe('ok')
+    expect(readFileSync(file, 'utf8')).toBe(
+      [
+        ...staged.slice(0, 15),
+        'export const v15 = 1500;\n',
+        ...staged.slice(16, -1),
+        'export const v29 = 2900;\n',
+      ].join(''),
+    )
+    expect(gitIn(dir, 'show', ':src/lines.ts')).toBe(staged.join(''))
   })
 
   it('stages the fixes in the index `git commit <paths>` leaves behind, not only in its own', () => {
@@ -1211,6 +1617,268 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
       'export const answer: number = 44;\n',
     )
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'checks a symlink turned into a file, never what a staged symlink points to',
+    async () => {
+      const dir = committed(clean)
+
+      symlinkSync('other.ts', join(dir, 'src/link.ts'))
+      gitIn(dir, 'add', 'src/link.ts')
+      gitIn(dir, 'commit', '--quiet', '-m', 'link')
+      rmSync(join(dir, 'src/link.ts'))
+      writeFileSync(join(dir, 'src/link.ts'), 'export const   link = 1\n')
+      symlinkSync('other.ts', join(dir, 'src/alias.ts'))
+      gitIn(dir, 'add', 'src/link.ts', 'src/alias.ts')
+      writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 3\n')
+
+      const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+      expect(result).toBe('ok')
+      expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/link.ts\n')
+      expect(stdout).toContain('✔ staged the fixes to src/link.ts\n')
+      expect(gitIn(dir, 'show', ':src/link.ts')).toBe('export const link = 1;\n')
+      expect(readFileSync(join(dir, 'src/other.ts'), 'utf8')).toBe('export const   other = 3\n')
+      expect(gitIn(dir, 'status', '--porcelain')).toBe(
+        'A  src/alias.ts\nT  src/link.ts\n M src/other.ts\n',
+      )
+    },
+  )
+
+  it('checks only the files of a merge that differ from the side merged in', async () => {
+    const dir = committed(clean)
+
+    commitOnSide(dir, {
+      'src/theirs.ts': 'export const   theirs = 1\n',
+      'src/other.ts': 'export const other = 3;\n',
+    })
+    gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
+
+    expect((await run(dir, ['staged', '--fix', '--only=oxfmt'])).stdout).toContain(
+      '○ nothing to check, every staged file comes from the branch being merged in\n',
+    )
+
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 4\n')
+    gitIn(dir, 'add', 'src/other.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/other.ts\n')
+    expect(gitIn(dir, 'show', ':src/other.ts')).toBe('export const other = 4;\n')
+    expect(gitIn(dir, 'show', ':src/theirs.ts')).toBe('export const   theirs = 1\n')
+  })
+
+  it('undoes or stages only what the fixes changed, so a merge can bring in files outside a sparse checkout', async () => {
+    const dir = committed({ ...clean, 'lib/lib.ts': 'export const lib = 1;\n' })
+
+    commitOnSide(dir, { 'lib/lib.ts': 'export const lib = 2;\n' })
+    gitIn(dir, 'sparse-checkout', 'set', 'src')
+    gitIn(dir, 'merge', '--quiet', '--squash', 'side')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxfmt'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
+    )
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  lib/lib.ts\nMM src/index.ts\n')
+
+    gitIn(dir, 'add', 'src/index.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
+    expect(existsSync(join(dir, 'lib'))).toBe(false)
+    expect(gitIn(dir, 'show', ':lib/lib.ts')).toBe('export const lib = 2;\n')
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const answer: number = 43;\n')
+  })
+
+  it('stages fixes to a conflict a merge left outside a sparse checkout', async () => {
+    const dir = committed({ ...clean, 'lib/lib.ts': 'export const lib = 1;\n' })
+
+    commitOnSide(dir, { 'lib/lib.ts': 'export const lib = 2;\n' })
+    writeFileSync(join(dir, 'lib/lib.ts'), 'export const lib = 3;\n')
+    gitIn(dir, 'commit', '--quiet', '-am', 'main')
+    gitIn(dir, 'sparse-checkout', 'set', 'src')
+    spawnSync('git', ['-c', 'user.name=u', '-c', 'user.email=u@e', 'merge', '--quiet', 'side'], {
+      cwd: dir,
+    })
+    writeFileSync(join(dir, 'lib/lib.ts'), 'export const   lib = 4\n')
+    gitIn(dir, 'add', '--sparse', 'lib/lib.ts')
+
+    const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':lib/lib.ts')).toBe('export const lib = 4;\n')
+  })
+
+  it('undoes fixes to a file git keeps with CRLF line endings rather than turn them to LF', async () => {
+    const lines = 'export const a = 1;\r\nexport const b = 2;\r\n'
+    const dir = committed({ ...clean, '.oxlintrc.json': oxlintrc, 'src/legacy.ts': lines })
+    const file = join(dir, 'src/legacy.ts')
+    const unstaged = `var c = 3;\r\n${lines}export { c };\r\nexport const d = 4;\r\n`
+
+    writeFileSync(join(dir, '.gitattributes'), '* text=auto\n')
+    gitIn(dir, 'add', '.gitattributes')
+    gitIn(dir, 'commit', '--quiet', '-m', 'attributes')
+    writeFileSync(file, `var c = 3;\r\n${lines}export { c };\r\n`)
+    gitIn(dir, 'add', 'src/legacy.ts')
+    writeFileSync(file, unstaged)
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxlint'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/legacy\.ts and were undone/,
+    )
+    expect(readFileSync(file, 'utf8')).toBe(unstaged)
+  })
+
+  it('sees no change in a file git keeps with CRLF line endings under text=auto', async () => {
+    const lines = 'export const a = 1;\r\nexport const b = 2;\r\n'
+    const dir = committed({ ...clean, 'src/legacy.ts': lines })
+    const file = join(dir, 'src/legacy.ts')
+
+    writeFileSync(join(dir, '.gitattributes'), '* text=auto\n')
+    gitIn(dir, 'add', '.gitattributes')
+    gitIn(dir, 'commit', '--quiet', '-m', 'attributes')
+    gitIn(dir, 'config', 'core.safecrlf', 'true')
+    writeFileSync(file, `${lines}export const c = 3;\r\n`)
+    gitIn(dir, 'add', 'src/legacy.ts')
+    writeFileSync(file, `${lines}export const c = 3;\r\nexport const d = 4;\r\n`)
+
+    const { result } = await run(dir, ['staged', '--only=oxlint'])
+
+    expect(result).toBe('ok')
+    expect(readFileSync(file, 'utf8')).toBe(
+      `${lines}export const c = 3;\r\nexport const d = 4;\r\n`,
+    )
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/legacy.ts\n')
+  })
+
+  it('sets unstaged changes aside and back without running the post-checkout hook', async () => {
+    const dir = committed(clean)
+
+    mkdirSync(join(dir, '.git/hooks'), { recursive: true })
+    writeFileSync(
+      join(dir, '.git/hooks/post-checkout'),
+      '#!/bin/sh\ntouch .git/post-checkout-ran\nexit 1\n',
+      { mode: 0o755 },
+    )
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 42\n')
+    gitIn(dir, 'add', 'src/index.ts')
+    writeFileSync(join(dir, 'src/index.ts'), 'export const   answer: number = 43\n')
+
+    await expect(run(dir, ['staged', '--fix', '--only=oxfmt'])).rejects.toThrow(
+      /fixes conflict with the unstaged changes of src\/index\.ts and were undone/,
+    )
+
+    expect(existsSync(join(dir, '.git/post-checkout-ran'))).toBe(false)
+    expect(gitIn(dir, 'show', ':src/index.ts')).toBe('export const   answer: number = 42\n')
+    expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+      'export const   answer: number = 43\n',
+    )
+  })
+
+  it('only reports what sherif finds, since its fixes reach beyond the staged files', async () => {
+    const dir = workspace()
+
+    gitIn(dir, 'init', '--quiet')
+    gitIn(dir, 'add', '.')
+    gitIn(dir, 'commit', '--quiet', '-m', 'init')
+    writeFileSync(
+      join(dir, 'packages/a/package.json'),
+      JSON.stringify({ name: 'a', version: '1.0.1', dependencies: { react: '^18.0.0' } }),
+    )
+    gitIn(dir, 'add', 'packages/a/package.json')
+    vi.stubEnv('CI', undefined)
+
+    const { result, stdout } = await run(dir, ['staged', '--fix']).finally(() => vi.unstubAllEnvs())
+
+    expect(result).toBeInstanceOf(CheckFailed)
+    expect(stdout).toContain('▶ sherif\n')
+    expect(gitIn(dir, 'status', '--porcelain')).toBe('M  packages/a/package.json\n')
+  })
+
+  it('passes a commit no check has anything to do with, unless a check is required', async () => {
+    const dir = committed({ ...clean, 'README.md': '# readme\n' })
+
+    writeFileSync(join(dir, 'README.md'), '# readme\n\nmore\n')
+    gitIn(dir, 'add', 'README.md')
+
+    const docs = await run(dir, ['staged', '--only=tsc'])
+
+    expect(docs.result).toBe('ok')
+    expect(docs.stdout).toContain(
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files\n',
+    )
+
+    const required = await run(dir, ['staged', '--only=tsc', '--require=tsc'])
+
+    expect(required.result).toBeInstanceOf(CheckFailed)
+    expect(required.stdout).toContain('✘ tsc no tsconfig.json covers the given files\n')
+  })
+
+  it('checks and fixes staged files whose names start with ! or -', async () => {
+    const dir = committed({ ...clean, 'x.ts': 'export const x = 1;\n' })
+
+    writeFileSync(join(dir, '!x.ts'), 'export const   bang = 1\n')
+    writeFileSync(join(dir, '-x.ts'), 'export const   dash = 1\n')
+    writeFileSync(join(dir, 'x.ts'), 'export const   x = 2\n')
+    gitIn(dir, 'add', '--', '!x.ts', '-x.ts', 'x.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix', '--only=oxlint', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt)\n')
+    expect(stdout).toContain('✔ staged the fixes to !x.ts -x.ts x.ts\n')
+    expect(gitIn(dir, 'show', ':./!x.ts')).toBe('export const bang = 1;\n')
+    expect(gitIn(dir, 'show', ':./-x.ts')).toBe('export const dash = 1;\n')
+    expect(gitIn(dir, 'show', ':x.ts')).toBe('export const x = 2;\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'puts unstaged changes back when a closed terminal hangs up during a slow check',
+    async () => {
+      const dir = fixture(
+        {
+          ...clean,
+          'node_modules/oxlint/package.json': { name: 'oxlint', bin: 'lint.js' },
+          'node_modules/oxlint/lint.js':
+            "require('node:fs').writeFileSync('node_modules/started', '')\nsetTimeout(() => {}, 30_000)\n",
+        },
+        [],
+      )
+      const file = join(dir, 'src/index.ts')
+
+      gitIn(dir, 'init', '--quiet')
+      gitIn(dir, 'add', '.')
+      gitIn(dir, 'commit', '--quiet', '-m', 'init')
+      writeFileSync(file, 'export const answer: number = 43;\n')
+      gitIn(dir, 'add', 'src/index.ts')
+      writeFileSync(file, 'export const answer: number = 43;\nexport const more = 1;\n')
+      const check = spawn(process.execPath, [cliBin, 'staged', '--only=oxlint'], {
+        cwd: dir,
+        stdio: 'ignore',
+      })
+      const exited = once(check, 'exit')
+      onTestFinished(() => {
+        check.kill('SIGKILL')
+      })
+
+      await vi.waitFor(() => expect(existsSync(join(dir, 'node_modules/started'))).toBe(true), {
+        timeout: 10_000,
+      })
+      check.kill('SIGHUP')
+      check.kill('SIGHUP')
+
+      expect(await exited).toEqual([130, null])
+      expect(readFileSync(file, 'utf8')).toBe(
+        'export const answer: number = 43;\nexport const more = 1;\n',
+      )
+      expect(gitIn(dir, 'status', '--porcelain')).toBe('MM src/index.ts\n')
+      expect(existsSync(join(dir, '.git/uncheck-unstaged'))).toBe(false)
+    },
+  )
 })
 
 describe('uncheck staged in a package', { timeout: 120_000 }, () => {
@@ -1231,12 +1899,36 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     // Staged files outside the package are another line's business, so they are neither checked nor fixed.
     expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
-    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
     expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(
       'export const answer: number = 42;\n',
     )
     expect(gitIn(dir, 'show', ':src/root.ts')).toBe('export const   root = 11\n')
+  })
+
+  it('puts unstaged changes back with the line endings the package sets', async () => {
+    const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+    const lines = 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n'
+    const dir = committed({
+      'packages/app/.gitattributes': '*.ts text eol=crlf\n',
+      'packages/app/src/index.ts': crlf(`export const answer: number = 42;\n${lines}`),
+    })
+    const file = join(dir, 'packages/app/src/index.ts')
+
+    writeFileSync(file, crlf(`export const   answer: number = 43\n${lines}`))
+    gitIn(dir, 'add', '.')
+    writeFileSync(file, crlf(`export const   answer: number = 43\n${lines}export const d = 4;\n`))
+
+    const { result } = await run(join(dir, 'packages/app'), ['staged', '--fix', '--only=oxfmt'])
+
+    expect(result).toBe('ok')
+    expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(
+      `export const answer: number = 43;\n${lines}`,
+    )
+    expect(readFileSync(file, 'utf8')).toBe(
+      crlf(`export const answer: number = 43;\n${lines}export const d = 4;\n`),
+    )
   })
 
   it('reports what git refused to do instead of crashing', async () => {
@@ -1249,10 +1941,48 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
 
     await expect(run(dir, ['staged', '--fix'])).rejects.toThrow(/git .* failed:/)
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'puts unstaged changes back in a repository whose path has a newline',
+    async () => {
+      const dir = join(fixture({}), 'new\nline')
+      const rest = 'export const b = 1;\nexport const c = 1;\nexport const d = 1;\nexport const e ='
+
+      mkdirSync(join(dir, 'src'), { recursive: true })
+      writeFileSync(join(dir, 'src/index.ts'), `export const a = 1;\n${rest} 1;\n`)
+      gitIn(dir, 'init', '--quiet')
+      gitIn(dir, 'add', '.')
+      gitIn(dir, 'commit', '--quiet', '-m', 'init')
+      writeFileSync(join(dir, 'src/index.ts'), `export const   a = 2\n${rest} 1;\n`)
+      gitIn(dir, 'add', 'src/index.ts')
+      writeFileSync(join(dir, 'src/index.ts'), `export const   a = 2\n${rest} 2;\n`)
+
+      const { result } = await run(dir, ['staged', '--fix', '--only=oxfmt'])
+
+      expect(result).toBe('ok')
+      expect(gitIn(dir, 'show', ':src/index.ts')).toBe(`export const a = 2;\n${rest} 1;\n`)
+      expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
+        `export const a = 2;\n${rest} 2;\n`,
+      )
+      expect((await run(dir, ['hooks', 'install', 'claude'])).result).toBe('ok')
+    },
+  )
 })
 
 describe('uncheck prepare', { timeout: 120_000 }, () => {
   const header = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
+
+  let globalConfig = ''
+
+  beforeEach(() => {
+    globalConfig = join(fixture({ '.gitconfig': '' }, []), '.gitconfig')
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig)
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
 
   it('writes the pre-commit hook through the detected package manager and updates it in place', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
@@ -1344,6 +2074,18 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     const settled = await run(dir, ['prepare', '--pre-commit'])
 
     expect(settled.stdout).toContain('✔ pre-commit .git/hooks/pre-commit unchanged\n')
+
+    const chained = 'npx uncheck staged --only=oxfmt && pnpm test'
+    const advisory = 'pnpm exec uncheck staged --fix || echo "not blocking"'
+
+    writeFileSync(hook, `#!/bin/sh\n${chained}\n${advisory}\n`)
+
+    const handWritten = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(handWritten.stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
+    expect(readFileSync(hook, 'utf8')).toBe(
+      `#!/bin/sh\npnpm exec uncheck staged --fix || exit 1\n${chained}\n${advisory}\n`,
+    )
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -1399,6 +2141,44 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(commit()).toEqual({ status: 1, ran: [root, a] })
     },
   )
+
+  it('keeps the line of every package when they all prepare at once, as a workspace install does', async () => {
+    const packages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const folders = ['.', ...packages.map((name) => `packages/${name}`)]
+    const dir = fixture(
+      {
+        'pnpm-lock.yaml': '',
+        ...Object.fromEntries(folders.map((folder) => [`${folder}/package.json`, '{}\n'])),
+      },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+
+    const exits = await Promise.all(
+      folders.map((folder) => {
+        const prepared = spawn(process.execPath, [cliBin, 'prepare', '--pre-commit'], {
+          cwd: join(dir, folder),
+          stdio: 'ignore',
+        })
+
+        return once(prepared, 'exit')
+      }),
+    )
+
+    expect(exits.map(([code]) => code)).toEqual(folders.map(() => 0))
+    expect(readFileSync(join(dir, '.git/hooks/pre-commit'), 'utf8').split('\n').sort()).toEqual(
+      [
+        ...header.split('\n'),
+        'pnpm exec uncheck staged --fix || exit 1',
+        ...packages.map(
+          (name) => `(cd "packages/${name}" && pnpm exec uncheck staged --fix) || exit 1`,
+        ),
+      ].sort(),
+    )
+    expect(readdirSync(join(dir, '.git/hooks')).filter((name) => name.endsWith('.lock'))).toEqual(
+      [],
+    )
+  })
 
   it.skipIf(process.platform === 'win32')(
     'swaps in the new hook whole, so a commit already running it finishes the old one',
@@ -1467,7 +2247,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(stdout).toContain('✔ pre-commit .git/hooks/pre-commit updated\n')
       expect(lstatSync(hook).isSymbolicLink()).toBe(true)
       expect(readFileSync(join(dir, 'scripts/pre-commit'), 'utf8')).toBe(
-        '#!/bin/sh\npnpm test\npnpm exec uncheck staged --fix || exit 1\n',
+        '#!/bin/sh\npnpm exec uncheck staged --fix || exit 1\npnpm test\n',
       )
       expect(statSync(hook).mode & 0o777).toBe(0o755)
 
@@ -1527,6 +2307,30 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(again.stdout).toContain(`✔ pre-commit ${hook} unchanged\n`)
   })
 
+  it('switches the lines older versions wrote to the current runner in place', async () => {
+    const npm = fixture({ 'package.json': '{}\n', 'package-lock.json': '{}\n' }, [])
+    gitIn(npm, 'init', '--quiet')
+    const npmHook = join(npm, '.git/hooks/pre-commit')
+    writeFileSync(npmHook, `${header}npx uncheck staged --fix || exit 1\npnpm test\n`)
+
+    await run(npm, ['prepare', '--pre-commit'])
+
+    expect(readFileSync(npmHook, 'utf8')).toBe(
+      `${header}npx --no uncheck staged --fix || exit 1\npnpm test\n`,
+    )
+
+    const yarn = fixture({ 'package.json': '{}\n', 'yarn.lock': '' }, [])
+    gitIn(yarn, 'init', '--quiet')
+    const yarnHook = join(yarn, '.git/hooks/pre-commit')
+    writeFileSync(yarnHook, '#!/bin/sh\nyarn uncheck staged --fix\npnpm test\n')
+
+    await run(yarn, ['prepare', '--pre-commit'])
+
+    expect(readFileSync(yarnHook, 'utf8')).toBe(
+      '#!/bin/sh\nyarn run --silent uncheck staged --fix || exit 1\npnpm test\n',
+    )
+  })
+
   it('takes the runner from the packageManager field and reports an unwritable hook', async () => {
     const dir = fixture({ 'package.json': { packageManager: 'bun@1.2.0' } }, [])
     gitIn(dir, 'init', '--quiet')
@@ -1534,7 +2338,9 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
 
     expect(result).toBe('ok')
-    expect(stdout).toContain('The hook runs bunx uncheck staged --fix before every commit')
+    expect(stdout).toContain(
+      'The hook runs bunx --no-install uncheck staged --fix before every commit',
+    )
 
     const blocked = fixture({ 'package.json': '{}\n' }, [])
     gitIn(blocked, 'init', '--quiet')
@@ -1546,7 +2352,9 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(refused.result).toBe('ok')
     expect(refused.stdout).toContain('✘ pre-commit .git/hooks/pre-commit not written,')
     expect(
-      readdirSync(join(blocked, '.git/hooks')).filter((name) => name.includes('uncheck')),
+      readdirSync(join(blocked, '.git/hooks')).filter(
+        (name) => name.includes('uncheck') || name.endsWith('.lock'),
+      ),
     ).toEqual([])
   })
 
@@ -1564,7 +2372,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      '#!/bin/sh\necho hi\n(cd "packages/app" && yarn uncheck staged --fix) || exit 1\n',
+      '#!/bin/sh\n(cd "packages/app" && yarn run --silent uncheck staged --fix) || exit 1\necho hi',
     )
 
     if (process.platform !== 'win32') {
@@ -1576,6 +2384,106 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(skipped.result).toBe('ok')
     expect(skipped.stdout).toBe('○ no git repository found, nothing to prepare\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'runs before the commands of an existing hook, so they still fail it and cannot skip it',
+    async () => {
+      const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+      gitIn(dir, 'init', '--quiet')
+      const hook = join(dir, '.git/hooks/pre-commit')
+      const bin = fixture({ pnpm: '#!/bin/sh\necho "$*" >> "$LOG"\ntest "$1" = exec\n' }, [])
+      const log = join(bin, 'log')
+      chmodSync(join(bin, 'pnpm'), 0o755)
+      writeFileSync(join(dir, '.git/hooks/env'), `PATH="${bin}:$PATH"\n`)
+      const setup =
+        '#!/bin/sh\n# lint\nexport HOOKS="$(dirname "$0")"\n[ -s "$HOOKS/env" ] && \\. "$HOOKS/env"\n'
+      writeFileSync(hook, `${setup}export CI=1 && exec pnpm lint-staged\n`)
+
+      await run(dir, ['prepare', '--pre-commit'])
+
+      expect(readFileSync(hook, 'utf8')).toBe(
+        `${setup}pnpm exec uncheck staged --fix || exit 1\nexport CI=1 && exec pnpm lint-staged\n`,
+      )
+
+      const { status } = spawnSync('sh', ['.git/hooks/pre-commit'], {
+        cwd: dir,
+        env: { ...process.env, LOG: log },
+      })
+
+      expect(status).toBe(1)
+      expect(readFileSync(log, 'utf8')).toBe('exec uncheck staged --fix\nlint-staged\n')
+    },
+  )
+
+  it('runs before a setup line that continues onto the next, not inside it', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+
+    for (const setup of [
+      'export PATH=/opt/bin:\\\n/usr/bin:$PATH\n',
+      'A="\n. b\n"\n',
+      "A='\n. b\n'\n",
+    ]) {
+      writeFileSync(hook, `#!/bin/sh\n${setup}npx lint-staged\n`)
+
+      await run(dir, ['prepare', '--pre-commit'])
+
+      expect(readFileSync(hook, 'utf8')).toBe(
+        `#!/bin/sh\npnpm exec uncheck staged --fix || exit 1\n${setup}npx lint-staged\n`,
+      )
+    }
+  })
+
+  it('leaves a hook in another language alone and says what it should run', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+    const script = '#!/usr/bin/env node\nconsole.log("checked")\n'
+    writeFileSync(hook, script, { mode: 0o755 })
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      '✘ pre-commit .git/hooks/pre-commit not written, it is not a shell script, have it run `pnpm exec uncheck staged --fix || exit 1` yourself\n',
+    )
+    expect(readFileSync(hook, 'utf8')).toBe(script)
+
+    const binary = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0xff])
+    writeFileSync(hook, binary)
+
+    expect((await run(dir, ['prepare', '--pre-commit'])).stdout).toContain('not a shell script')
+    expect(readFileSync(hook)).toEqual(binary)
+
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      writeFileSync(hook, script)
+      chmodSync(hook, 0)
+
+      expect((await run(dir, ['prepare', '--pre-commit'])).stdout).toContain(
+        '✘ pre-commit .git/hooks/pre-commit not written, EACCES',
+      )
+      chmodSync(hook, 0o755)
+      expect(readFileSync(hook, 'utf8')).toBe(script)
+    }
+  })
+
+  it('writes nothing for a package whose folder name sh would expand', async () => {
+    const dir = fixture(
+      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/a$b/package.json': '{}\n' },
+      [],
+    )
+    gitIn(dir, 'init', '--quiet')
+    const hook = join(dir, '.git/hooks/pre-commit')
+
+    const { result, stdout } = await run(join(dir, 'packages/a$b'), ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      `✘ pre-commit ${hook} not written, sh would misread the folder name "packages/a$b" between double quotes\n`,
+    )
+    expect(existsSync(hook)).toBe(false)
   })
 
   it('writes the hook the husky 9 and Vite+ dispatcher runs, not their generated shim', async () => {
@@ -1618,7 +2526,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
 
     expect(nested.stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      `pnpm test\npnpm exec uncheck staged --fix || exit 1\n${app}\n`,
+      `pnpm exec uncheck staged --fix || exit 1\n${app}\npnpm test\n`,
     )
     expect(readFileSync(join(dir, '.husky/_/pre-commit'), 'utf8')).toBe(shim)
 
@@ -1665,15 +2573,15 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       expect(commit()).toEqual({
         status: 0,
         ran: [
-          `${top} test`,
           `${top} exec uncheck staged --fix`,
           `${top}/packages/app exec uncheck staged --fix --only=oxlint`,
+          `${top} test`,
         ],
       })
 
       writeFileSync(join(dir, 'fail'), '')
 
-      expect(commit()).toEqual({ status: 1, ran: [`${top} test`] })
+      expect(commit()).toEqual({ status: 1, ran: [`${top} exec uncheck staged --fix`] })
 
       chmodSync(hook, 0o755)
 
@@ -1699,9 +2607,14 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(existsSync(join(vite, '.vite-hooks/_/pre-commit'))).toBe(false)
   })
 
-  it('writes into a core.hooksPath set by hand as it is', async () => {
+  it('writes into a core.hooksPath set by hand as it is, even one holding an `h` script', async () => {
     const dir = fixture(
-      { 'package.json': '{}\n', 'pnpm-lock.yaml': '', 'packages/app/package.json': '{}\n' },
+      {
+        'package.json': '{}\n',
+        'pnpm-lock.yaml': '',
+        'packages/app/package.json': '{}\n',
+        '.githooks/h': 'echo "help"\n',
+      },
       [],
     )
     gitIn(dir, 'init', '--quiet')
@@ -1719,11 +2632,61 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
       `${header}pnpm exec uncheck staged --fix || exit 1\n(cd "packages/app" && pnpm exec uncheck staged --fix) || exit 1\n`,
     )
     expect(existsSync(join(dir, '.git/hooks/pre-commit'))).toBe(false)
+    expect(existsSync(join(dir, 'pre-commit'))).toBe(false)
 
     if (process.platform !== 'win32') {
       expect(statSync(hook).mode & 0o111).toBe(0o111)
     }
   })
+
+  it('leaves the core.hooksPath of the global git config alone, since every repository runs it', async () => {
+    const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+    gitIn(dir, 'init', '--quiet')
+    const shared = fixture({ 'pre-commit': '#!/bin/sh\necho "scanning for secrets"\n' }, [])
+    gitIn(dir, 'config', '--file', globalConfig, 'core.hooksPath', shared)
+
+    const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toBe(
+      `✘ pre-commit ${join(shared, 'pre-commit')} not written, core.hooksPath is set in the global git config, so every repository runs it\n`,
+    )
+    expect(readFileSync(join(shared, 'pre-commit'), 'utf8')).toBe(
+      '#!/bin/sh\necho "scanning for secrets"\n',
+    )
+
+    gitIn(dir, 'config', 'core.hooksPath', '.githooks')
+
+    const local = await run(dir, ['prepare', '--pre-commit'])
+
+    expect(local.stdout).toContain('✔ pre-commit .githooks/pre-commit created\n')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'leaves a global core.hooksPath alone with a git too old to say where a setting comes from',
+    async () => {
+      const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
+      gitIn(dir, 'init', '--quiet')
+      const shared = fixture({ 'pre-commit': '#!/bin/sh\n' }, [])
+      const included = join(fixture({ 'work.gitconfig': '' }, []), 'work.gitconfig')
+      gitIn(dir, 'config', '--file', globalConfig, 'include.path', included)
+      gitIn(dir, 'config', '--file', included, 'core.hooksPath', shared)
+      const git = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+      const bin = fixture(
+        {
+          git: `#!/bin/sh\ncase "$*" in *--show-scope*) echo "error: unknown option" >&2; exit 129;; esac\nexec "${git}" "$@"\n`,
+        },
+        [],
+      )
+      chmodSync(join(bin, 'git'), 0o755)
+      vi.stubEnv('PATH', `${bin}${delimiter}${process.env.PATH}`)
+
+      const { stdout } = await run(dir, ['prepare', '--pre-commit'])
+
+      expect(stdout).toContain('not written, core.hooksPath is set in the global git config')
+      expect(readFileSync(join(shared, 'pre-commit'), 'utf8')).toBe('#!/bin/sh\n')
+    },
+  )
 })
 
 describe('uncheck presets', { timeout: 120_000 }, () => {
@@ -1810,6 +2773,8 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
           '}',
           '',
         ].join('\n'),
+        'src/use.ts':
+          "import { first } from './index.ts'\n\nexport const name: string = first(['a'])\n",
       },
       ['typescript'],
     )
@@ -1818,9 +2783,35 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
     const check = await run(dir, ['--only=tsc', 'src/index.ts'])
 
     expect(check.result).toBeInstanceOf(CheckFailed)
-    expect(check.stdout).toContain('▶ tsc -p tsconfig.json')
+    expect(check.stdout).toContain('▶ tsc -p tsconfig.json --noEmit')
     // `strict` and `noUncheckedIndexedAccess` come from the base preset, through the lib one
     expect(check.stdout).toContain('error TS7006')
     expect(check.stdout).toContain('error TS2322')
+    // Node runs TypeScript only through imports that name the .ts file.
+    expect(check.stdout).not.toContain('TS5097')
   })
+})
+
+describe('uncheck cli', { timeout: 120_000 }, () => {
+  it.skipIf(process.platform === 'win32')(
+    'prints a file system failure as an error and has only its own global flags',
+    () => {
+      const dir = fixture({ '.claude': '' }, [])
+      const spawnCli = (...args: string[]) =>
+        spawnSync(process.execPath, [cliBin, ...args], { cwd: dir, encoding: 'utf8' })
+
+      const install = spawnCli('hooks', 'install', 'claude')
+
+      expect(install.status).toBe(1)
+      expect(install.stdout).toBe('')
+      expect(install.stderr).toContain(join(realpathSync(dir), '.claude', 'settings.json'))
+
+      for (const flag of ['--log-level', '--wizard']) {
+        const refused = spawnCli(flag)
+
+        expect(refused.status).toBe(1)
+        expect(stripVTControlCharacters(refused.stderr)).toContain(`Unrecognized flag: ${flag}`)
+      }
+    },
+  )
 })

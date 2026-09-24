@@ -6,7 +6,7 @@ import type { Check } from '../types'
 
 export const oxfmt: Check = {
   name: 'oxfmt',
-  fixes: true,
+  fixes: 'files',
   plan: Effect.fn(function* ({ cwd, fix, files }) {
     const bin = yield* resolveBin('oxfmt', cwd)
 
@@ -20,7 +20,7 @@ export const oxfmt: Check = {
       return [{ bin, args }]
     }
 
-    // Given files may include ones oxfmt does not handle (a Markdown file), which is not a failure.
+    // Given files may include ones oxfmt does not handle (a .txt file), which is not a failure.
     return argvBatches(files).map((batch) => ({
       bin,
       args: [...args, '--no-error-on-unmatched-pattern'],
