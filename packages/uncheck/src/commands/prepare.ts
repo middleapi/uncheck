@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 import { Console, Effect, FileSystem, Option, Path } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
@@ -51,6 +53,23 @@ function ownLine(text: string): { readonly inside: string; readonly command: str
 
   return runs ? { inside: enters?.[1] ?? '', command } : undefined
 }
+
+// `sh` reads a script while running it, so a hook rewritten in place makes a commit already running
+// it carry on from the same byte offset in the new content.
+const replaceFile = Effect.fn(function* (file: string, content: string, mode: number | undefined) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const temporary = path.join(
+    path.dirname(file),
+    `${path.basename(file)}.uncheck-${randomBytes(6).toString('hex')}`,
+  )
+
+  yield* fs.writeFileString(temporary, content, { flag: 'wx' }).pipe(
+    Effect.andThen(mode === undefined ? Effect.void : fs.chmod(temporary, mode)),
+    Effect.andThen(fs.rename(temporary, file)),
+    Effect.onError(() => Effect.ignore(fs.remove(temporary))),
+  )
+})
 
 export const prepare = Command.make(
   'prepare',
@@ -136,16 +155,27 @@ export const prepare = Command.make(
         : 'updated'
 
     const refused = yield* Effect.gen(function* () {
-      if (result !== 'unchanged') {
-        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-        yield* fs.writeFileString(file, next)
-      }
-
       // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would leave
       // every clone with a change to commit.
-      if (!dispatched) {
-        yield* fs.chmod(file, 0o755)
+      if (result === 'unchanged') {
+        return dispatched ? undefined : yield* fs.chmod(file, 0o755)
       }
+
+      // Renaming over a symlinked hook would replace the link, not the script it points to.
+      const target = yield* fs.realPath(file).pipe(
+        Effect.catch(() => fs.readLink(file)),
+        Effect.map((link) => path.resolve(path.dirname(file), link)),
+        Effect.orElseSucceed(() => file),
+      )
+      const mode = dispatched
+        ? yield* fs.stat(target).pipe(
+            Effect.map((info) => info.mode & 0o7777),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : 0o755
+
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true })
+      yield* replaceFile(target, next, mode)
     }).pipe(
       Effect.as(undefined),
       Effect.catch((error) =>
