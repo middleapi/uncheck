@@ -5,7 +5,7 @@ import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors'
-import { readTextIfExists } from '../../files'
+import { readJson, readTextIfExists } from '../../files'
 import { gitLocation } from '../../git'
 import { detectExec, invokes } from '../../pm'
 import { bold, dim, green } from '../../style'
@@ -75,7 +75,11 @@ export const install = Command.make(
       Effect.map(({ prefix }) => prefix.replace(/\/$/, '')),
       Effect.orElseSucceed(() => ''),
     )
-    const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' })
+    const manifest = yield* readJson(path.join(cwd, 'package.json'))
+    const declaresUncheck = [manifest?.dependencies, manifest?.devDependencies].some(
+      (dependencies) => Predicate.isObject(dependencies) && 'uncheck' in dependencies,
+    )
+    const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' || !declaresUncheck })
     const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
     const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
 

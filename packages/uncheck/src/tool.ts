@@ -15,24 +15,24 @@ export interface Bin {
 
 /**
  * Locates the `binName` executable of `pkg` the way Node resolves packages from `cwd`: the nearest
- * `node_modules/<pkg>`, whose manifest is read directly so its `exports` map does not matter, or,
- * under Yarn PnP, wherever its resolver finds `<pkg>/package.json`.
+ * `node_modules/<pkg>`, whose manifest is read directly so its `exports` map does not matter, and,
+ * under Yarn PnP, first wherever its resolver finds `<pkg>/package.json`.
  */
 export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName: string = pkg) {
   const path = yield* Path.Path
 
   for (const dir of ancestors(path, cwd)) {
     // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts.
-    const manifestPath =
+    const resolved =
       process.versions.pnp === undefined
-        ? path.join(dir, 'node_modules', pkg, 'package.json')
+        ? undefined
         : yield* Effect.try(() =>
             createRequire(path.join(dir, 'package.json')).resolve(`${pkg}/package.json`),
           ).pipe(Effect.orElseSucceed(() => undefined))
+    const manifestPath = resolved ?? path.join(dir, 'node_modules', pkg, 'package.json')
+    const manifest = yield* readJson(manifestPath)
 
-    const manifest = manifestPath === undefined ? undefined : yield* readJson(manifestPath)
-
-    if (manifestPath === undefined || manifest === undefined) {
+    if (manifest === undefined) {
       continue
     }
 

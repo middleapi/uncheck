@@ -31,7 +31,11 @@ const NOT_TEXT = /[\0\uFFFD]/
 
 /** The comments and environment a hook sets up, such as its PATH, which the added line needs too. */
 const SETUP =
-  /^\s*(?:#|$|\\?\.\s|(?:source|export|set|unset)\s|[A-Za-z_]\w*=\S*\s*$|.*(?:&&|;)\s*(?:\\?\.|source)\s)/
+  /^\s*(?:#|$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
+
+/** A setup line that runs on into the next, where the added line would join it. */
+const CONTINUES =
+  /^(?!\s*#)(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$)/
 
 /**
  * `sh` still expands `$`, backticks and `\` between double quotes, `"` ends them, and a newline ends
@@ -164,7 +168,9 @@ export const prepare = Command.make(
     const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
     const relative = path.relative(cwd, file)
     const shown = relative.startsWith('..') ? file : relative
-    const hooksPath = (option: string) => git(cwd, ['config', option, '--get', 'core.hooksPath'])
+    // A scope option turns includes off, and an included file can set a global core.hooksPath.
+    const hooksPath = (option: string) =>
+      git(cwd, ['config', option, '--includes', '--get', 'core.hooksPath'])
     const shared = yield* hooksPath('--show-scope').pipe(
       Effect.map((scoped) => /^(global|system)\t/.exec(scoped)?.[1]),
       // Git before 2.26 has no --show-scope, which must not pass for an unset core.hooksPath.
@@ -304,7 +310,8 @@ function rewrite(hook: string, line: string, inside: string): string {
     (last, text, index) => (ownLine(text) === undefined ? last : index + 1),
     0,
   )
-  const at = after > 0 ? after : lines.findIndex((text) => !SETUP.test(text))
+  const at =
+    after > 0 ? after : lines.findIndex((text) => !SETUP.test(text) || CONTINUES.test(text))
 
   if (at === -1) {
     const kept = lines.join('\n')

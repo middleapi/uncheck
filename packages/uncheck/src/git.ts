@@ -85,16 +85,20 @@ export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
  * each of `names`. Fails outside a working tree.
  */
 export function gitLocation(cwd: string, names: ReadonlyArray<string> = []) {
-  const gitPathArgs = names.flatMap((name) => ['--git-path', name])
+  const args = [
+    'rev-parse',
+    '--is-inside-work-tree',
+    '--show-prefix',
+    ...names.flatMap((name) => ['--git-path', name]),
+  ]
 
-  return Effect.map(
-    git(cwd, ['rev-parse', '--show-toplevel', '--show-prefix', ...gitPathArgs]),
-    (output) => {
-      // A newline in a path shifts the lines git prints, so they are counted from both ends.
-      const [, ...lines] = output.split('\n')
-      const paths = lines.splice(lines.length - names.length)
+  return Effect.flatMap(git(cwd, args), (output) => {
+    // A newline in the prefix shifts the lines git prints, so they are counted from both ends.
+    const [inside, ...lines] = output.split('\n')
+    const paths = lines.splice(lines.length - names.length)
 
-      return { prefix: lines.join('\n'), paths }
-    },
-  )
+    return inside === 'true'
+      ? Effect.succeed({ prefix: lines.join('\n'), paths })
+      : Effect.fail(new GitFailed({ args, exitCode: 128, stderr: 'not inside a work tree' }))
+  })
 }

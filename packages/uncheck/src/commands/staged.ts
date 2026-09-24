@@ -348,7 +348,7 @@ const putBack = Effect.fn(function* (
   const partial = copies.map(({ file }) => file)
 
   const result = yield* Effect.gen(function* () {
-    const merged = yield* Effect.forEach(copies, (entry) => merge(aside, entry), {
+    const merged = yield* Effect.forEach(copies, (entry) => merge(aside, entry, before), {
       concurrency: 4,
     })
     const conflicted = partial.filter((_, index) => !merged[index])
@@ -385,7 +385,11 @@ const putBack = Effect.fn(function* (
 
 // Merges what git stores: a formatter rewriting line endings would conflict with every line of a
 // raw merge. `apply --3way` would run the repository's merge drivers and rerere; `merge-file` does not.
-const merge = Effect.fn(function* ({ cwd, prefix }: Aside, { file, target, copy, base }: SetAside) {
+const merge = Effect.fn(function* (
+  { cwd, prefix }: Aside,
+  { file, target, copy, base }: SetAside,
+  before: string,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const store = (from: string) => git(cwd, [...STORE, `--path=${file}`, '--', from])
@@ -398,7 +402,13 @@ const merge = Effect.fn(function* ({ cwd, prefix }: Aside, { file, target, copy,
 
   // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
   // back through the filters would turn every line ending of the file to LF.
-  if ((yield* git(cwd, ['rev-parse', `:0:${prefix}${file}`])) !== checked) {
+  const [staged = '', stored = ''] = (yield* git(cwd, [
+    'rev-parse',
+    `:0:${prefix}${file}`,
+    `${before}:${prefix}${file}`,
+  ])).split('\n')
+
+  if (stored !== base && staged !== checked) {
     return false
   }
 

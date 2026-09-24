@@ -20,9 +20,8 @@ export type ProjectFiles = Effect.Effect<
  */
 export function listProjectFiles(cwd: string): ProjectFiles {
   return gitPaths(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
-    Effect.map((files) =>
-      files.filter((file) => !file.startsWith('node_modules/') && !file.includes('/node_modules/')),
-    ),
+    // git lists a linked node_modules as one file, which a `node_modules/` ignore rule misses.
+    Effect.map((files) => files.filter((file) => !/(?:^|\/)node_modules(?:\/|$)/.test(file))),
     Effect.catch(() => walk(cwd)),
     Effect.map((files) => [...files].sort()),
   )
@@ -131,10 +130,12 @@ const GLOB_CHARACTERS = /[*?[\]{}()]/
 
 /** Dot files match too, as they do for oxfmt and for a directory given as it is. */
 function glob(pattern: string): (file: string) => boolean {
+  // Level 2 drops the `.` of `src/{.,deep}/*.ts` as path.matchesGlob does.
   const matcher = new Minimatch(pattern, {
     dot: true,
     nonegate: true,
     nocomment: true,
+    optimizationLevel: 2,
     platform: 'linux',
   })
 
