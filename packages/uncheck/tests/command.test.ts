@@ -584,14 +584,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
   it('writes stop hook configs for the named agents through the detected package manager', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'pnpm-lock.yaml': '' }, [])
 
-    const { result, stdout } = await run(dir, [
-      'hooks',
-      'install',
-      'claude',
-      'cursor',
-      'windsurf',
-      'copilot',
-    ])
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'claude', 'cursor', 'copilot'])
 
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ Claude Code .claude/settings.json created\n')
@@ -601,18 +594,17 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     const hook = 'pnpm exec uncheck hooks run --fix'
 
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: hook, timeout: 600 }] }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.cursor/hooks.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { stop: [{ command: hook }] },
-    })
-    expect(JSON.parse(readFileSync(join(dir, '.windsurf/hooks.json'), 'utf8'))).toEqual({
-      hooks: { post_cascade_response: [{ command: hook, show_output: true }] },
+      hooks: { stop: [{ command: hook, timeout: 600 }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: hook, powershell: hook }] },
+      hooks: {
+        agentStop: [{ type: 'command', bash: hook, powershell: hook, timeoutSec: 600 }],
+      },
     })
 
     const again = await run(dir, ['hooks', 'install', 'claude'])
@@ -646,7 +638,11 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
       permissions: { allow: ['Bash(pnpm test)'] },
       hooks: {
         PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo done' }] }],
-        Stop: [{ hooks: [{ type: 'command', command: 'npx --no uncheck hooks run --fix' }] }],
+        Stop: [
+          {
+            hooks: [{ type: 'command', command: 'npx --no uncheck hooks run --fix', timeout: 600 }],
+          },
+        ],
       },
     })
   })
@@ -673,7 +669,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(fast)
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: fast }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: fast, timeout: 600 }] }] },
     })
 
     const all = 'yarn run --silent uncheck hooks run --fix'
@@ -683,16 +679,126 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     expect(again.stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
     expect(again.stdout).toContain('✔ GitHub Copilot .github/hooks/uncheck.json updated\n')
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: all }] }] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: all, timeout: 600 }] }] },
     })
     expect(JSON.parse(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8'))).toEqual({
       version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: all, powershell: all }] },
+      hooks: {
+        agentStop: [{ type: 'command', bash: all, powershell: all, timeoutSec: 600 }],
+      },
     })
 
     await expect(
       run(dir, ['hooks', 'install', 'claude', '--only=oxlint', '--skip=oxlint']),
     ).rejects.toThrow(/--only=oxlint and --skip=oxlint/)
+  })
+
+  it('updates its own entry in place and leaves strings that only mention the hook alone', async () => {
+    const mentions = {
+      _comment: 'the Stop hook runs npx uncheck hooks run --fix',
+      permissions: { allow: ['Bash(npx uncheck hooks run:*)'] },
+      hooks: {
+        PostToolUse: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: 'cd packages/web && npx uncheck hooks run --fix && notify',
+              },
+            ],
+          },
+        ],
+      },
+    }
+    const dir = fixture({ 'package.json': '{}\n', '.claude/settings.json': mentions }, [])
+    const hook = { type: 'command', command: 'npx --no uncheck hooks run --fix', timeout: 600 }
+
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      ...mentions,
+      hooks: { ...mentions.hooks, Stop: [{ hooks: [hook] }] },
+    })
+
+    const older = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: 'npx uncheck hooks run --fix --only=oxlint',
+                statusMessage: 'Checking',
+              },
+            ],
+          },
+        ],
+      },
+    }
+
+    writeFileSync(join(dir, '.claude/settings.json'), JSON.stringify(older))
+
+    const upgraded = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(upgraded.stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
+    expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ ...hook, statusMessage: 'Checking' }] }] },
+    })
+
+    const again = await run(dir, ['hooks', 'install', 'claude'])
+
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+  })
+
+  it('refuses a config that is not a JSON object and leaves every file as it is', async () => {
+    const broken = '{\n  permissions: { "deny": ["Read(.env)"] },\n  "model": "opus"\n}\n'
+    const dir = fixture(
+      { 'package.json': '{}\n', '.cursor/hooks.json': broken, '.github/hooks/uncheck.json': '[]' },
+      [],
+    )
+
+    await expect(run(dir, ['hooks', 'install', 'claude', 'cursor'])).rejects.toThrow(
+      '.cursor/hooks.json has InvalidSymbol on line 2, fix it and run again',
+    )
+    await expect(run(dir, ['hooks', 'install', 'copilot'])).rejects.toThrow(
+      '.github/hooks/uncheck.json is not a JSON object',
+    )
+    expect(readFileSync(join(dir, '.cursor/hooks.json'), 'utf8')).toBe(broken)
+    expect(readFileSync(join(dir, '.github/hooks/uncheck.json'), 'utf8')).toBe('[]')
+    expect(existsSync(join(dir, '.claude/settings.json'))).toBe(false)
+
+    writeFileSync(join(dir, '.cursor/hooks.json'), '\n')
+
+    const { result, stdout } = await run(dir, ['hooks', 'install', 'cursor'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Cursor .cursor/hooks.json updated\n')
+  })
+
+  it('names the directory below the top of the repository in the hook command', async () => {
+    const dir = committed({ 'package.json': '{}\n', 'packages/web/package.json': '{}\n' })
+    mkdirSync(join(dir, 'packages/my web'))
+
+    const { result, stdout } = await run(join(dir, 'packages/web'), ['hooks', 'install', 'claude'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ Claude Code .claude/settings.json created\n')
+    expect(
+      JSON.parse(readFileSync(join(dir, 'packages/web/.claude/settings.json'), 'utf8')),
+    ).toMatchObject({
+      hooks: {
+        Stop: [{ hooks: [{ command: 'npx --no uncheck hooks run --fix --dir=packages/web' }] }],
+      },
+    })
+
+    const again = await run(join(dir, 'packages/web'), ['hooks', 'install', 'claude'])
+
+    expect(again.stdout).toContain('✔ Claude Code .claude/settings.json unchanged\n')
+    await expect(run(join(dir, 'packages/my web'), ['hooks', 'install', 'claude'])).rejects.toThrow(
+      /cannot name packages\/my web/,
+    )
   })
 })
 
@@ -768,7 +874,9 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     )
 
     expect(continuing.result).toBe('ok')
-    expect(continuing.stdout).toBe('')
+    expect(JSON.parse(continuing.stdout)).toEqual({
+      systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+    })
     expect(continuing.stderr).toContain('TS2322')
 
     const cursor = await run(
@@ -791,15 +899,93 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(copilot.result).toBe('ok')
     expect(JSON.parse(copilot.stdout)).toMatchObject({ decision: 'block' })
 
-    const windsurf = await run(
+    const copilotInClaudeFormat = await run(
       dir,
       ['hooks', 'run', '--fix'],
-      JSON.stringify({ agent_action_name: 'post_cascade_response' }),
+      JSON.stringify({ hook_event_name: 'Stop', stop_reason: 'end_turn', stop_hook_active: false }),
     )
 
-    expect(windsurf.result).toBe('ok')
-    expect(windsurf.stdout).toBe('')
-    expect(windsurf.stderr).toContain('TS2322')
+    expect(copilotInClaudeFormat.result).toBe('ok')
+    expect(JSON.parse(copilotInClaudeFormat.stdout)).toMatchObject({ decision: 'block' })
+  })
+
+  it('passes a change no selected check covers, unless that check is required', async () => {
+    const dir = committed(clean)
+    writeFileSync(join(dir, 'README.md'), '# Project\n')
+
+    const optional = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=tsc'],
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    )
+
+    expect(optional.result).toBe('ok')
+    expect(optional.stderr).toContain('○ nothing to check')
+
+    const required = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=tsc', '--require=tsc'],
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    )
+
+    expect(required.result).toBe('blocked')
+  })
+
+  it('never takes a deleted file for a pattern that matches its neighbours', async () => {
+    const dir = committed({
+      ...clean,
+      'app/[id].ts': 'export const id = 1;\n',
+      'app/i.ts': 'export const   i = 1\n',
+    })
+    rmSync(join(dir, 'app/[id].ts'))
+
+    const { result, stderr } = await run(
+      dir,
+      ['hooks', 'run', '--fix', '--only=oxfmt'],
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    )
+
+    expect(result).toBe('ok')
+    expect(stderr).not.toContain('app/i.ts')
+    expect(readFileSync(join(dir, 'app/i.ts'), 'utf8')).toBe('export const   i = 1\n')
+  })
+
+  it('checks the top of the repository wherever the agent moved to, or the directory in --dir', async () => {
+    const dir = committed({
+      ...clean,
+      'docs/guide.md': '# Guide\n',
+      'packages/app/src/index.ts': 'export const app = 1;\n',
+      'packages/web/src/index.ts': 'export const web = 1;\n',
+    })
+    writeFileSync(join(dir, 'src/index.ts'), 'export const answer: string = 1;\n')
+
+    const bin = fileURLToPath(new URL('../dist/bin.mjs', import.meta.url))
+    const moved = spawnSync(process.execPath, [bin, 'hooks', 'run', '--fix'], {
+      cwd: join(dir, 'docs'),
+      input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      encoding: 'utf8',
+    })
+
+    expect(moved.status).toBe(2)
+    expect(moved.stderr).toContain('TS2322')
+
+    writeFileSync(join(dir, 'packages/app/src/index.ts'), 'export const   app = 2\n')
+    writeFileSync(join(dir, 'packages/web/src/index.ts'), 'export const   web = 2\n')
+
+    const { result, stderr } = await run(
+      join(dir, 'packages/web'),
+      ['hooks', 'run', '--fix', '--only=oxfmt', '--dir=packages/app'],
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    )
+
+    expect(result).toBe('ok')
+    expect(stderr).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
+    expect(readFileSync(join(dir, 'packages/app/src/index.ts'), 'utf8')).toBe(
+      'export const app = 2;\n',
+    )
+    expect(readFileSync(join(dir, 'packages/web/src/index.ts'), 'utf8')).toBe(
+      'export const   web = 2\n',
+    )
   })
 
   it('stays silent when nothing changed and passes quietly when the changes are clean', async () => {

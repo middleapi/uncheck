@@ -1,55 +1,59 @@
-import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'effect'
+import { isDeepStrictEqual } from 'node:util'
+
+import { Console, Effect, FileSystem, Path, Predicate, Stdio } from 'effect'
 import { Argument, Command, Prompt } from 'effect/unstable/cli'
-import { parse as parseJsonc } from 'jsonc-parser'
+import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors'
-import { detectExec } from '../../pm'
+import { git } from '../../git'
+import { detectExec, invokes } from '../../pm'
 import { bold, dim, green } from '../../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
+
+// Copilot (30 s) and CodeBuddy (60 s) kill a typecheck at their default timeout and end the turn as
+// if no hook ran.
+const TIMEOUT_SECONDS = 600
 
 const AGENTS = [
   {
     id: 'claude',
     name: 'Claude Code',
     path: '.claude/settings.json',
-    content: (command: string) => ({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
-    }),
+    entry: (command: string) => ({ type: 'command', command, timeout: TIMEOUT_SECONDS }),
+    content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
   },
   {
     id: 'codebuddy',
     name: 'CodeBuddy',
     path: '.codebuddy/settings.json',
-    content: (command: string) => ({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
-    }),
+    entry: (command: string) => ({ type: 'command', command, timeout: TIMEOUT_SECONDS }),
+    content: (entry: object) => ({ hooks: { Stop: [{ hooks: [entry] }] } }),
   },
   {
     id: 'cursor',
     name: 'Cursor',
     path: '.cursor/hooks.json',
-    content: (command: string) => ({ version: 1, hooks: { stop: [{ command }] } }),
-  },
-  {
-    id: 'windsurf',
-    name: 'Windsurf',
-    path: '.windsurf/hooks.json',
-    content: (command: string) => ({
-      hooks: { post_cascade_response: [{ command, show_output: true }] },
-    }),
+    entry: (command: string) => ({ command, timeout: TIMEOUT_SECONDS }),
+    content: (entry: object) => ({ version: 1, hooks: { stop: [entry] } }),
   },
   {
     id: 'copilot',
     name: 'GitHub Copilot',
     path: '.github/hooks/uncheck.json',
-    content: (command: string) => ({
-      version: 1,
-      hooks: { agentStop: [{ type: 'command', bash: command, powershell: command }] },
+    entry: (command: string) => ({
+      type: 'command',
+      bash: command,
+      powershell: command,
+      timeoutSec: TIMEOUT_SECONDS,
     }),
+    content: (entry: object) => ({ version: 1, hooks: { agentStop: [entry] } }),
   },
 ] as const
 
 const AGENT_IDS = AGENTS.map((agent) => agent.id)
+
+// Must stay within what `invokes` accepts in a flag, or a reinstall adds a second hook.
+const FLAG_VALUE = /^[\w./@+-]*$/
 
 export const install = Command.make(
   'install',
@@ -70,6 +74,18 @@ export const install = Command.make(
 
     yield* validateSelection(selection)
 
+    // Agents run the hook wherever they last `cd`'d, so a project below the top of the repository
+    // is named relative to it.
+    const dir = (yield* git(cwd, ['rev-parse', '--show-prefix']).pipe(
+      Effect.orElseSucceed(() => ''),
+    )).replace(/\/$/, '')
+
+    if (!FLAG_VALUE.test(dir)) {
+      return yield* userError(
+        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _./@+-`,
+      )
+    }
+
     let selected: ReadonlyArray<(typeof AGENT_IDS)[number]> = agents
 
     if (selected.length === 0) {
@@ -89,44 +105,54 @@ export const install = Command.make(
     }
 
     const exec = yield* detectExec(cwd)
-    const command = `${exec} ${HOOK_COMMAND} ${['--fix', ...selectionArgs(selection)].join(' ')}`
+    const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
+    const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
 
-    for (const agent of AGENTS) {
-      if (!selected.includes(agent.id)) {
-        continue
-      }
+    const updates = yield* Effect.forEach(
+      AGENTS.filter((agent) => selected.includes(agent.id)),
+      (agent) =>
+        Effect.gen(function* () {
+          const file = path.join(cwd, agent.path)
+          const existing = yield* fs
+            .readFileString(file)
+            .pipe(Effect.orElseSucceed(() => undefined))
+          const text = existing ?? ''
+          const errors: ParseError[] = []
+          const current: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
 
-      const file = path.join(cwd, agent.path)
-      const existing = yield* fs.readFileString(file).pipe(Effect.option)
-      let result: 'created' | 'updated' | 'unchanged'
+          if (text.trim() !== '' && (errors.length > 0 || !Predicate.isObject(current))) {
+            const [error] = errors
+            const problem =
+              error === undefined
+                ? 'is not a JSON object'
+                : `has ${printParseErrorCode(error.error)} on line ${text.slice(0, error.offset).split('\n').length}`
 
-      if (Option.isNone(existing)) {
-        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-        yield* fs.writeFileString(file, render(agent.content(command)))
-        result = 'created'
-      } else {
-        const current: unknown = parseJsonc(existing.value, undefined, { allowTrailingComma: true })
-        const base = Predicate.isObject(current) ? current : {}
-        const installed: string[] = []
-
-        const replaced = mapStrings(base, (text) => {
-          if (!text.includes(HOOK_COMMAND)) {
-            return text
+            return yield* userError(`${agent.path} ${problem}, fix it and run again`)
           }
 
-          installed.push(text)
-          return command
-        })
+          const base = Predicate.isObject(current) ? current : {}
+          const entry = agent.entry(command)
+          const found: object[] = []
+          const replaced = mapOwnEntries(base, (hook) => {
+            found.push(hook)
+            return { ...hook, ...entry }
+          })
+          const next = found.length > 0 ? replaced : mergeJson(base, agent.content(entry))
+          const result =
+            existing === undefined
+              ? 'created'
+              : isDeepStrictEqual(next, base)
+                ? 'unchanged'
+                : 'updated'
 
-        if (installed.length === 0) {
-          yield* fs.writeFileString(file, render(mergeJson(base, agent.content(command))))
-          result = 'updated'
-        } else if (installed.every((text) => text === command)) {
-          result = 'unchanged'
-        } else {
-          yield* fs.writeFileString(file, render(replaced))
-          result = 'updated'
-        }
+          return { agent, file, next, result }
+        }),
+    )
+
+    for (const { agent, file, next, result } of updates) {
+      if (result !== 'unchanged') {
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+        yield* fs.writeFileString(file, `${JSON.stringify(next, null, 2)}\n`)
       }
 
       yield* Console.log(`${green('✔')} ${bold(agent.name)} ${dim(`${agent.path} ${result}`)}`)
@@ -145,26 +171,24 @@ export const install = Command.make(
 
 const HOOK_COMMAND = 'uncheck hooks run'
 
-function render(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`
-}
+function mapOwnEntries(value: unknown, f: (hook: Record<string, unknown>) => object): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => mapOwnEntries(item, f))
+  }
 
-function mapStrings(value: unknown, f: (text: string) => string): unknown {
-  if (typeof value === 'string') {
+  if (!Predicate.isObject(value)) {
+    return value
+  }
+
+  if (
+    Object.values(value).some((item) => typeof item === 'string' && invokes(item, HOOK_COMMAND))
+  ) {
     return f(value)
   }
 
-  if (Array.isArray(value)) {
-    return value.map((item) => mapStrings(item, f))
-  }
-
-  if (Predicate.isObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, mapStrings(item, f)]),
-    )
-  }
-
-  return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, mapOwnEntries(item, f)]),
+  )
 }
 
 function mergeJson(base: unknown, addition: unknown): unknown {
