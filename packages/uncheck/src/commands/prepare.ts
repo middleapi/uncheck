@@ -87,11 +87,17 @@ export const prepare = Command.make(
         'Have the hook apply and stage fixes as well as report. On by default, --no-fix only checks',
       ),
     ),
+    allowEmpty: Flag.Boolean('allow-empty').pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        'Have the hook let a commit through when the fixes undo every staged change, which makes it empty',
+      ),
+    ),
     only: onlyFlag,
     required: requireFlag,
     skipped: skipFlag,
   },
-  Effect.fn(function* ({ cwd: directory, preCommit, fix, ...selection }) {
+  Effect.fn(function* ({ cwd: directory, preCommit, fix, allowEmpty, ...selection }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
@@ -121,6 +127,7 @@ export const prepare = Command.make(
       exec,
       HOOK_COMMAND,
       ...(fix ? ['--fix'] : []),
+      ...(allowEmpty ? ['--allow-empty'] : []),
       ...selectionArgs(selection),
     ].join(' ')
 

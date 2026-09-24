@@ -1,7 +1,7 @@
 import process from 'node:process'
 
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
-import { Command } from 'effect/unstable/cli'
+import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { git, gitBytes, GitFailed, gitPaths } from '../git'
@@ -22,9 +22,21 @@ type Unstaged = 'restored' | 'conflicted' | 'stranded'
 
 export const staged = Command.make(
   'staged',
-  { cwd: cwdFlag, fix: fixFlag, only: onlyFlag, required: requireFlag, skipped: skipFlag },
+  {
+    cwd: cwdFlag,
+    fix: fixFlag,
+    allowEmpty: Flag.Boolean('allow-empty').pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        'Let the commit through when the fixes undo every staged change, which makes it empty',
+      ),
+    ),
+    only: onlyFlag,
+    required: requireFlag,
+    skipped: skipFlag,
+  },
   Effect.fn(
-    function* ({ cwd: directory, fix, ...selection }) {
+    function* ({ cwd: directory, fix, allowEmpty, ...selection }) {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
 
@@ -70,7 +82,7 @@ export const staged = Command.make(
       const before = yield* writeTree(cwd)
       const outcome = yield* Ref.make<Unstaged>('restored')
 
-      const failure = yield* Effect.scoped(
+      const { failure, empty } = yield* Effect.scoped(
         Effect.gen(function* () {
           if (partial.length > 0) {
             yield* Effect.acquireRelease(setAside(aside, partial), () =>
@@ -131,9 +143,14 @@ export const staged = Command.make(
 
               yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(fixed)}`)
             }
+
+            return {
+              failure: failed,
+              empty: after === (yield* headTree(cwd)) && !(yield* merging(cwd)),
+            }
           }
 
-          return failed
+          return { failure: failed, empty: false }
         }),
       )
 
@@ -151,6 +168,12 @@ export const staged = Command.make(
         )
       }
 
+      if (empty && !allowEmpty) {
+        return yield* userError(
+          'The fixes undid every staged change, so the commit would be empty. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.',
+        )
+      }
+
       if (failure !== undefined) {
         return yield* Effect.fail(failure)
       }
@@ -164,6 +187,19 @@ export const staged = Command.make(
 )
 
 const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
+
+const headTree = (cwd: string) =>
+  git(cwd, ['rev-parse', '-q', '--verify', 'HEAD^{tree}']).pipe(
+    Effect.map((sha) => sha.trim()),
+    Effect.catchTag('GitFailed', () => Effect.succeed(undefined)),
+  )
+
+// git records a merge commit even when its tree is the one HEAD already has.
+const merging = (cwd: string) =>
+  git(cwd, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).pipe(
+    Effect.as(true),
+    Effect.catchTag('GitFailed', () => Effect.succeed(false)),
+  )
 
 const leftover = (saved: string) =>
   userError(
