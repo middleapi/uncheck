@@ -6,10 +6,10 @@ export default defineConfig(() => ({
   test: {
     globals: true,
     include: ['**/*.test.ts'],
-    exclude: [...defaultExclude, '**/.claude/**', './tests/bun/**', './tests/deno/**'],
+    exclude: [...defaultExclude, '**/.claude/**'],
     coverage: {
       include: ['packages/*/src/**'],
-      exclude: ['**.test-d.*', '**.test.*', '**/*.bench.ts', './tests/bun/**', './tests/deno/**'],
+      exclude: ['**.test-d.*', '**.test.*', '**/*.bench.ts'],
     },
     benchmark: {
       include: ['**/*.bench.ts'],
