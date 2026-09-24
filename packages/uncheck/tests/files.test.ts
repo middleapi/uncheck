@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, symlinkSync } from 'node:fs'
+import { join } from 'node:path'
+import process from 'node:process'
 
 import { NodeServices } from '@effect/platform-node'
 import { Effect } from 'effect'
 
-import { listProjectFiles, resolvePaths } from '../src/files'
+import { existingFiles, listProjectFiles, resolvePaths } from '../src/files'
 import { fixture } from './fixture'
 
 const project = {
@@ -85,5 +88,79 @@ describe('resolvePaths', () => {
       files: ['dist/out.js', 'src/a.ts', 'src/b.ts', 'src/sub/c.ts'],
       unmatched: [],
     })
+  })
+
+  it('walks past folders it cannot read and never into linked folders', async () => {
+    const dir = fixture(project, [])
+    symlinkSync('.', join(dir, 'loop'))
+    symlinkSync('..', join(dir, 'src/up'))
+    const locked = join(dir, 'locked')
+    mkdirSync(locked)
+
+    if (process.platform !== 'win32') {
+      chmodSync(locked, 0)
+    }
+
+    try {
+      expect(await resolve(dir, ['.'])).toEqual({
+        files: [
+          'app/[id].ts',
+          'dist/out.js',
+          'docs/readme.md',
+          'src/a.ts',
+          'src/b.ts',
+          'src/sub/c.ts',
+        ],
+        unmatched: [],
+      })
+    } finally {
+      chmodSync(locked, 0o755)
+    }
+  })
+
+  it('lets globs and exclusions match dot files the way directories include them', async () => {
+    const dir = fixture(
+      {
+        ...project,
+        '.github/workflows/ci.yml': '',
+        '.vscode/settings.json': '',
+        'package.json': '{}',
+        'src/.env.ts': '',
+      },
+      [],
+    )
+    execFileSync('git', ['init', '--quiet'], { cwd: dir })
+
+    expect(await resolve(dir, ['**/*.yml'])).toEqual({
+      files: ['.github/workflows/ci.yml'],
+      unmatched: [],
+    })
+    expect(await resolve(dir, ['src/**'])).toEqual(await resolve(dir, ['src']))
+    expect((await resolve(dir, ['.', '!**/*.json'])).files).not.toContain('.vscode/settings.json')
+  })
+
+  it('excludes from everything when only exclusions are given', async () => {
+    const dir = fixture(project, [])
+    execFileSync('git', ['init', '--quiet'], { cwd: dir })
+
+    expect(await resolve(dir, ['!src/sub', '!.*'])).toEqual({
+      files: ['app/[id].ts', 'docs/readme.md', 'src/a.ts', 'src/b.ts'],
+      unmatched: [],
+    })
+  })
+})
+
+describe('existingFiles', () => {
+  it('takes file names as they are and drops the ones that are gone', async () => {
+    const dir = fixture({ ...project, '!notes.ts': '', '-draft.ts': '' }, [])
+
+    expect(
+      await Effect.runPromise(
+        Effect.provide(
+          existingFiles(['!notes.ts', '-draft.ts', 'app/[id].ts', 'app/i.ts', 'src'], dir),
+          NodeServices.layer,
+        ),
+      ),
+    ).toEqual(['!notes.ts', '-draft.ts', 'app/[id].ts'])
   })
 })

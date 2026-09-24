@@ -352,6 +352,33 @@ describe('uncheck', { timeout: 120_000 }, () => {
       'nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
     )
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'fails a check whose tool is killed and still runs the others',
+    async () => {
+      const dir = fixture(
+        {
+          '.oxlintrc.json': oxlintrc,
+          'tsconfig.json': standaloneTsconfig,
+          'src/index.ts': 'export const answer: number = 42;\n',
+          'node_modules/oxlint/package.json': { name: 'oxlint', bin: { oxlint: 'bin.js' } },
+          'node_modules/oxlint/bin.js': "process.kill(process.pid, 'SIGKILL')\n",
+        },
+        ['oxfmt', 'typescript'],
+      )
+
+      const { result, stdout } = await run(dir)
+
+      expect(result).toBeInstanceOf(CheckFailed)
+      expect(stdout).toContain(
+        "▶ oxlint\nProcess interrupted due to receipt of signal: 'SIGKILL'\n",
+      )
+      expect(stdout).toContain('✘ oxlint failed')
+      expect(stdout).toContain('✔ tsc passed')
+      expect(stdout).toContain('✘ 1 of 3 checks failed: oxlint')
+      expect(stdout).not.toContain('PlatformError')
+    },
+  )
 })
 
 /** A workspace sherif has something to say about, with its install step off so the fix stays offline. */
@@ -1814,6 +1841,8 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
           '}',
           '',
         ].join('\n'),
+        'src/use.ts':
+          "import { first } from './index.ts'\n\nexport const name: string = first(['a'])\n",
       },
       ['typescript'],
     )
@@ -1826,5 +1855,7 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
     // `strict` and `noUncheckedIndexedAccess` come from the base preset, through the lib one
     expect(check.stdout).toContain('error TS7006')
     expect(check.stdout).toContain('error TS2322')
+    // Node runs TypeScript only through imports that name the .ts file.
+    expect(check.stdout).not.toContain('TS5097')
   })
 })
