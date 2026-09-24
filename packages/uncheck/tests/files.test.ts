@@ -139,6 +139,28 @@ describe('resolvePaths', () => {
     expect((await resolve(dir, ['.', '!**/*.json'])).files).not.toContain('.vscode/settings.json')
   })
 
+  it('reads [!x] as any character but x and parentheses literally, as in route groups', async () => {
+    const dir = fixture(
+      { ...project, 'app/(marketing)/page.ts': '', 'app/marketing/page.ts': '' },
+      [],
+    )
+    execFileSync('git', ['init', '--quiet'], { cwd: dir })
+
+    expect(await resolve(dir, ['src/[!a]*.ts'])).toEqual({ files: ['src/b.ts'], unmatched: [] })
+    expect(await resolve(dir, ['src', '!src/[!a]*.ts'])).toEqual({
+      files: ['src/a.ts', 'src/sub/c.ts'],
+      unmatched: [],
+    })
+    expect(await resolve(dir, ['app/(marketing)/**'])).toEqual({
+      files: ['app/(marketing)/page.ts'],
+      unmatched: [],
+    })
+    expect((await resolve(dir, ['app', '!app/(marketing)/**'])).files).toEqual([
+      'app/[id].ts',
+      'app/marketing/page.ts',
+    ])
+  })
+
   it('excludes from everything when only exclusions are given', async () => {
     const dir = fixture(project, [])
     execFileSync('git', ['init', '--quiet'], { cwd: dir })

@@ -91,9 +91,11 @@ describe('tsc project references', () => {
       'c/tsconfig.json': {},
     })
 
-    expect(await plan(dir)).toBe(
-      'circular project references between a/tsconfig.json, b/tsconfig.json',
-    )
+    const cycle = 'circular project references between a/tsconfig.json, b/tsconfig.json'
+
+    expect(await plan(dir)).toBe(cycle)
+    expect(await plan(dir, ['a/src/index.ts'])).toBe(cycle)
+    expect(await plan(dir, ['c/src/index.ts'])).toBe(cycle)
   })
 
   it('reports only the cyclic part when a root also exists', async () => {
@@ -118,7 +120,7 @@ describe('tsc project references', () => {
     expect(await plan(dir)).toEqual(['-b app/tsconfig.json', '-p lib/tsconfig.json --noEmit'])
   })
 
-  it('reads backslashes in extends and references as separators, like tsc', async () => {
+  it('reads backslashes in tsconfig paths as separators, like tsc', async () => {
     const dir = fixture({
       'tsconfig.base.json': { compilerOptions: { allowJs: true }, include: [`${CONFIG_DIR}/src`] },
       'tsconfig.json': { files: [], references: [{ path: '.\\packages\\b' }] },
@@ -132,6 +134,12 @@ describe('tsc project references', () => {
     expect(await plan(dir)).toEqual(['-b tsconfig.json'])
     expect(await plan(dir, ['packages/a/src/index.js'])).toEqual(['-b tsconfig.json'])
     expect(await plan(dir, ['packages/a/scripts/build.ts'])).toBe(NOT_COVERED)
+
+    const project = fixture({ 'a/tsconfig.json': { include: ['.\\src', '..\\shared'] } })
+
+    expect(await plan(project, ['a/src/x.ts', 'shared/y.ts'])).toEqual([
+      '-p a/tsconfig.json --noEmit',
+    ])
   })
 })
 
