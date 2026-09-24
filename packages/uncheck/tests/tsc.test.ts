@@ -25,7 +25,10 @@ describe('tsc project references', () => {
   it('checks standalone projects with tsc -p', async () => {
     const dir = fixture({ 'tsconfig.json': {}, 'packages/a/tsconfig.json': {} })
 
-    expect(await plan(dir)).toEqual(['-p packages/a/tsconfig.json', '-p tsconfig.json'])
+    expect(await plan(dir)).toEqual([
+      '-p packages/a/tsconfig.json --noEmit',
+      '-p tsconfig.json --noEmit',
+    ])
   })
 
   it('builds only the roots of the reference graph and leaves the rest to tsc -b', async () => {
@@ -39,7 +42,7 @@ describe('tsc project references', () => {
       'packages/nest/tsconfig.json': { references: [{ path: '../server/tsconfig.json' }] },
     })
 
-    expect(await plan(dir)).toEqual(['-b packages/nest/tsconfig.json', '-p tsconfig.json'])
+    expect(await plan(dir)).toEqual(['-b packages/nest/tsconfig.json', '-p tsconfig.json --noEmit'])
   })
 
   it('builds a solution-style root that references configs not named tsconfig.json', async () => {
@@ -157,8 +160,8 @@ describe('tsc project selection', () => {
       },
       'packages/b/tsconfig.json': { extends: '@shared/tsconfig' },
     })
-    const a = ['-p packages/a/tsconfig.json']
-    const b = ['-p packages/b/tsconfig.json']
+    const a = ['-p packages/a/tsconfig.json --noEmit']
+    const b = ['-p packages/b/tsconfig.json --noEmit']
 
     // `files` comes from the last extends entry, `include` from tsconfig.lib.json and resolves next to it.
     expect(await plan(dir, ['packages/a/entry.ts'])).toEqual(a)
@@ -196,10 +199,16 @@ describe('tsc project selection', () => {
     })
 
     // `allowJs` from the preset puts `.js` files in the project, so it was resolved.
-    expect(await plan(dir, ['packages/a/src/index.js'])).toEqual(['-p packages/a/tsconfig.json'])
+    expect(await plan(dir, ['packages/a/src/index.js'])).toEqual([
+      '-p packages/a/tsconfig.json --noEmit',
+    ])
     // `import` is not a condition tsc uses for `extends`, so `require` is picked instead.
-    expect(await plan(dir, ['packages/b/src/index.js'])).toEqual(['-p packages/b/tsconfig.json'])
-    expect(await plan(dir, ['packages/c/src/index.js'])).toEqual(['-p packages/c/tsconfig.json'])
+    expect(await plan(dir, ['packages/b/src/index.js'])).toEqual([
+      '-p packages/b/tsconfig.json --noEmit',
+    ])
+    expect(await plan(dir, ['packages/c/src/index.js'])).toEqual([
+      '-p packages/c/tsconfig.json --noEmit',
+    ])
     // The file exists, but the package does not export it.
     expect(await plan(dir, ['packages/d/src/index.js'])).toBe(NOT_COVERED)
   })
@@ -213,14 +222,16 @@ describe('tsc project selection', () => {
       'packages/b/tsconfig.json': lib,
     })
 
-    expect(await plan(dir, ['packages/a/src/index.ts'])).toEqual(['-p packages/a/tsconfig.json'])
+    expect(await plan(dir, ['packages/a/src/index.ts'])).toEqual([
+      '-p packages/a/tsconfig.json --noEmit',
+    ])
     // Tests are excluded by the package and picked up by the root instead.
-    expect(await plan(dir, ['packages/a/src/index.test.ts'])).toEqual(['-p tsconfig.json'])
-    expect(await plan(dir, ['packages/a/build.config.ts'])).toEqual(['-p tsconfig.json'])
-    expect(await plan(dir, ['scripts/release.ts'])).toEqual(['-p tsconfig.json'])
+    expect(await plan(dir, ['packages/a/src/index.test.ts'])).toEqual(['-p tsconfig.json --noEmit'])
+    expect(await plan(dir, ['packages/a/build.config.ts'])).toEqual(['-p tsconfig.json --noEmit'])
+    expect(await plan(dir, ['scripts/release.ts'])).toEqual(['-p tsconfig.json --noEmit'])
     expect(await plan(dir, ['packages/a/src/index.ts', 'packages/b/src/index.ts'])).toEqual([
-      '-p packages/a/tsconfig.json',
-      '-p packages/b/tsconfig.json',
+      '-p packages/a/tsconfig.json --noEmit',
+      '-p packages/b/tsconfig.json --noEmit',
     ])
     expect(await plan(dir, ['README.md', 'packages/a/styles.css'])).toBe(NOT_COVERED)
   })

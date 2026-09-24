@@ -107,7 +107,12 @@ export const tsc: Check = {
     }
 
     for (const configPath of plan.check) {
-      commands.push({ bin, args: ['-p', path.relative(cwd, configPath) || '.'] })
+      // A check writes nothing: `-p` would emit JavaScript next to sources that set no `noEmit`.
+      commands.push({
+        bin,
+        args: ['-p', path.relative(cwd, configPath) || '.', '--noEmit'],
+        parallel: true,
+      })
     }
 
     return commands

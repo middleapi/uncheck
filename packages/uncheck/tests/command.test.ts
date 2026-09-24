@@ -156,7 +156,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     ).toBe(true)
     expect(clean.stdout).toContain('▶ oxlint\n')
     expect(clean.stdout).toContain('▶ oxfmt --check\n')
-    expect(clean.stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(clean.stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(clean.stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)')
   })
 
@@ -175,7 +175,9 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir)
 
     expect(result).toBe('ok')
-    expect(stdout).toContain('▶ tsc -b packages/app/tsconfig.json\n▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain(
+      '▶ tsc -b packages/app/tsconfig.json\n▶ tsc -p tsconfig.json --noEmit\n',
+    )
     expect(stdout).not.toContain('packages/lib/tsconfig.json')
 
     writeFileSync(join(dir, 'packages/lib/src/index.ts'), 'export const answer: number = "42";\n')
@@ -228,7 +230,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
       '▶ oxlint --fix --no-error-on-unmatched-pattern scripts/hello.ts\n',
     )
     expect(single.stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern scripts/hello.ts\n')
-    expect(single.stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(single.stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(single.stdout).not.toContain('tsc -b')
 
     const all = await run(dir, ['.'])
@@ -285,7 +287,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     const walked = await run(plain)
 
     expect(walked.result).toBeInstanceOf(CheckFailed)
-    expect(walked.stdout).toContain('▶ tsc -p ignored/tsconfig.json\n')
+    expect(walked.stdout).toContain('▶ tsc -p ignored/tsconfig.json --noEmit\n')
 
     const repo = fixture(files, ['typescript'])
     execFileSync('git', ['init', '--quiet'], { cwd: repo })
@@ -725,7 +727,7 @@ describe('uncheck hooks run', { timeout: 120_000 }, () => {
     expect(claude.stderr).toContain(
       '▶ oxlint --fix --no-error-on-unmatched-pattern src/fresh.ts src/index.ts\n',
     )
-    expect(claude.stderr).toContain('▶ tsc -p tsconfig.json\n')
+    expect(claude.stderr).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(claude.stderr).toContain('TS2322')
     expect(claude.stderr).toContain('✘ 1 of 3 checks failed: tsc')
     expect(readFileSync(join(dir, 'src/index.ts'), 'utf8')).toBe(
@@ -852,7 +854,7 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     )
     expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
     expect(stdout).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/index.ts\n')
-    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(stdout).toContain('✔ all checks passed (oxlint, oxfmt, tsc)\n')
     expect(stdout).toContain(
       '✔ staged the fixes to src/index.ts\n○ unstaged changes of src/index.ts restored\n',
@@ -1231,7 +1233,7 @@ describe('uncheck staged in a package', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     // Staged files outside the package are another line's business, so they are neither checked nor fixed.
     expect(stdout).toContain('▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts\n')
-    expect(stdout).toContain('▶ tsc -p tsconfig.json\n')
+    expect(stdout).toContain('▶ tsc -p tsconfig.json --noEmit\n')
     expect(stdout).toContain('✔ staged the fixes to src/index.ts\n')
     expect(gitIn(dir, 'show', ':packages/app/src/index.ts')).toBe(
       'export const answer: number = 42;\n',
@@ -1820,7 +1822,7 @@ describe('uncheck presets', { timeout: 120_000 }, () => {
     const check = await run(dir, ['--only=tsc', 'src/index.ts'])
 
     expect(check.result).toBeInstanceOf(CheckFailed)
-    expect(check.stdout).toContain('▶ tsc -p tsconfig.json')
+    expect(check.stdout).toContain('▶ tsc -p tsconfig.json --noEmit')
     // `strict` and `noUncheckedIndexedAccess` come from the base preset, through the lib one
     expect(check.stdout).toContain('error TS7006')
     expect(check.stdout).toContain('error TS2322')
