@@ -26,7 +26,7 @@
 ## Usage
 
 ```sh
-npm i -D uncheck   # Node 22.20+ or 24.8+
+npm i -D uncheck   # Node 22.20+
 
 npx uncheck                 # sherif, oxlint, oxfmt --check and tsc for everything under the current directory
 npx uncheck --fix           # sherif --fix and oxlint --fix, then rewrite formatting with oxfmt
