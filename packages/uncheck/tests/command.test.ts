@@ -935,6 +935,24 @@ describe('uncheck staged', { timeout: 120_000 }, () => {
     expect((await run(unborn, ['staged', '--fix'])).result).toBe('ok')
   })
 
+  it('lets a merge through when the fixes turn its tree back into what HEAD has', async () => {
+    const dir = committed(clean)
+
+    gitIn(dir, 'checkout', '--quiet', '-b', 'side')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const other = 3;\n')
+    gitIn(dir, 'commit', '--quiet', '-am', 'side')
+    gitIn(dir, 'checkout', '--quiet', '-')
+    gitIn(dir, 'merge', '--quiet', '--no-commit', '--no-ff', 'side')
+    writeFileSync(join(dir, 'src/other.ts'), 'export const   other = 2\n')
+    gitIn(dir, 'add', 'src/other.ts')
+
+    const { result, stdout } = await run(dir, ['staged', '--fix'])
+
+    expect(result).toBe('ok')
+    expect(stdout).toContain('✔ staged the fixes to src/other.ts\n')
+    expect(gitIn(dir, 'diff', '--cached', '--name-only')).toBe('')
+  })
+
   it('only reports without --fix, stages the fixes even when a check fails, and needs staged files', async () => {
     const dir = committed(clean)
 

@@ -144,7 +144,10 @@ export const staged = Command.make(
               yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(fixed)}`)
             }
 
-            return { failure: failed, empty: after === (yield* headTree(cwd)) }
+            return {
+              failure: failed,
+              empty: after === (yield* headTree(cwd)) && !(yield* merging(cwd)),
+            }
           }
 
           return { failure: failed, empty: false }
@@ -189,6 +192,13 @@ const headTree = (cwd: string) =>
   git(cwd, ['rev-parse', '-q', '--verify', 'HEAD^{tree}']).pipe(
     Effect.map((sha) => sha.trim()),
     Effect.catchTag('GitFailed', () => Effect.succeed(undefined)),
+  )
+
+// git records a merge commit even when its tree is the one HEAD already has.
+const merging = (cwd: string) =>
+  git(cwd, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).pipe(
+    Effect.as(true),
+    Effect.catchTag('GitFailed', () => Effect.succeed(false)),
   )
 
 const leftover = (saved: string) =>
