@@ -26,7 +26,7 @@
 ## Usage
 
 ```sh
-npm i -D uncheck   # Node 22.20+ or 24.8+, for stable path.matchesGlob
+npm i -D uncheck   # Node 22.20+ or 24.8+
 
 npx uncheck                 # sherif, oxlint, oxfmt --check and tsc for everything under the current directory
 npx uncheck --fix           # sherif --fix and oxlint --fix, then rewrite formatting with oxfmt
@@ -39,27 +39,27 @@ npx uncheck --cwd packages/app   # run in another directory, paths are relative 
 
 Checks run in order and every check runs even if an earlier one fails, so one run reports everything. The exit code is non-zero when any check fails.
 
-| Check    | Runs when                                                   | Command                                                        |
-| -------- | ----------------------------------------------------------- | -------------------------------------------------------------- |
-| `sherif` | `sherif` is installed and the directory is a workspace root | `sherif`, or `sherif --fix --select=highest` with `--fix`      |
-| `oxlint` | `oxlint` is installed                                       | `oxlint [--fix] [files...]`                                    |
-| `oxfmt`  | `oxfmt` is installed                                        | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix` |
-| `tsc`    | at least one `tsconfig.json` is found                       | `tsc -b` for projects using references, `tsc -p` for the rest  |
+| Check    | Runs when                                                   | Command                                                                |
+| -------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `sherif` | `sherif` is installed and the directory is a workspace root | `sherif`, or `sherif --fix --select=highest` with `--fix`              |
+| `oxlint` | `oxlint` is installed                                       | `oxlint [--fix] [files...]`                                            |
+| `oxfmt`  | `oxfmt` is installed                                        | `oxfmt --check [files...]`, or `oxfmt [files...]` with `--fix`         |
+| `tsc`    | at least one `tsconfig.json` is found                       | `tsc -b` for projects using references, `tsc -p --noEmit` for the rest |
 
-Paths given on the command line are resolved by `uncheck` itself into one list of files that every tool receives, so tools never disagree about what a directory or glob means: a file must exist, a directory expands to the project files below it (ignored files stay out, like `git ls-files`), globs use the usual `**`/`*` syntax and `!pattern` excludes. A path that matches nothing fails the run, unless `--no-error-on-unmatched-pattern` is passed.
+Paths given on the command line are resolved by `uncheck` itself into one list of files that every tool receives, so tools never disagree about what a directory or glob means: a file must exist, a directory expands to the project files below it (ignored files stay out, like `git ls-files`), globs use the usual `**`/`*` syntax and match dot files too, and `!pattern` excludes, from everything when no other path is given. A path that matches nothing fails the run, unless `--no-error-on-unmatched-pattern` is passed.
 
-Tools are resolved from `node_modules` the way Node does, so the versions your project already depends on are used. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped.
+Tools are resolved from `node_modules` the way Node does, or through Yarn's PnP resolver when run through `yarn`, so the versions your project already depends on are used. Checking a list of files needs oxlint 1.60 or later. A `tsconfig.json` without `typescript` installed is reported as a failure rather than silently skipped, and a tool that crashes or is killed fails its check while the others still run.
 
 ### Monorepo consistency
 
-[`sherif`](https://github.com/QuiiBz/sherif) lints a monorepo as a whole: dependency versions that differ between packages, unordered dependencies, a missing `packageManager` field and so on. It runs when the directory is a workspace root (`workspaces` in `package.json` or a `pnpm-workspace.yaml`) and, when paths are given, only if a `package.json` or `pnpm-workspace.yaml` is among them, since nothing else changes its verdict. Its options are read from the `sherif` field of the root `package.json` as sherif documents, so rules and dependencies to ignore live there. With `--fix` sherif also runs your package manager's install afterwards, unless that field sets `noInstall`; aligning versions takes the highest one unless the field sets `select`, since choosing interactively needs a terminal. sherif refuses to fix anything in CI, so with `CI` set it only checks.
+[`sherif`](https://github.com/QuiiBz/sherif) lints a monorepo as a whole: dependency versions that differ between packages, unordered dependencies, a missing `packageManager` field and so on. It runs when the directory is a workspace root (`workspaces` in `package.json` or a `pnpm-workspace.yaml`) and, when paths are given, only if a `package.json` or `pnpm-workspace.yaml` is among them, since nothing else changes its verdict. Its options are read from the `sherif` field of the root `package.json` as sherif documents, so rules and dependencies to ignore live there. With `--fix` sherif also runs your package manager's install afterwards, unless that field sets `noInstall`; aligning versions takes the highest one unless the field sets `select`, since choosing interactively needs a terminal. sherif refuses to fix anything in CI, so with `CI` set it only checks, and so does `uncheck staged`: its fixes reach manifests outside the commit and need an install and a lockfile update, so run `uncheck --fix` and stage the result.
 
 ### Typecheck in monorepos
 
 Every `tsconfig.json` in the project is discovered (through `git ls-files`, so ignored folders are skipped) and its `references` are followed recursively to build the project graph:
 
 - Projects that use `references`, or are referenced, are built with `tsc -b` on the roots of that graph. `tsc` builds the referenced projects first, in dependency order, exactly like running `tsc -b` in each package.
-- Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p`.
+- Remaining standalone projects (for example a root `tsconfig.json` that only covers tests and scripts) are checked afterwards with `tsc -p --noEmit`, up to four at a time, so they never write build output.
 - Circular references are reported as an error.
 
 When files are given, `tsc` runs only the projects it would actually check for them: a file selects the projects whose `files`, `include` and `exclude` (with `extends` applied) take it as input, so a test file excluded by its package config but included by the root config runs the root project only. Files `tsc` never checks, such as Markdown or CSS, select no project.
@@ -102,7 +102,7 @@ export default defineConfig({ ...middleapi })
 }
 ```
 
-The tsconfig presets target ES2022 and load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
+The tsconfig presets target ES2022 and load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers. They accept imports that name the `.ts` file, as Node's type stripping requires. The presets need oxlint 1.70+, oxfmt 0.41+ and TypeScript 5.6+: an older oxfmt ignores `oxfmt.config.ts` and formats with its defaults.
 
 ## Agent hooks
 
