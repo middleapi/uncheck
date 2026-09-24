@@ -5,16 +5,9 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { git } from '../git'
-import { detectExec, EXECS } from '../pm'
+import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
-import {
-  cwdFlag,
-  onlyFlag,
-  requireFlag,
-  selectionArgs,
-  skipFlag,
-  validateSelection,
-} from './uncheck'
+import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
 
 const HOOK_COMMAND = 'uncheck staged'
 const HEADER = '#!/bin/sh\n# Written by `uncheck prepare`, run it again to change the command.\n'
@@ -45,13 +38,7 @@ function ownLine(text: string): { readonly inside: string; readonly command: str
   const enters = ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
   const command = enters?.[2] ?? body
 
-  const runs = ['', ...EXECS.map((exec) => `${exec} `)].some((prefix) => {
-    const rest = command.startsWith(prefix) ? command.slice(prefix.length) : undefined
-
-    return rest === HOOK_COMMAND || rest?.startsWith(`${HOOK_COMMAND} `) === true
-  })
-
-  return runs ? { inside: enters?.[1] ?? '', command } : undefined
+  return invokes(command, HOOK_COMMAND) ? { inside: enters?.[1] ?? '', command } : undefined
 }
 
 // `sh` reads a script while running it, so a hook rewritten in place makes a commit already running
@@ -93,9 +80,7 @@ export const prepare = Command.make(
         'Have the hook let a commit through when the fixes undo every staged change, which makes it empty',
       ),
     ),
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
   },
   Effect.fn(function* ({ cwd: directory, preCommit, fix, allowEmpty, ...selection }) {
     const fs = yield* FileSystem.FileSystem
@@ -121,7 +106,7 @@ export const prepare = Command.make(
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
-    const [top, hooks] = repository.value.map((line) => line.trim())
+    const [top, hooks] = repository.value
     const exec = yield* detectExec(cwd)
     const command = [
       exec,
@@ -132,12 +117,12 @@ export const prepare = Command.make(
     ].join(' ')
 
     // Git runs hooks at the top of the working tree, so a project below it is entered first.
-    const inside = path.relative(top!, yield* fs.realPath(cwd)).replaceAll('\\', '/')
+    const inside = path.relative(top, yield* fs.realPath(cwd)).replaceAll('\\', '/')
     const line = hookLine(inside, command)
 
     // husky 9 and Vite+ point core.hooksPath at generated shims that source the `h` dispatcher, which
     // exits before any line appended to a shim and runs the hook in the folder above instead.
-    const configured = path.resolve(cwd, hooks!)
+    const configured = path.resolve(cwd, hooks)
     const dispatched = yield* fs
       .exists(path.join(configured, 'h'))
       .pipe(Effect.orElseSucceed(() => false))

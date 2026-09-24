@@ -1,18 +1,18 @@
+import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-import { Console, Duration, Effect } from 'effect'
+import { Console, Duration, Effect, Fiber, Semaphore } from 'effect'
 import type { CliError } from 'effect/unstable/cli'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
 
-import { oxfmt } from '../checks/oxfmt'
-import { oxlint } from '../checks/oxlint'
+import { oxfmt, oxlint } from '../checks/oxc'
 import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, userError } from '../errors'
-import { listProjectFiles, resolvePaths } from '../files'
+import { existingFiles, listProjectFiles, resolvePaths } from '../files'
 import { bold, dim, green, listFiles, red } from '../style'
-import { execute } from '../tool'
+import { captureLines, execute } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 
 const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
@@ -31,24 +31,26 @@ export const fixFlag = Flag.Boolean('fix').pipe(
 
 const CHECK_NAMES = CHECKS.map((check) => check.name)
 
-export const requireFlag = Flag.Literals('require', CHECK_NAMES).pipe(
+const requireFlag = Flag.Literals('require', CHECK_NAMES).pipe(
   Flag.atLeast(0),
   Flag.withDescription(
     'Require a check: fail when it cannot run instead of skipping it. Repeatable',
   ),
 )
 
-export const skipFlag = Flag.Literals('skip', CHECK_NAMES).pipe(
+const skipFlag = Flag.Literals('skip', CHECK_NAMES).pipe(
   Flag.atLeast(0),
   Flag.withDescription('Skip a check even when it could run. Repeatable'),
 )
 
-export const onlyFlag = Flag.Literals('only', CHECK_NAMES).pipe(
+const onlyFlag = Flag.Literals('only', CHECK_NAMES).pipe(
   Flag.atLeast(0),
   Flag.withDescription(
     'Run only this check and skip the others, for example the fast ones in a hook. Repeatable',
   ),
 )
+
+export const selectionFlags = { only: onlyFlag, required: requireFlag, skipped: skipFlag }
 
 export interface CheckSelection {
   readonly only: ReadonlyArray<CheckName>
@@ -59,7 +61,11 @@ export interface CheckSelection {
 export interface RunSettings extends CheckSelection {
   readonly cwd: string
   readonly fix: boolean
-  readonly allowUnmatched: boolean
+  readonly allowUnmatched?: boolean
+  /** The paths are file names from git: never patterns, and a run where none has anything to check passes. */
+  readonly literal?: boolean
+  /** Fixes are staged again, so only the ones that stay within the given files apply. */
+  readonly staged?: boolean
 }
 
 export function selectionArgs({ only, required, skipped }: CheckSelection): ReadonlyArray<string> {
@@ -125,14 +131,17 @@ export const checkPaths = Effect.fn(function* (
   paths: ReadonlyArray<string>,
   settings: RunSettings,
 ) {
-  const { fix, only, required, skipped, allowUnmatched } = settings
+  const { fix, only, required, skipped, allowUnmatched = false, literal = false } = settings
+  const staged = settings.staged ?? false
   const cwd = path.resolve(settings.cwd)
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
 
   if (paths.length > 0) {
-    const resolved = yield* resolvePaths(paths, cwd, projectFiles)
+    const resolved = literal
+      ? { files: yield* existingFiles(paths, cwd), unmatched: [] }
+      : yield* resolvePaths(paths, cwd, projectFiles)
 
     if (resolved.unmatched.length > 0 && !allowUnmatched) {
       return yield* userError(
@@ -149,7 +158,7 @@ export const checkPaths = Effect.fn(function* (
   }
 
   const plans = yield* Effect.all(
-    CHECKS.map(({ name, plan }) => {
+    CHECKS.map(({ name, fixes, plan }) => {
       const exclusion = skipped.includes(name)
         ? `disabled with --skip=${name}`
         : only.length > 0 && !only.includes(name)
@@ -160,7 +169,12 @@ export const checkPaths = Effect.fn(function* (
         return Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: exclusion })
       }
 
-      return plan({ cwd, fix, files, projectFiles }).pipe(
+      return plan({
+        cwd,
+        fix: fix && !(staged && fixes === 'workspace'),
+        files,
+        projectFiles,
+      }).pipe(
         Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
         Effect.catchTag('NothingToCheck', ({ reason }) =>
           Effect.succeed<CheckPlan>({
@@ -187,6 +201,11 @@ export const checkPaths = Effect.fn(function* (
   if (ran.length === 0) {
     const reasons = outcomes.map((outcome) => `${outcome.name} ${outcome.reason}`).join(', ')
 
+    // Files a run was given, rather than asked for, may simply be ones no check handles.
+    if (files !== undefined && (allowUnmatched || literal)) {
+      return yield* Console.log(`${dim('○')} nothing to check: ${reasons}`)
+    }
+
     yield* Console.log(`${red('✘')} nothing to check: ${reasons}`)
     return yield* Effect.fail(new CheckFailed({ outcomes }))
   }
@@ -197,17 +216,17 @@ export const checkPaths = Effect.fn(function* (
     )
 
     const fixable = failed
-      .filter(
-        (outcome) =>
-          outcome.reason === undefined &&
-          CHECKS.find((check) => check.name === outcome.name)?.fixes,
-      )
+      .filter((outcome) => {
+        const fixes = CHECKS.find((check) => check.name === outcome.name)?.fixes
+
+        return outcome.reason === undefined && (staged ? fixes === 'files' : fixes !== false)
+      })
       .map((outcome) => outcome.name)
       .join(', ')
       .replace(/, ([^,]+)$/, ' and $1')
 
     if (!fix && fixable !== '') {
-      yield* Console.log(dim(`  run \`uncheck --fix\` to apply ${fixable} fixes`))
+      yield* Console.log(dim(`  rerun with \`--fix\` to apply ${fixable} fixes`))
     }
 
     return yield* Effect.fail(new CheckFailed({ outcomes }))
@@ -228,16 +247,7 @@ const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {
     return plan
   }
 
-  const [duration, exitCodes] = yield* Effect.timed(
-    Effect.forEach(plan.commands, (invocation) => {
-      const { bin, args, files } = invocation
-      const shown = files === undefined ? args : [...args, listFiles(files)]
-
-      return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
-        Effect.flatMap(() => execute(invocation, cwd)),
-      )
-    }),
-  )
+  const [duration, exitCodes] = yield* Effect.timed(runCommands(plan.commands, cwd))
 
   const failed = exitCodes.some((exitCode) => exitCode !== 0)
   const ms = Duration.toMillis(duration)
@@ -254,6 +264,51 @@ const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {
   return outcome
 })
 
+/** Each process of a type checker can take hundreds of megabytes, so only a few run at once. */
+const MAX_PARALLEL = Math.min(4, availableParallelism())
+
+/** `parallel` commands start once the others are done, and their output is held back to keep its order. */
+const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, cwd: string) {
+  const parallel = commands.filter((command) => command.parallel === true)
+
+  if (parallel.length < 2) {
+    return yield* Effect.forEach(commands, (command) => runCommand(command, cwd))
+  }
+
+  const exitCodes = yield* Effect.forEach(
+    commands.filter((command) => command.parallel !== true),
+    (command) => runCommand(command, cwd),
+  )
+  const semaphore = yield* Semaphore.make(MAX_PARALLEL)
+  const fibers = yield* Effect.forEach(parallel, (command) =>
+    Effect.forkChild(semaphore.withPermits(1)(captureLines(runCommand(command, cwd)))),
+  )
+
+  for (const fiber of fibers) {
+    const [exitCode, lines] = yield* Fiber.join(fiber)
+
+    yield* Effect.forEach(lines, (line) => Console.log(line), { discard: true })
+    exitCodes.push(exitCode)
+  }
+
+  return exitCodes
+})
+
+function runCommand(command: CheckCommand, cwd: string) {
+  const { bin, args, files } = command
+  const shown = files === undefined ? args : [...args, listFiles(files)]
+
+  return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
+    Effect.andThen(execute(command, cwd)),
+    // A tool that cannot start, or is killed (say by the OOM killer), fails its check, not the run.
+    Effect.catchTag('PlatformError', (error) =>
+      Console.log(red(error.cause instanceof Error ? error.cause.message : error.message)).pipe(
+        Effect.as(1),
+      ),
+    ),
+  )
+}
+
 export const uncheck = Command.make(
   'uncheck',
   {
@@ -265,13 +320,11 @@ export const uncheck = Command.make(
         'Run with whatever matched instead of failing when a given path or pattern matches no file',
       ),
     ),
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
     paths: Argument.String('paths').pipe(
       Argument.variadic(),
       Argument.withDescription(
-        'Files, directories or glob patterns, `!pattern` excludes. uncheck resolves them to one file list that every tool checks, so tools never disagree on what a pattern means. Defaults to everything under the current directory.',
+        'Files, directories or glob patterns, `!pattern` excludes. uncheck resolves them to one file list that every tool checks, so tools never disagree on what a pattern means. Defaults to everything under the current directory, which exclusions on their own apply to.',
       ),
     ),
   },

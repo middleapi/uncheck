@@ -5,14 +5,7 @@ import { parse as parseJsonc } from 'jsonc-parser'
 import { userError } from '../../errors'
 import { detectExec } from '../../pm'
 import { bold, dim, green } from '../../style'
-import {
-  cwdFlag,
-  onlyFlag,
-  requireFlag,
-  selectionArgs,
-  skipFlag,
-  validateSelection,
-} from '../uncheck'
+import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
 
 const AGENTS = [
   {
@@ -62,9 +55,7 @@ export const install = Command.make(
   'install',
   {
     cwd: cwdFlag,
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
     agents: Argument.Literals('agents', AGENT_IDS).pipe(
       Argument.variadic(),
       Argument.withDescription(

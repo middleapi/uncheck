@@ -132,7 +132,7 @@ describe('uncheck', { timeout: 120_000 }, () => {
     ])
     expect(check.stdout).toContain('no-var')
     expect(check.stdout).toContain('✘ 2 of 3 checks failed: oxlint, oxfmt')
-    expect(check.stdout).toContain('run `uncheck --fix` to apply oxlint and oxfmt fixes')
+    expect(check.stdout).toContain('rerun with `--fix` to apply oxlint and oxfmt fixes')
 
     const fix = await run(dir, ['--fix'])
 
@@ -403,7 +403,7 @@ describe('uncheck sherif', { timeout: 120_000 }, () => {
     expect(check.stdout).toContain('unordered-dependencies')
     expect(check.stdout).toContain('multiple-dependency-versions')
     expect(check.stdout).toContain(
-      '✘ 1 of 1 checks failed: sherif\n  run `uncheck --fix` to apply sherif fixes',
+      '✘ 1 of 1 checks failed: sherif\n  rerun with `--fix` to apply sherif fixes',
     )
 
     const fix = await run(dir, ['--fix'])
@@ -611,13 +611,13 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain('✔ Claude Code .claude/settings.json updated\n')
     expect(stdout).toContain('✔ CodeBuddy .codebuddy/settings.json created\n')
-    expect(stdout).toContain('npx uncheck hooks run --fix')
+    expect(stdout).toContain('npx --no uncheck hooks run --fix')
 
     expect(JSON.parse(readFileSync(join(dir, '.claude/settings.json'), 'utf8'))).toEqual({
       permissions: { allow: ['Bash(pnpm test)'] },
       hooks: {
         PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo done' }] }],
-        Stop: [{ hooks: [{ type: 'command', command: 'npx uncheck hooks run --fix' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: 'npx --no uncheck hooks run --fix' }] }],
       },
     })
   })
@@ -630,7 +630,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
 
   it('writes the check flags into the hook command and updates an installed hook', async () => {
     const dir = fixture({ 'package.json': '{}\n', 'yarn.lock': '' }, [])
-    const fast = 'yarn uncheck hooks run --fix --only=oxlint --only=oxfmt'
+    const fast = 'yarn run --silent uncheck hooks run --fix --only=oxlint --only=oxfmt'
 
     const { result, stdout } = await run(dir, [
       'hooks',
@@ -647,7 +647,7 @@ describe('uncheck hooks install', { timeout: 120_000 }, () => {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: fast }] }] },
     })
 
-    const all = 'yarn uncheck hooks run --fix'
+    const all = 'yarn run --silent uncheck hooks run --fix'
     const again = await run(dir, ['hooks', 'install', 'claude', 'copilot'])
 
     expect(again.result).toBe('ok')
@@ -1534,7 +1534,9 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     const { result, stdout } = await run(dir, ['prepare', '--pre-commit'])
 
     expect(result).toBe('ok')
-    expect(stdout).toContain('The hook runs bunx uncheck staged --fix before every commit')
+    expect(stdout).toContain(
+      'The hook runs bunx --no-install uncheck staged --fix before every commit',
+    )
 
     const blocked = fixture({ 'package.json': '{}\n' }, [])
     gitIn(blocked, 'init', '--quiet')
@@ -1564,7 +1566,7 @@ describe('uncheck prepare', { timeout: 120_000 }, () => {
     expect(result).toBe('ok')
     expect(stdout).toContain(`✔ pre-commit ${hook} updated\n`)
     expect(readFileSync(hook, 'utf8')).toBe(
-      '#!/bin/sh\necho hi\n(cd "packages/app" && yarn uncheck staged --fix) || exit 1\n',
+      '#!/bin/sh\necho hi\n(cd "packages/app" && yarn run --silent uncheck staged --fix) || exit 1\n',
     )
 
     if (process.platform !== 'win32') {

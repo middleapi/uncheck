@@ -53,17 +53,19 @@
   },
   "devDependencies": {
     "@effect/platform-node": "^4.0.0-rc.116",
+    "@types/picomatch": "^4.0.3",
     "effect": "^4.0.0-rc.116",
     "jsonc-parser": "^3.3.1",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
+    "picomatch": "^4.0.7",
     "sherif": "^1.13.0",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "oxfmt": "*",
-    "oxlint": "*",
-    "sherif": "*",
+    "oxlint": ">=1.60.0",
+    "sherif": ">=1.10.0",
     "typescript": "*"
   },
   "peerDependenciesMeta": {

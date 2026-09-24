@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import process from 'node:process'
 
 import { Console, Effect, Path, Predicate, Stream } from 'effect'
@@ -20,8 +21,20 @@ export interface Bin {
 export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName: string = pkg) {
   const path = yield* Path.Path
 
-  for (const dir of ancestors(path, cwd)) {
-    const pkgDir = path.join(dir, 'node_modules', pkg)
+  // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts.
+  const resolved =
+    process.versions.pnp === undefined
+      ? undefined
+      : yield* Effect.try(() =>
+          createRequire(path.join(cwd, 'package.json')).resolve(`${pkg}/package.json`),
+        ).pipe(Effect.orElseSucceed(() => undefined))
+
+  const pkgDirs =
+    resolved === undefined
+      ? ancestors(path, cwd).map((dir) => path.join(dir, 'node_modules', pkg))
+      : [path.dirname(resolved)]
+
+  for (const pkgDir of pkgDirs) {
     const manifest = yield* readJson(path.join(pkgDir, 'package.json'))
 
     if (manifest === undefined) {
@@ -41,32 +54,38 @@ export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName
   return undefined
 })
 
-/** Command lines stay well below every platform's argument limit. */
-const MAX_ARGV_LENGTH = 65_536
+/** Windows caps a whole command line, node and the tool path included, at 32,767 characters. */
+const MAX_ARGV_LENGTH = process.platform === 'win32' ? 30_000 : 65_536
 
 export function argvBatches(args: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> {
   const batches: string[][] = [[]]
   let length = 0
 
   for (const arg of args) {
-    if (length + arg.length + 1 > MAX_ARGV_LENGTH) {
+    // Room for the separator and the quotes around an argument with a space.
+    if (length + arg.length + 3 > MAX_ARGV_LENGTH) {
       batches.push([])
       length = 0
     }
 
     batches[batches.length - 1]!.push(arg)
-    length += arg.length + 1
+    length += arg.length + 3
   }
 
   return batches
 }
 
-/** Output goes through `Console` so it stays in order with uncheck's own lines and can be captured in hook mode. */
+/** Tools read a leading `-` as a flag, and oxfmt reads a leading `!` as an exclusion even after `--`. */
+function asFileArgument(file: string): string {
+  return file.startsWith('-') || file.startsWith('!') ? `./${file}` : file
+}
+
+/** Output goes through `Console` so it stays in order with uncheck's own lines and can be captured. */
 export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckCommand, cwd: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
   const handle = yield* spawner.spawn(
-    ChildProcess.make(process.execPath, [bin.entry, ...args, ...files], {
+    ChildProcess.make(process.execPath, [bin.entry, ...args, ...files.map(asFileArgument)], {
       cwd,
       stdin: 'ignore',
       // A piped tool cannot see the terminal, so tell it when colors are wanted.
@@ -81,3 +100,21 @@ export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckComm
 
   return yield* handle.exitCode
 }, Effect.scoped)
+
+export function captureLines<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<readonly [A, ReadonlyArray<string>], E, R> {
+  return Effect.suspend(() => {
+    const lines: string[] = []
+    const capture: Console.Console = Object.assign(Object.create(globalThis.console), {
+      log: (...parts: ReadonlyArray<unknown>) => {
+        lines.push(parts.join(' '))
+      },
+    })
+
+    return effect.pipe(
+      Effect.map((result) => [result, lines] as const),
+      Effect.provideService(Console.Console, capture),
+    )
+  })
+}

@@ -17,6 +17,8 @@ export interface CheckCommand {
   readonly bin: Bin
   readonly args: ReadonlyArray<string>
   readonly files?: ReadonlyArray<string>
+  /** Runs alongside the other `parallel` commands of its check, after the rest. */
+  readonly parallel?: boolean
 }
 
 export interface CheckInput {
@@ -29,7 +31,8 @@ export interface CheckInput {
 
 export interface Check {
   readonly name: CheckName
-  readonly fixes: boolean
+  /** `workspace` fixes reach beyond the given files, so a commit, which stages only those, cannot take them. */
+  readonly fixes: false | 'files' | 'workspace'
   readonly plan: (
     input: CheckInput,
   ) => Effect.Effect<

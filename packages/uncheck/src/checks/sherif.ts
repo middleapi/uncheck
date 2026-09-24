@@ -11,7 +11,7 @@ const WORKSPACE_FILES = new Set(['package.json', 'pnpm-workspace.yaml'])
 
 export const sherif: Check = {
   name: 'sherif',
-  fixes: true,
+  fixes: 'workspace',
   plan: Effect.fn(function* ({ cwd, fix, files }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path

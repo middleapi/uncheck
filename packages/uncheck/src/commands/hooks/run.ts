@@ -5,11 +5,12 @@ import { Command } from 'effect/unstable/cli'
 
 import { StopBlocked, userError } from '../../errors'
 import { listChangedFiles } from '../../files'
-import { cwdFlag, fixFlag, onlyFlag, requireFlag, runChecks, skipFlag } from '../uncheck'
+import { captureLines } from '../../tool'
+import { cwdFlag, fixFlag, runChecks, selectionFlags } from '../uncheck'
 
 export const run = Command.make(
   'run',
-  { cwd: cwdFlag, fix: fixFlag, only: onlyFlag, required: requireFlag, skipped: skipFlag },
+  { cwd: cwdFlag, fix: fixFlag, ...selectionFlags },
   Effect.fn(function* ({ cwd, ...settings }) {
     const stdio = yield* Stdio.Stdio
 
@@ -29,18 +30,14 @@ export const run = Command.make(
       return
     }
 
-    const lines: string[] = []
-
-    const capture: Console.Console = Object.assign(Object.create(globalThis.console), {
-      log: (...parts: ReadonlyArray<unknown>) => {
-        lines.push(parts.join(' '))
-      },
-    })
-
-    const failed = yield* runChecks(changed ?? [], { ...settings, cwd, allowUnmatched: true }).pipe(
+    const [failed, lines] = yield* runChecks(changed ?? [], {
+      ...settings,
+      cwd,
+      literal: true,
+    }).pipe(
       Effect.map(() => false),
       Effect.catchTag('CheckFailed', () => Effect.succeed(true)),
-      Effect.provideService(Console.Console, capture),
+      captureLines,
     )
 
     const report = stripVTControlCharacters(lines.join('\n'))

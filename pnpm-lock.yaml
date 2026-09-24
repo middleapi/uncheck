@@ -214,6 +214,9 @@ importers:
       '@effect/platform-node':
         specifier: ^4.0.0-rc.116
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
       effect:
         specifier: ^4.0.0-rc.116
         version: 4.0.0-rc.116
@@ -226,6 +229,9 @@ importers:
       oxlint:
         specifier: ^1.83.0
         version: 1.83.0
+      picomatch:
+        specifier: ^4.0.7
+        version: 4.0.7
       sherif:
         specifier: ^1.13.0
         version: 1.13.0
@@ -1111,6 +1117,9 @@ packages:
 
   '@types/node@26.6.2':
     resolution: {integrity: sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g==}
+
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
 
   '@types/resolve@1.20.2':
     resolution: {integrity: sha512-60BCwRFOZCQhDncwQdxxeOEEkbc5dIMccYLwbxsS4TUNeVECQ/pBJ0j09mrHOl/JJvpRPGwO9SvE4nR2Nb/a4Q==}
@@ -3009,6 +3018,8 @@ snapshots:
   '@types/node@26.6.2':
     dependencies:
       undici-types: 8.9.0
+
+  '@types/picomatch@4.0.3': {}
 
   '@types/resolve@1.20.2': {}
 

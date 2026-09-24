@@ -1,14 +1,12 @@
-import { posix } from 'node:path'
-
-import type { PlatformError } from 'effect'
 import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
+import picomatch from 'picomatch/posix'
 
 import { gitPaths } from './git'
 
 export type ProjectFiles = Effect.Effect<
   ReadonlyArray<string>,
-  PlatformError.PlatformError,
+  never,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 >
 
@@ -47,11 +45,6 @@ export function listChangedFiles(
   )
 }
 
-export interface ResolvedPaths {
-  readonly files: ReadonlyArray<string>
-  readonly unmatched: ReadonlyArray<string>
-}
-
 /** Turns the given paths into the project files they name, so every tool checks the same files. */
 export const resolvePaths = Effect.fn(function* (
   patterns: ReadonlyArray<string>,
@@ -63,15 +56,13 @@ export const resolvePaths = Effect.fn(function* (
   const relative = (pattern: string) =>
     path.relative(cwd, path.resolve(cwd, pattern)).replaceAll('\\', '/')
 
+  const includes = patterns.filter((pattern) => !pattern.startsWith('!'))
   const matched = new Set<string>()
   const unmatched: string[] = []
   let universe: ReadonlyArray<string> | undefined
 
-  for (const pattern of patterns) {
-    if (pattern.startsWith('!')) {
-      continue
-    }
-
+  // Exclusions on their own exclude from everything, like a run without paths.
+  for (const pattern of includes.length > 0 ? includes : ['.']) {
     const target = relative(pattern)
 
     // An existing path is taken as it is, so `app/[id].ts` names that file rather than a glob.
@@ -85,51 +76,43 @@ export const resolvePaths = Effect.fn(function* (
       continue
     }
 
-    if (kind === 'Directory') {
-      universe ??= yield* projectFiles
-      const inside =
-        target === '' ? universe : universe.filter((file) => file.startsWith(`${target}/`))
-
-      for (const file of inside) {
-        matched.add(file)
-      }
-
-      if (inside.length === 0) {
-        unmatched.push(pattern)
-      }
-
+    if (kind !== 'Directory' && !GLOB_CHARACTERS.test(target)) {
+      unmatched.push(pattern)
       continue
     }
 
-    if (GLOB_CHARACTERS.test(target)) {
-      universe ??= yield* projectFiles
-      const hits = universe.filter((file) => posix.matchesGlob(file, target))
+    universe ??= yield* projectFiles
+    const hits = universe.filter(
+      kind === 'Directory'
+        ? (file) => target === '' || file.startsWith(`${target}/`)
+        : glob(target),
+    )
 
-      for (const hit of hits) {
-        matched.add(hit)
-      }
-
-      if (hits.length === 0) {
-        unmatched.push(pattern)
-      }
-
-      continue
+    for (const hit of hits) {
+      matched.add(hit)
     }
 
-    unmatched.push(pattern)
+    if (hits.length === 0) {
+      unmatched.push(pattern)
+    }
   }
 
   const excludes = patterns
     .filter((pattern) => pattern.startsWith('!'))
-    .map((pattern) => relative(pattern.slice(1)))
-  const excluded = (file: string) =>
-    excludes.some(
-      (exclude) =>
-        file === exclude || file.startsWith(`${exclude}/`) || posix.matchesGlob(file, exclude),
-    )
+    .map((pattern) => {
+      const target = relative(pattern.slice(1))
+
+      if (target === '') {
+        return () => true
+      }
+
+      const matches = glob(target)
+
+      return (file: string) => file === target || file.startsWith(`${target}/`) || matches(file)
+    })
 
   const files = yield* Effect.filter(
-    [...matched].filter((file) => !excluded(file)),
+    [...matched].filter((file) => !excludes.some((excluded) => excluded(file))),
     (file) => fs.exists(path.resolve(cwd, file)).pipe(Effect.orElseSucceed(() => false)),
     { concurrency: 'unbounded' },
   )
@@ -138,6 +121,30 @@ export const resolvePaths = Effect.fn(function* (
 })
 
 const GLOB_CHARACTERS = /[*?[\]{}()]/
+
+/** Dot files match too, as they do for oxfmt and for a directory given as it is. */
+function glob(pattern: string): (file: string) => boolean {
+  const matches = picomatch(pattern, { dot: true })
+
+  // The matcher's second parameter asks for a result object, and `filter` passes an index there.
+  return (file) => matches(file)
+}
+
+/** The given files that exist, taken literally: file names from git are never patterns. */
+export const existingFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+
+  return yield* Effect.filter(
+    files,
+    (file) =>
+      fs.stat(path.resolve(cwd, file)).pipe(
+        Effect.map((info) => info.type === 'File'),
+        Effect.orElseSucceed(() => false),
+      ),
+    { concurrency: 64 },
+  )
+})
 
 export function ancestors(path: Path.Path, from: string): string[] {
   const dirs = [path.resolve(from)]
@@ -173,10 +180,9 @@ const walk = Effect.fn(function* (cwd: string) {
   const root = path.resolve(cwd)
   const found: string[] = []
 
-  const visit = Effect.fn(function* (
-    dir: string,
-  ): Effect.fn.Return<void, PlatformError.PlatformError> {
-    const names = yield* fs.readDirectory(dir)
+  const visit = Effect.fn(function* (dir: string): Effect.fn.Return<void> {
+    // Like git, a folder that cannot be read is left out rather than ending the run.
+    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
 
     yield* Effect.forEach(names, (name) => visitEntry(dir, name), {
       concurrency: 16,
@@ -184,10 +190,7 @@ const walk = Effect.fn(function* (cwd: string) {
     })
   })
 
-  const visitEntry = Effect.fn(function* (
-    dir: string,
-    name: string,
-  ): Effect.fn.Return<void, PlatformError.PlatformError> {
+  const visitEntry = Effect.fn(function* (dir: string, name: string): Effect.fn.Return<void> {
     if (name.startsWith('.') || SKIPPED_DIRECTORIES.has(name)) {
       return
     }
@@ -196,7 +199,15 @@ const walk = Effect.fn(function* (cwd: string) {
     const info = yield* fs.stat(full).pipe(Effect.orElseSucceed(() => undefined))
 
     if (info?.type === 'Directory') {
-      yield* visit(full)
+      // `stat` follows links, and a link back up the tree would be walked forever.
+      const linked = yield* fs.readLink(full).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      )
+
+      if (!linked) {
+        yield* visit(full)
+      }
     } else if (info?.type === 'File') {
       found.push(path.relative(root, full).replaceAll('\\', '/'))
     }

@@ -68,7 +68,7 @@ export function git(
   args: ReadonlyArray<string>,
   env?: Readonly<Record<string, string>>,
 ) {
-  return Effect.map(gitBytes(cwd, args, env), (output) => output.toString())
+  return Effect.map(gitBytes(cwd, args, env), (output) => output.toString().replace(/\n$/, ''))
 }
 
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */

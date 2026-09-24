@@ -7,15 +7,7 @@ import { userError } from '../errors'
 import { git, gitBytes, GitFailed, gitPaths } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
-import {
-  checkPaths,
-  cwdFlag,
-  fixFlag,
-  onlyFlag,
-  requireFlag,
-  skipFlag,
-  validateSelection,
-} from './uncheck'
+import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
 type Unstaged = 'restored' | 'conflicted' | 'stranded'
@@ -31,9 +23,7 @@ export const staged = Command.make(
         'Let the commit through when the fixes undo every staged change, which makes it empty',
       ),
     ),
-    only: onlyFlag,
-    required: requireFlag,
-    skipped: skipFlag,
+    ...selectionFlags,
   },
   Effect.fn(
     function* ({ cwd: directory, fix, allowEmpty, ...selection }) {
@@ -96,7 +86,8 @@ export const staged = Command.make(
             ...selection,
             cwd,
             fix,
-            allowUnmatched: true,
+            literal: true,
+            staged: true,
           }).pipe(
             Effect.map(() => undefined),
             Effect.catchTag('CheckFailed', (error) => Effect.succeed(error)),
@@ -116,7 +107,7 @@ export const staged = Command.make(
             if (active?.endsWith('.lock') === true) {
               const lock = path.resolve(
                 cwd,
-                (yield* git(cwd, ['rev-parse', '--git-path', 'index.lock'])).trim(),
+                yield* git(cwd, ['rev-parse', '--git-path', 'index.lock']),
               )
 
               if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
@@ -186,11 +177,10 @@ export const staged = Command.make(
   ),
 )
 
-const writeTree = (cwd: string) => Effect.map(git(cwd, ['write-tree']), (sha) => sha.trim())
+const writeTree = (cwd: string) => git(cwd, ['write-tree'])
 
 const headTree = (cwd: string) =>
   git(cwd, ['rev-parse', '-q', '--verify', 'HEAD^{tree}']).pipe(
-    Effect.map((sha) => sha.trim()),
     Effect.catchTag('GitFailed', () => Effect.succeed(undefined)),
   )
 
@@ -346,8 +336,7 @@ const merge = Effect.fn(function* (cwd: string, file: string, copy: string, base
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const target = path.join(cwd, file)
-  const store = (from: string) =>
-    Effect.map(git(cwd, ['hash-object', '-w', `--path=${file}`, '--', from]), (id) => id.trim())
+  const store = (from: string) => git(cwd, ['hash-object', '-w', `--path=${file}`, '--', from])
   const checked = yield* store(target)
 
   if (checked === base) {
@@ -379,7 +368,7 @@ const merge = Effect.fn(function* (cwd: string, file: string, copy: string, base
     )
 
     if (clean) {
-      const id = (yield* git(cwd, ['hash-object', '-w', '--no-filters', '--', result])).trim()
+      const id = yield* git(cwd, ['hash-object', '-w', '--no-filters', '--', result])
 
       yield* fs.writeFile(
         target,
