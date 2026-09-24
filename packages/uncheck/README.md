@@ -32,7 +32,7 @@ npx uncheck prepare --pre-commit   # check every commit
 npx uncheck hooks install claude   # check every agent turn
 ```
 
-uncheck needs Node 22.20 or later. Install only the tools you want: a check runs when its tool is installed and is skipped otherwise. uncheck always uses the versions you installed.
+uncheck needs Node 22.20 or later. Install only the tools you want: a check runs when its tool is installed and is skipped otherwise, except that a `tsconfig.json` without TypeScript installed fails. uncheck always uses the versions you installed.
 
 | Check    | Checks               | Runs when                                                                                          |
 | -------- | -------------------- | -------------------------------------------------------------------------------------------------- |
