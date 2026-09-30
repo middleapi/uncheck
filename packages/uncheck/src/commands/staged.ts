@@ -69,13 +69,13 @@ export const staged = Command.make(
       const [
         {
           prefix,
-          paths: [folder = '', indexLock = ''],
+          paths: [folder, indexLock],
         },
         unstaged,
       ] = yield* Effect.all([gitLocation(cwd, ['uncheck-unstaged', 'index.lock']), rawDiff(cwd)], {
         concurrency: 'unbounded',
       })
-      const saved = path.resolve(cwd, folder)
+      const saved = path.resolve(cwd, folder!)
       const aside = { cwd, saved, prefix }
 
       // A run that was killed, or could not put them back, left the only copy of unstaged changes.
@@ -129,7 +129,7 @@ export const staged = Command.make(
           const active = process.env.GIT_INDEX_FILE
 
           if (active?.endsWith('.lock') === true) {
-            const lock = path.resolve(cwd, indexLock)
+            const lock = path.resolve(cwd, indexLock!)
 
             if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
               yield* stage({ GIT_INDEX_FILE: lock })
@@ -218,9 +218,9 @@ const rawDiff = (cwd: string, ...args: ReadonlyArray<string>) =>
       const fields = output.split('\0')
 
       return Array.from({ length: Math.floor(fields.length / 2) }, (_, index) => {
-        const [fromMode = '', toMode = ''] = fields[index * 2]!.slice(1).split(' ')
+        const [fromMode, toMode] = fields[index * 2]!.slice(1).split(' ')
 
-        return { file: fields[index * 2 + 1]!, fromMode, toMode }
+        return { file: fields[index * 2 + 1]!, fromMode: fromMode!, toMode: toMode! }
       })
     },
   )
@@ -274,18 +274,16 @@ interface SetAside {
   readonly base: string
 }
 
-/** Runs `git <args> -- <files>` in batches; with no files, some commands would act on every path. */
+/** Runs `git <args> -- <files>` in batches. Without files, `reset` would reset every path. */
 function gitEach(
   cwd: string,
   args: ReadonlyArray<string>,
   files: ReadonlyArray<string>,
   env?: Readonly<Record<string, string>>,
 ) {
-  return Effect.forEach(
-    files.length === 0 ? [] : argvBatches(files),
-    (batch) => git(cwd, [...args, '--', ...batch], env),
-    { discard: true },
-  )
+  return Effect.forEach(argvBatches(files), (batch) => git(cwd, [...args, '--', ...batch], env), {
+    discard: true,
+  })
 }
 
 const setAside = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: ReadonlyArray<string>) {
@@ -402,7 +400,7 @@ const merge = Effect.fn(function* (
 
   // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
   // back through the filters would turn every line ending of the file to LF.
-  const [staged = '', stored = ''] = (yield* git(cwd, [
+  const [staged, stored] = (yield* git(cwd, [
     'rev-parse',
     `:0:${prefix}${file}`,
     `${before}:${prefix}${file}`,

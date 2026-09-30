@@ -543,9 +543,7 @@ const EXPORT_CONDITIONS = new Set(['node', 'require', 'types', 'default'])
  */
 function resolveExports(exports: unknown, subpath: string): string | undefined {
   const map: Record<string, unknown> =
-    Predicate.isObject(exports) &&
-    !Array.isArray(exports) &&
-    Object.keys(exports).some((key) => key.startsWith('.'))
+    Predicate.isObject(exports) && Object.keys(exports).some((key) => key.startsWith('.'))
       ? exports
       : { '.': exports }
 
