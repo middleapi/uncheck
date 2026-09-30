@@ -1,0 +1,17 @@
+{
+  "name": "monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "devDependencies": {
+    "oxfmt": "*",
+    "oxlint": "*",
+    "sherif": "*",
+    "typescript": "*",
+    "uncheck": "*"
+  },
+  "packageManager": "npm@10.9.0"
+}

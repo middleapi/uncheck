@@ -1,0 +1,6 @@
+node_modules
+dist
+*.tsbuildinfo
+# The parent repository ignores dot files, which these fixtures need.
+!.oxlintrc.json
+!.oxfmtrc.json
