@@ -52,7 +52,7 @@ export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName
 })
 
 /** Windows caps a whole command line, node and the tool path included, at 32,767 characters. */
-const MAX_ARGV_LENGTH = process.platform === 'win32' ? 30_000 : 65_536
+const MAX_ARGV_LENGTH = 30_000
 
 export function argvBatches(args: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> {
   const batches: string[][] = [[]]

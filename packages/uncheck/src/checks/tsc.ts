@@ -1,5 +1,4 @@
 import { posix } from 'node:path'
-import process from 'node:process'
 
 import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
@@ -461,7 +460,6 @@ const IMPLICIT_EXCLUDE = '(?!(?:node_modules|bower_components|jspm_packages)(?:/
 const FILES_ASTERISK = '(?:[^./]|(?:\\.(?!min\\.js$))?)*'
 const FILES_DOUBLE_ASTERISK = `(?:/${IMPLICIT_EXCLUDE}[^/.][^/]*)*?`
 const EXCLUDE_DOUBLE_ASTERISK = '(?:/.+?)?'
-const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin'
 
 /**
  * Turns an absolute `include` or `exclude` pattern into the regular expression `tsc` uses for it:
@@ -499,10 +497,9 @@ function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | unde
     written = true
   }
 
-  return new RegExp(
-    `^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`,
-    CASE_INSENSITIVE ? 'i' : '',
-  )
+  // tsc ignores case on file systems that do, so `include` ignores it and `exclude` does not: on any
+  // file system that selects every project tsc would check, and at worst one more.
+  return usage === 'files' ? new RegExp(`^${source}$`, 'i') : new RegExp(`^${source}(?:$|/)`)
 }
 
 function filesComponent(component: string): string {
