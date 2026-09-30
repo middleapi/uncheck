@@ -48,7 +48,8 @@ eachLayout('uncheck check selection in a $layout repository', ({ layout }) => {
         [
           `^uncheck in ${project.root}`,
           '○ sherif skipped, not selected by --only',
-          '▶ oxlint',
+          // What oxlint prints depends on where it runs: a terminal, CI or an agent.
+          '▶ oxlint(?:\\n.*)*?',
           '✔ oxlint passed \\d+ms',
           '○ oxfmt skipped, not selected by --only',
           '○ tsc skipped, not selected by --only',

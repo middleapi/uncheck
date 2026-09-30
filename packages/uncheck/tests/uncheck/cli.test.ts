@@ -131,7 +131,8 @@ eachLayout('uncheck cli in a $layout repository', ({ layout }) => {
       const { stdout } = await promisify(execFile)(
         'script',
         ['-qec', `'${process.execPath}' '${uncheckBin(project)}' --only=oxlint`, '/dev/null'],
-        { cwd: project.root, env: project.env },
+        // Without TERM, as on a CI runner, Node takes the terminal for one without colors.
+        { cwd: project.root, env: { ...project.env, TERM: 'xterm-256color' } },
       )
 
       expect(stdout).toContain(ANSI)

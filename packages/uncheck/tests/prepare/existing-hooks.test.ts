@@ -174,8 +174,11 @@ eachLayout('$layout', ({ layout }) => {
     const refused = await prepare()
 
     expect(refused.code).toBe(0)
-    expect(refused.stdout).toBe(
-      `✘ pre-commit ${shown} not written, EISDIR: illegal operation on a directory, read\n`,
+    // Node 26 also names the path in the message.
+    expect(refused.stdout).toMatch(
+      new RegExp(
+        `^✘ pre-commit ${shown.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')} not written, EISDIR: illegal operation on a directory, read(?: '[^']*')?\n$`,
+      ),
     )
     expect(
       readdirSync(project.path('.git/hooks')).filter(
