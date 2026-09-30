@@ -22,7 +22,9 @@ export function userError(userMessage: string): Effect.Effect<never, CliError.Us
   return Effect.fail(new CliError.UserError({ cause: new Error(userMessage), userMessage }))
 }
 
-/** Node's own message, which names the path and what went wrong, and the spawner keeps too. */
+/** Node's own message, which names the path and what went wrong. */
 export function platformMessage(error: PlatformError.PlatformError): string {
-  return (error.cause as Error).message
+  // Every error uncheck meets carries Node's error as its cause, but a PlatformError may have none.
+  /* c8 ignore next */
+  return error.cause instanceof Error ? error.cause.message : error.message
 }

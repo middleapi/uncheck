@@ -44,7 +44,7 @@ eachLayout('$layout', ({ layout }) => {
       hooks: { agentStop: [{ type: 'command', bash: HOOK, powershell: HOOK, timeoutSec: 600 }] },
     })
     expect(project.read('.cursor/hooks.json')).toBe(
-      `${JSON.stringify(JSON.parse(project.read('.cursor/hooks.json')), null, 2)}\n`,
+      `${JSON.stringify({ version: 1, hooks: { stop: [{ command: HOOK, timeout: 600 }] } }, null, 2)}\n`,
     )
 
     const again = await project.run([
