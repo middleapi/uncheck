@@ -274,18 +274,16 @@ interface SetAside {
   readonly base: string
 }
 
-/** Runs `git <args> -- <files>` in batches; with no files, some commands would act on every path. */
+/** Runs `git <args> -- <files>` in batches, and not at all for no files. */
 function gitEach(
   cwd: string,
   args: ReadonlyArray<string>,
   files: ReadonlyArray<string>,
   env?: Readonly<Record<string, string>>,
 ) {
-  return Effect.forEach(
-    files.length === 0 ? [] : argvBatches(files),
-    (batch) => git(cwd, [...args, '--', ...batch], env),
-    { discard: true },
-  )
+  return Effect.forEach(argvBatches(files), (batch) => git(cwd, [...args, '--', ...batch], env), {
+    discard: true,
+  })
 }
 
 const setAside = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: ReadonlyArray<string>) {

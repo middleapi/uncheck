@@ -461,7 +461,9 @@ const IMPLICIT_EXCLUDE = '(?!(?:node_modules|bower_components|jspm_packages)(?:/
 const FILES_ASTERISK = '(?:[^./]|(?:\\.(?!min\\.js$))?)*'
 const FILES_DOUBLE_ASTERISK = `(?:/${IMPLICIT_EXCLUDE}[^/.][^/]*)*?`
 const EXCLUDE_DOUBLE_ASTERISK = '(?:/.+?)?'
-const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin'
+// Only one side runs on a given platform, so no single test run can cover both.
+/* c8 ignore next */
+const CASE_FLAGS = process.platform === 'win32' || process.platform === 'darwin' ? 'i' : ''
 
 /**
  * Turns an absolute `include` or `exclude` pattern into the regular expression `tsc` uses for it:
@@ -499,10 +501,7 @@ function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | unde
     written = true
   }
 
-  return new RegExp(
-    `^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`,
-    CASE_INSENSITIVE ? 'i' : '',
-  )
+  return new RegExp(`^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`, CASE_FLAGS)
 }
 
 function filesComponent(component: string): string {

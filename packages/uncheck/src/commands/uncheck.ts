@@ -292,8 +292,9 @@ const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, 
 function runCommand(command: CheckCommand, cwd: string) {
   const { bin, args, files } = command
   const shown = files === undefined ? args : [...args, listFiles(files)]
+  const line = [dim('▶'), bold(bin.name), ...(shown.length > 0 ? [dim(shown.join(' '))] : [])]
 
-  return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
+  return Console.log(line.join(' ')).pipe(
     Effect.andThen(execute(command, cwd)),
     // A tool killed by a signal (say by the OOM killer) fails `exitCode` with a PlatformError, not a code.
     Effect.catchTag('PlatformError', (error) =>

@@ -97,11 +97,11 @@ export const run = Command.make(
 
     if (alreadyContinued) {
       if (payload.hook_event_name === 'Stop') {
-        const summary =
-          report
-            .split('\n')
-            .filter((line) => line.startsWith('✘ '))
-            .at(-1) ?? ''
+        // A failed run always ends on a `✘` summary line.
+        const summary = report
+          .split('\n')
+          .filter((line) => line.startsWith('✘ '))
+          .at(-1)!
 
         yield* Console.log(
           JSON.stringify({ systemMessage: `uncheck still fails: ${summary.slice(2)}` }),
