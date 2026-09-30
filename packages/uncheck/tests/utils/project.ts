@@ -290,7 +290,10 @@ function install(project: Project, tools: ReadonlyArray<Tool>): void {
 
   for (const target of Object.values(manifest.exports)) {
     if (typeof target === 'object') {
-      const source = join(PACKAGE, target.default.replace('./dist/', 'src/').replace(/\.mjs$/, '.ts'))
+      const source = join(
+        PACKAGE,
+        target.default.replace('./dist/', 'src/').replace(/\.mjs$/, '.ts'),
+      )
 
       project.write({
         [`node_modules/uncheck/${target.default}`]: `export * from '${pathToFileURL(source)}'\n`,
@@ -359,7 +362,8 @@ export function singleRepo(files: Files = {}, options?: ProjectOptions): Project
       'pnpm-lock.yaml': 'lockfileVersion: "9.0"\n',
       '.oxlintrc.json': OXLINT_CONFIG,
       'tsconfig.json': { compilerOptions: compilerOptions({ noEmit: true }), include: ['src'] },
-      'src/index.ts': 'import { double } from "./utils";\n\nexport const answer: number = double(21);\n',
+      'src/index.ts':
+        'import { double } from "./utils";\n\nexport const answer: number = double(21);\n',
       'src/utils.ts': 'export function double(value: number): number {\n  return value * 2;\n}\n',
       ...files,
     },
