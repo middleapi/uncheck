@@ -4,9 +4,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -55,9 +57,37 @@ const PACKAGE = fileURLToPath(new URL('../..', import.meta.url))
 const REGISTER = fileURLToPath(new URL('register.ts', import.meta.url))
 export const CLI = [process.execPath, '--import', REGISTER, join(PACKAGE, 'src/bin.ts')] as const
 
+/** What the CLI looks for in every folder above a project, so one above the tests leaks into them all. */
+const PROJECT_MARKERS = [
+  'package.json',
+  'node_modules',
+  'tsconfig.json',
+  '.pnp.cjs',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'package-lock.json',
+]
+
+for (let dir = realpathSync(tmpdir()); ; dir = dirname(dir)) {
+  const marker = PROJECT_MARKERS.find((name) => existsSync(join(dir, name)))
+
+  if (marker !== undefined) {
+    throw new Error(
+      `${join(dir, marker)} would leak into every test project, point TMPDIR elsewhere`,
+    )
+  }
+
+  if (dir === dirname(dir)) {
+    break
+  }
+}
+
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'uncheck-e2e-')))
 const GIT_CONFIG = join(ROOT, 'gitconfig')
 const SHIMS = join(ROOT, 'bin')
+const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
 
 writeFileSync(GIT_CONFIG, '')
 mkdirSync(SHIMS)
@@ -76,9 +106,24 @@ writeFileSync(
   { mode: 0o755 },
 )
 
+// A folder a test left unreadable or read-only would stop the removal of the temporary files.
+function restorePermissions(dir: string): void {
+  chmodSync(dir, 0o755)
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      restorePermissions(join(dir, entry.name))
+    }
+  }
+}
+
 afterAll(() => {
+  restorePermissions(ROOT)
   rmSync(ROOT, { recursive: true, force: true })
 })
+
+// Root reads and writes files whatever their mode, so chmod cannot make anything fail for it.
+export const PERMISSIONS_ENFORCED = process.getuid?.() !== 0
 
 // A stray path would run git or the CLI in the repository these tests live in.
 function inside(path: string): string {
@@ -96,12 +141,17 @@ export function temporaryDirectory(): string {
 /** The environment of every process the tests start, free of whatever the machine or a git hook set. */
 export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
   const inherited = Object.entries(process.env).filter(
-    ([key]) => !/^(?:GIT_\w+|CI|FORCE_COLOR|NO_COLOR|NODE_DISABLE_COLORS)$/.test(key),
+    ([key]) => !/^(?:GIT_\w+|CI|FORCE_COLOR|NO_COLOR|NODE_DISABLE_COLORS|NODE_OPTIONS)$/.test(key),
   )
 
   return {
     ...Object.fromEntries(inherited),
     PATH: `${SHIMS}${delimiter}${process.env.PATH}`,
+    // git translates the messages tests assert to the language of the machine.
+    LC_ALL: 'C',
+    // Node paints nothing in a terminal of unknown type.
+    TERM: 'xterm-256color',
+    GIT_CEILING_DIRECTORIES: ROOT,
     GIT_CONFIG_GLOBAL: GIT_CONFIG,
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'uncheck',
@@ -109,9 +159,29 @@ export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
     GIT_COMMITTER_NAME: 'uncheck',
     GIT_COMMITTER_EMAIL: 'uncheck@example.com',
     // Functions deserialized from the compile cache report imprecise coverage.
-    NODE_DISABLE_COMPILE_CACHE: '1',
+    ...(process.env.NODE_V8_COVERAGE === undefined ? {} : { NODE_DISABLE_COMPILE_CACHE: '1' }),
     ...overrides,
   }
+}
+
+/** An environment whose `git` first runs the shell `script`, which finds the real git in `$GIT`. */
+export function wrappedGit(script: string): Env {
+  const shims = temporaryDirectory()
+
+  writeFileSync(join(shims, 'git'), `#!/bin/sh\nGIT='${REAL_GIT}'\n${script}\nexec "$GIT" "$@"\n`, {
+    mode: 0o755,
+  })
+
+  return { PATH: `${shims}${delimiter}${environment().PATH}` }
+}
+
+/** A git config file holding `content`, for GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM. */
+export function gitConfig(content: string): string {
+  const file = join(temporaryDirectory(), 'gitconfig')
+
+  writeFileSync(file, content)
+
+  return file
 }
 
 export function git(cwd: string, args: ReadonlyArray<string>, env?: Env): string {
@@ -186,12 +256,17 @@ export function runInTerminal(
   })
 }
 
-/** The lines uncheck itself prints, without the timings that differ between runs. */
+/** The lines uncheck itself prints, without colors and the timings that differ between runs. */
 export function report(output: string): string[] {
-  return output
+  return stripVTControlCharacters(output)
     .split('\n')
     .filter((line) => /^(?:uncheck (?:staged )?in |[▶✔✘○] | {2}rerun )/.test(line))
     .map((line) => line.replace(/ (?:\d+ms|\d+\.\ds)$/, ''))
+}
+
+/** How the CLI prints the error that stops a run. */
+export function cliError(message: string): string {
+  return `\nERROR\n  ${message}\n`
 }
 
 /** JSON the way oxfmt writes it, so the files a test adds pass the format check. */
@@ -233,8 +308,28 @@ export class Project {
     return this
   }
 
+  /** Rewrites the JSON `file` with what `change` makes of it. */
+  update(file: string, change: (value: Record<string, unknown>) => object): this {
+    return this.write({ [file]: change(JSON.parse(this.read(file)) as Record<string, unknown>) })
+  }
+
   read(file: string): string {
     return readFileSync(this.path(file), 'utf8')
+  }
+
+  mode(file: string): number {
+    return statSync(this.path(file)).mode & 0o7777
+  }
+
+  chmod(file: string, mode: number): this {
+    chmodSync(this.path(file), mode)
+
+    return this
+  }
+
+  /** `text` with the folder of the project, which differs between runs, as `<project>`. */
+  normalize(text: string): string {
+    return text.replaceAll(this.dir, '<project>')
   }
 
   exists(file: string): boolean {
@@ -261,6 +356,14 @@ export class Project {
 
   git(...args: ReadonlyArray<string>): string {
     return git(this.dir, args)
+  }
+
+  /** Writes `files` and stages them as they are, even names that look like globs. */
+  stage(files: Files): this {
+    this.write(files)
+    this.git('--literal-pathspecs', 'add', '--all', '--', ...Object.keys(files))
+
+    return this
   }
 
   commit(message = 'change'): this {
@@ -315,7 +418,7 @@ export function project(files: Files = {}, { tools = TOOLS, git = 'commit' }: Pr
   const created = new Project(temporaryDirectory())
 
   install(created, tools)
-  created.write({ '.gitignore': 'node_modules\ndist\n', ...files })
+  created.write({ '.gitignore': 'node_modules\ndist\n*.tsbuildinfo\n', ...files })
 
   if (git !== 'none') {
     created.git('init', '--quiet', '--initial-branch=main')
@@ -438,14 +541,30 @@ export function monorepo(files: Files = {}, options?: ProjectOptions): Project {
   return created
 }
 
+/** A checkout of `project` made with `git worktree add`, with the links an install would make. */
+export function linkedWorktree(project: Project, app: string): Project {
+  const worktree = new Project(join(temporaryDirectory(), 'linked'))
+
+  project.git('worktree', 'add', '--quiet', worktree.dir)
+  worktree.link('node_modules', project.path('node_modules'))
+
+  if (app !== '') {
+    worktree.link(`${app}node_modules/@repo/core`, '../../../core')
+  }
+
+  return worktree
+}
+
 export interface Layout {
   readonly name: string
   readonly create: (files?: Files, options?: ProjectOptions) => Project
   /** Where the code of the package the tests work on lives: `''` or a folder ending in `/`. */
   readonly app: string
+  /** The line of the tsc run that checks the whole project. */
+  readonly tsc: string
 }
 
 export const LAYOUTS: ReadonlyArray<Layout> = [
-  { name: 'single repo', create: singleRepo, app: '' },
-  { name: 'monorepo', create: monorepo, app: 'packages/app/' },
+  { name: 'single repo', create: singleRepo, app: '', tsc: '▶ tsc -p tsconfig.json --noEmit' },
+  { name: 'monorepo', create: monorepo, app: 'packages/app/', tsc: '▶ tsc -b tsconfig.json' },
 ]
