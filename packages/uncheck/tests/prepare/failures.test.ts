@@ -1,24 +1,18 @@
 import { readdirSync } from 'node:fs'
-import process from 'node:process'
 
 import type { Project } from '../utils/project'
-import { LAYOUTS, monorepo, singleRepo } from '../utils/project'
-import { chmod, HEADER, hookLine, notWritten, prepare, shownHook, written } from './utils'
+import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, singleRepo } from '../utils/project'
+import { HEADER, hookLine, notWritten, prepare, shownHook, written } from './utils'
 
 const HOOK = '.git/hooks/pre-commit'
-
-const ROOT_IGNORES_MODES = process.getuid?.() === 0
 
 function leftoverLocksAndCopies(project: Project, folder = '.git/hooks'): string[] {
   return readdirSync(project.path(folder)).filter((name) => /\.(?:lock|uncheck-\w+)$/.test(name))
 }
 
 describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create, app }) => {
-  // Root reads and writes a file whatever its mode.
-  it.skipIf(ROOT_IGNORES_MODES)('reports a hooks folder it may not write to', async () => {
-    const project = create()
-    chmod(project, '.git/hooks', 0o555)
-    onTestFinished(() => chmod(project, '.git/hooks', 0o755))
+  it.runIf(PERMISSIONS_ENFORCED)('reports a hooks folder it may not write to', async () => {
+    const project = create().chmod('.git/hooks', 0o555)
 
     const { exitCode, stdout, stderr } = await prepare(project, [], { cwd: app })
 
@@ -33,10 +27,10 @@ describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create
     expect(project.exists(HOOK)).toBe(false)
   })
 
-  it.skipIf(ROOT_IGNORES_MODES)('reports a hook it may not read and leaves it alone', async () => {
-    const project = create().write({ [HOOK]: '#!/bin/sh\npnpm test\n' })
-    chmod(project, HOOK, 0o200)
-    onTestFinished(() => chmod(project, HOOK, 0o644))
+  it.runIf(PERMISSIONS_ENFORCED)('reports a hook it may not read and leaves it alone', async () => {
+    const project = create()
+      .write({ [HOOK]: '#!/bin/sh\npnpm test\n' })
+      .chmod(HOOK, 0o200)
 
     const { exitCode, stdout } = await prepare(project, [], { cwd: app })
 
@@ -47,8 +41,7 @@ describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create
         `EACCES: permission denied, open '${project.path(HOOK)}'`,
       ),
     )
-    chmod(project, HOOK, 0o644)
-    expect(project.read(HOOK)).toBe('#!/bin/sh\npnpm test\n')
+    expect(project.chmod(HOOK, 0o644).read(HOOK)).toBe('#!/bin/sh\npnpm test\n')
     expect(leftoverLocksAndCopies(project)).toEqual([])
   })
 

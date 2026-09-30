@@ -1,11 +1,11 @@
-import { LAYOUTS, project as bareProject, report, singleRepo } from '../utils/project'
-import { layoutChecks } from './utils'
+import { cliError, LAYOUTS, project as bareProject, report, singleRepo } from '../utils/project'
+import { layoutChecks, NOT_COVERED, SKIPPED_BESIDE_TSC, UNFORMATTED_CODE } from './utils'
 
-describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app }) => {
-  const { sherif, tsc, checks } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc }) => {
+  const { sherif, checks } = layoutChecks(app)
 
   it('runs only the checks named with --only', async () => {
-    const project = create({ [`${app}src/ugly.ts`]: 'export const   ugly = 1\n' })
+    const project = create({ [`${app}src/ugly.ts`]: UNFORMATTED_CODE })
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', '--only=tsc'])
 
@@ -23,7 +23,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app }) =
   })
 
   it('skips the checks named with --skip', async () => {
-    const project = create({ [`${app}src/ugly.ts`]: 'export const   ugly = 1\n' })
+    const project = create({ [`${app}src/ugly.ts`]: UNFORMATTED_CODE })
 
     const { exitCode, stdout } = await project.uncheck(['--skip=oxfmt', '--skip=tsc'])
 
@@ -78,7 +78,16 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app }) =
       '--require=oxlint',
     ])
 
-    expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxlint, oxfmt)')
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      '○ sherif skipped, not selected by --only',
+      '▶ oxlint',
+      '✔ oxlint passed',
+      '▶ oxfmt --check',
+      '✔ oxfmt passed',
+      '○ tsc skipped, not selected by --only',
+      '✔ all checks passed (oxlint, oxfmt)',
+    ])
     expect(exitCode).toBe(0)
   })
 
@@ -110,10 +119,8 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app }) =
 
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      '○ sherif skipped, not selected by --only',
-      '○ oxlint skipped, not selected by --only',
-      '○ oxfmt skipped, not selected by --only',
-      '○ tsc skipped, no tsconfig.json covers the given files',
+      ...SKIPPED_BESIDE_TSC,
+      NOT_COVERED,
       '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
     ])
     expect(exitCode).toBe(1)
@@ -128,9 +135,12 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app }) =
       `${app}README.md`,
     ])
 
-    expect(report(stdout).at(-1)).toBe(
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      NOT_COVERED,
       '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
-    )
+    ])
     expect(exitCode).toBe(0)
   })
 })
@@ -174,17 +184,20 @@ describe('uncheck check selection', () => {
     const { exitCode, stdout, stderr } = await project.uncheck(flags)
 
     expect(stdout).toBe('')
-    expect(stderr).toBe(`\nERROR\n  ${message}\n`)
+    expect(stderr).toBe(cliError(message))
     expect(exitCode).toBe(1)
   })
 
   it('refuses a check name it does not know', async () => {
     const project = singleRepo()
 
-    const { exitCode, stderr } = await project.uncheck(['--only=eslint'])
+    const { exitCode, stdout, stderr } = await project.uncheck(['--only=eslint'])
 
+    expect(stdout).toContain('USAGE')
     expect(stderr).toBe(
-      '\nERROR\n  Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "tsc"\n',
+      cliError(
+        'Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "tsc"',
+      ),
     )
     expect(exitCode).toBe(1)
   })

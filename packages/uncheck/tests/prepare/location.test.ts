@@ -1,24 +1,30 @@
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { LAYOUTS, temporaryDirectory } from '../utils/project'
+import type { Env } from '../utils/project'
+import { gitConfig, LAYOUTS, temporaryDirectory, wrappedGit } from '../utils/project'
 import {
-  chmod,
   DISPATCHER,
-  gitConfig,
   HEADER,
   hookLine,
   HUSKY_SHIM,
   installHusky,
-  mode,
   notWritten,
   prepare,
   shownHook,
-  withGitWithoutShowScope,
   written,
 } from './utils'
 
 const SHARED_HOOK = '#!/bin/sh\necho "scanning for secrets"\n'
+
+function withGitWithoutShowScope(env: Env = {}): Env {
+  return {
+    ...env,
+    ...wrappedGit(
+      `case " $* " in *" --show-scope "*) echo "error: unknown option 'show-scope'" >&2; exit 129;; esac`,
+    ),
+  }
+}
 
 function sharedHooks(): string {
   const dir = temporaryDirectory()
@@ -38,7 +44,7 @@ describe.each(LAYOUTS)('prepare with core.hooksPath in a $name', ({ create, app 
     expect(exitCode).toBe(0)
     expect(stdout).toBe(written(shownHook(project, app, '.githooks/pre-commit'), 'created'))
     expect(project.read('.githooks/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
-    expect(mode(project, '.githooks/pre-commit')).toBe(0o755)
+    expect(project.mode('.githooks/pre-commit')).toBe(0o755)
     expect(project.exists('.git/hooks/pre-commit')).toBe(false)
   })
 
@@ -153,7 +159,7 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
     return installHusky(create(), 'echo "husky hook ran"\n')
   }
 
-  it('writes the hook husky 9 runs, not its generated shim, and keeps its mode', async () => {
+  it('writes the hook husky 9 runs, not its generated shim, and keeps its mode, also when unchanged', async () => {
     const project = husky()
 
     const { exitCode, stdout } = await prepare(project, [], { cwd: app })
@@ -161,23 +167,18 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
     expect(exitCode).toBe(0)
     expect(stdout).toBe(written(shownHook(project, app, '.husky/pre-commit'), 'updated'))
     expect(project.read('.husky/pre-commit')).toBe(`${hookLine(app)}\necho "husky hook ran"\n`)
-    expect(mode(project, '.husky/pre-commit')).toBe(0o644)
+    expect(project.mode('.husky/pre-commit')).toBe(0o644)
     expect(project.read('.husky/_/pre-commit')).toBe(HUSKY_SHIM)
-  })
 
-  it('leaves the mode of an unchanged husky hook alone', async () => {
-    const project = husky()
-    await prepare(project, [], { cwd: app })
+    const again = await prepare(project, [], { cwd: app })
 
-    const { stdout } = await prepare(project, [], { cwd: app })
-
-    expect(stdout).toBe(written(shownHook(project, app, '.husky/pre-commit'), 'unchanged'))
-    expect(mode(project, '.husky/pre-commit')).toBe(0o644)
+    expect(again.stdout).toBe(written(shownHook(project, app, '.husky/pre-commit'), 'unchanged'))
+    expect(project.mode('.husky/pre-commit')).toBe(0o644)
   })
 
   it('keeps the mode the user gave a husky hook when updating it', async () => {
     const project = husky()
-    chmod(project, '.husky/pre-commit', 0o700)
+    project.chmod('.husky/pre-commit', 0o700)
 
     const { exitCode, stdout } = await prepare(project, ['--no-fix'], { cwd: app })
 
@@ -188,7 +189,7 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
     expect(project.read('.husky/pre-commit')).toBe(
       `${hookLine(app, 'pnpm exec uncheck staged')}\necho "husky hook ran"\n`,
     )
-    expect(mode(project, '.husky/pre-commit')).toBe(0o700)
+    expect(project.mode('.husky/pre-commit')).toBe(0o700)
   })
 
   it('creates the hook the Vite+ dispatcher runs, without making it executable', async () => {
@@ -199,7 +200,7 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
 
     expect(stdout).toBe(written(shownHook(project, app, '.vite-hooks/pre-commit'), 'created'))
     expect(project.read('.vite-hooks/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
-    expect(mode(project, '.vite-hooks/pre-commit') & 0o111).toBe(0)
+    expect(project.mode('.vite-hooks/pre-commit') & 0o111).toBe(0)
     expect(project.exists('.vite-hooks/_/pre-commit')).toBe(false)
   })
 
@@ -210,7 +211,7 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
     const { stdout } = await prepare(project, [], { cwd: app })
 
     expect(stdout).toBe(written(shownHook(project, app, '.githooks/pre-commit'), 'created'))
-    expect(mode(project, '.githooks/pre-commit')).toBe(0o755)
+    expect(project.mode('.githooks/pre-commit')).toBe(0o755)
   })
 
   it('writes into a hooks folder named _ as it is, when its h cannot be read', async () => {
@@ -222,7 +223,7 @@ describe.each(LAYOUTS)('prepare with a hook dispatcher in a $name', ({ create, a
 
     expect(stdout).toBe(written(shownHook(project, app, '.hooks/_/pre-commit'), 'created'))
     expect(project.read('.hooks/_/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
-    expect(mode(project, '.hooks/_/pre-commit')).toBe(0o755)
+    expect(project.mode('.hooks/_/pre-commit')).toBe(0o755)
   })
 })
 
@@ -236,7 +237,7 @@ describe.each(LAYOUTS)('prepare with a symlinked hook in a $name', ({ create, ap
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(lstatSync(project.path('.git/hooks/pre-commit')).isSymbolicLink()).toBe(true)
     expect(project.read('scripts/pre-commit')).toBe(`#!/bin/sh\n${hookLine(app)}\npnpm test\n`)
-    expect(mode(project, 'scripts/pre-commit')).toBe(0o755)
+    expect(project.mode('scripts/pre-commit')).toBe(0o755)
   })
 
   it('creates the script a dangling link points to', async () => {
@@ -248,6 +249,6 @@ describe.each(LAYOUTS)('prepare with a symlinked hook in a $name', ({ create, ap
     expect(stdout).toBe(written(shownHook(project, app), 'created'))
     expect(lstatSync(project.path('.git/hooks/pre-commit')).isSymbolicLink()).toBe(true)
     expect(project.read('hooks/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
-    expect(mode(project, 'hooks/pre-commit')).toBe(0o755)
+    expect(project.mode('hooks/pre-commit')).toBe(0o755)
   })
 })

@@ -1,8 +1,8 @@
 import { availableParallelism } from 'node:os'
-import { stripVTControlCharacters, styleText } from 'node:util'
+import { styleText } from 'node:util'
 
 import { LAYOUTS, report, singleRepo } from '../utils/project'
-import { layoutChecks } from './utils'
+import { CODE_WITH_VAR, layoutChecks } from './utils'
 
 const STANDALONE_TSCONFIG = {
   compilerOptions: {
@@ -27,6 +27,7 @@ const count = (dir) => readdirSync(dir).length;
 const giveUp = Date.now() + 10_000;
 let most = 0;
 
+console.log(\`\${config} started\`);
 mkdirSync('running', { recursive: true });
 mkdirSync('finished', { recursive: true });
 writeFileSync(\`running/\${marker}\`, '');
@@ -51,7 +52,7 @@ function paint(style: Parameters<typeof styleText>[0], text: string): string {
   return styleText(style, text, { validateStream: false })
 }
 
-describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app }) => {
+describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
   const { sherif, checks } = layoutChecks(app)
 
   it('fails a check whose tool is killed by a signal and still runs the others', async () => {
@@ -92,12 +93,12 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app }) => {
       .map((line) => line.replace(/\(\d+,\d+\): error (TS\d+).*$/, ' $1'))
 
     expect(lines).toEqual([
-      ...(app === '' ? [] : ['▶ tsc -b tsconfig.json']),
+      ...(app === '' ? [] : [tsc]),
       `▶ tsc -p ${app}scripts/tsconfig.json --noEmit`,
       `${app}scripts/check.ts TS2322`,
       `▶ tsc -p ${app}tools/tsconfig.json --noEmit`,
       `${app}tools/check.ts TS2322`,
-      ...(app === '' ? ['▶ tsc -p tsconfig.json --noEmit'] : []),
+      ...(app === '' ? [tsc] : []),
     ])
     expect(report(stdout).at(-1)).toBe('✘ 1 of 1 checks failed: tsc')
     expect(exitCode).toBe(1)
@@ -105,45 +106,7 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app }) => {
 })
 
 describe('uncheck output', () => {
-  it.skipIf(availableParallelism() < 2)(
-    'checks standalone projects side by side without mixing their output',
-    async () => {
-      const project = singleRepo({
-        'scripts/tsconfig.json': STANDALONE_TSCONFIG,
-        'scripts/check.ts': 'export const scripts = 1;\n',
-      }).fake(
-        'typescript',
-        `const { existsSync, writeFileSync } = require('node:fs');
-
-const config = process.argv[process.argv.indexOf('-p') + 1];
-const other = config === 'tsconfig.json' ? 'scripts/tsconfig.json' : 'tsconfig.json';
-const giveUp = Date.now() + 10_000;
-
-console.log(\`\${config} started\`);
-writeFileSync(\`\${config}.started\`, '');
-
-(function waitForOther() {
-  if (existsSync(\`\${other}.started\`)) {
-    console.log(\`\${config} saw \${other} running\`);
-  } else if (Date.now() > giveUp) {
-    console.log(\`\${config} ran alone\`);
-  } else {
-    setTimeout(waitForOther, 10);
-  }
-})();
-`,
-      )
-
-      const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
-
-      expect(stdout).toMatch(
-        /^▶ tsc -p scripts\/tsconfig\.json --noEmit\nscripts\/tsconfig\.json started\nscripts\/tsconfig\.json saw tsconfig\.json running\n▶ tsc -p tsconfig\.json --noEmit\ntsconfig\.json started\ntsconfig\.json saw scripts\/tsconfig\.json running\n✔ tsc passed /m,
-      )
-      expect(exitCode).toBe(0)
-    },
-  )
-
-  it('runs at most four type checkers at once and prints their output in order', async () => {
+  it('runs up to four type checkers side by side and prints the output of each in one piece, in order', async () => {
     const cap = Math.min(4, availableParallelism())
     const project = singleRepo(
       Object.fromEntries(
@@ -156,7 +119,9 @@ writeFileSync(\`\${config}.started\`, '');
 
     const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
 
-    const runs = [...stdout.matchAll(/^▶ tsc -p (\S+) --noEmit\n\1 saw (\d+) running$/gm)]
+    const runs = [
+      ...stdout.matchAll(/^▶ tsc -p (\S+) --noEmit\n\1 started\n\1 saw (\d+) running$/gm),
+    ]
 
     expect(runs.map(([, config]) => config)).toEqual([
       ...STANDALONE_PROJECTS.map((name) => `${name}/tsconfig.json`),
@@ -193,12 +158,20 @@ writeFileSync(\`\${config}.started\`, '');
       `${paint('green', '✔')} ${paint('bold', 'oxfmt')} ${paint('green', 'passed')} `,
     )
     expect(stdout).toContain(`${paint('green', '✔')} all checks passed (oxfmt)\n`)
-    expect(report(stripVTControlCharacters(stdout)).at(-1)).toBe('✔ all checks passed (oxfmt)')
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '▶ oxfmt --check',
+      '✔ oxfmt passed',
+      '○ tsc skipped, not selected by --only',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(exitCode).toBe(0)
   })
 
   it('styles failures in red', async () => {
-    const project = singleRepo({ 'src/legacy.ts': 'var count = 1;\nexport { count };\n' })
+    const project = singleRepo({ 'src/legacy.ts': CODE_WITH_VAR })
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', '--require=oxlint'], {
       env: { FORCE_COLOR: '1' },
@@ -215,10 +188,7 @@ writeFileSync(\`\${config}.started\`, '');
   it('asks tools for colors when it prints to a terminal', async () => {
     const project = singleRepo().fake('oxlint', PRINT_FORCE_COLOR)
 
-    // Node paints nothing in a terminal whose TERM is unset, which it is in some shells.
-    const { exitCode, stdout } = await project.uncheckInTerminal(['--only=oxlint'], {
-      env: { TERM: 'xterm-256color' },
-    })
+    const { exitCode, stdout } = await project.uncheckInTerminal(['--only=oxlint'])
 
     expect(stdout).toContain('\nthe tool sees FORCE_COLOR=1\n')
     expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxlint)')

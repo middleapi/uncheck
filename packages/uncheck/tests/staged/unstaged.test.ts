@@ -1,22 +1,16 @@
-import { chmodSync, lstatSync, readdirSync } from 'node:fs'
+import { lstatSync, readdirSync } from 'node:fs'
 
-import { LAYOUTS, report, run } from '../utils/project'
+import { cliError, LAYOUTS, PERMISSIONS_ENFORCED, report, run, wrappedGit } from '../utils/project'
 import {
   conflictError,
-  failure,
   folderOf,
   inIndex,
   LEFTOVER_ERROR,
-  mode,
-  normalized,
-  stage,
   stagePartially,
-  status,
   stranded,
+  STRANDED_HINT,
   strandedError,
-  UNTRANSLATED,
   VERSIONS,
-  wrappedGit,
 } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ create, app }) => {
@@ -26,7 +20,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
   it('checks the staged version of a partially staged file and puts the unstaged one back', async () => {
     const project = create({ [file]: VERSIONS.committed })
 
-    stage(project, { [file]: VERSIONS.fixed })
+    project.stage({ [file]: VERSIONS.fixed })
     project.write({ [file]: `${VERSIONS.fixed}var   unstaged = 1\n` })
 
     const { exitCode, stdout, stderr } = await project.uncheck(
@@ -49,7 +43,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       '○ unstaged changes of src/extra.ts restored',
     ])
     expect(project.read(file)).toBe(`${VERSIONS.fixed}var   unstaged = 1\n`)
-    expect(status(project)).toBe(`MM ${file}\n`)
+    expect(project.git('status', '--porcelain')).toBe(`MM ${file}\n`)
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 
@@ -63,7 +57,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     const fixed = added.replace("'g'", '"g";')
     const project = create({ [file]: joined, [`${app}src/other.ts`]: 'export const other = 1;\n' })
 
-    stage(project, { [file]: split + added })
+    project.stage({ [file]: split + added })
     project.write({
       [file]: split + edit(added),
       [`${app}src/other.ts`]: 'export const   other = 2\n',
@@ -83,11 +77,13 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(project.read(file)).toBe(joined + edit(fixed))
     expect(project.read(`${app}src/other.ts`)).toBe('export const   other = 2\n')
     expect(project.read(`${app}src/fresh.ts`)).toBe('export const   fresh = 3\n')
-    expect(status(project)).toBe(`MM ${file}\n M ${app}src/other.ts\n`)
+    expect(project.git('status', '--porcelain')).toBe(
+      `MM ${file}\n M ${app}src/other.ts\n?? ${app}src/fresh.ts\n`,
+    )
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 
-  it('undoes every fix when one conflicts with unstaged changes, so nothing is lost', async () => {
+  it('undoes every fix when one conflicts with unstaged changes, without running the post-checkout hook', async () => {
     const far = Array.from({ length: 30 }, (_, index) => `export const f${index} = ${index};\n`)
     const stagedFar = ['export const f0   =   0;\n', ...far.slice(1)].join('')
     const unstagedFar = [
@@ -99,8 +95,10 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       [file]: 'export const extra = 1;\n',
       [`${app}src/far.ts`]: far.join(''),
     })
+      .write({ '.git/hooks/post-checkout': '#!/bin/sh\ntouch .git/post-checkout-ran\nexit 1\n' })
+      .chmod('.git/hooks/post-checkout', 0o755)
 
-    stage(project, {
+    project.stage({
       [file]: 'export const   extra = 42\n',
       [`${app}src/far.ts`]: stagedFar,
       [`${app}src/other.ts`]: 'export const   other = 2\n',
@@ -115,7 +113,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       { cwd: folder },
     )
 
-    expect(stderr).toBe(failure(conflictError('src/extra.ts')))
+    expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
     expect(exitCode).toBe(1)
     expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts src/far.ts src/other.ts')
     expect(inIndex(project, file)).toBe('export const   extra = 42\n')
@@ -124,6 +122,10 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(project.read(file)).toBe('export const   extra = 43\n')
     expect(project.read(`${app}src/far.ts`)).toBe(unstagedFar)
     expect(project.read(`${app}src/other.ts`)).toBe('export const   other = 2\n')
+    expect(project.git('status', '--porcelain')).toBe(
+      `MM ${file}\nMM ${app}src/far.ts\nA  ${app}src/other.ts\n`,
+    )
+    expect(project.exists('.git/post-checkout-ran')).toBe(false)
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 
@@ -133,7 +135,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       [`${app}src/b.ts`]: 'export const b = 1;\n',
     })
 
-    stage(project, {
+    project.stage({
       [`${app}src/a.ts`]: 'export const a = 2;\n',
       [`${app}src/b.ts`]: 'export const b = 2;\n',
     })
@@ -143,7 +145,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--fix'], { cwd: folder })
 
     expect(stderr).toBe(
-      failure(
+      cliError(
         'The unstaged changes of src/a.ts src/b.ts are not edits to a file and cannot be set aside. Stage or stash them, then commit again.',
       ),
     )
@@ -151,7 +153,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(project.exists(`${app}src/a.ts`)).toBe(false)
     expect(lstatSync(project.path(`${app}src/b.ts`)).isSymbolicLink()).toBe(true)
-    expect(status(project)).toBe(`MD ${app}src/a.ts\nMT ${app}src/b.ts\n`)
+    expect(project.git('status', '--porcelain')).toBe(`MD ${app}src/a.ts\nMT ${app}src/b.ts\n`)
   })
 
   it('stops rather than overwrite the unstaged changes an earlier run left behind', async () => {
@@ -161,7 +163,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--fix'], { cwd: folder })
 
-    expect(normalized(project, stderr)).toBe(failure(LEFTOVER_ERROR))
+    expect(project.normalize(stderr)).toBe(cliError(LEFTOVER_ERROR))
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(project.read(`.git/uncheck-unstaged/${file}`)).toBe('left behind')
@@ -170,18 +172,18 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
   })
 
   it('stops on the unstaged changes an earlier run left behind even with none to set aside now', async () => {
-    const project = stage(create(), { [file]: 'export const   extra = 1\n' })
+    const project = create().stage({ [file]: 'export const   extra = 1\n' })
 
     project.write({ '.git/uncheck-unstaged/src/index.ts': 'left behind' })
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--fix'], { cwd: folder })
 
-    expect(normalized(project, stderr)).toBe(failure(LEFTOVER_ERROR))
+    expect(project.normalize(stderr)).toBe(cliError(LEFTOVER_ERROR))
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(project.read('.git/uncheck-unstaged/src/index.ts')).toBe('left behind')
     expect(inIndex(project, file)).toBe('export const   extra = 1\n')
-    expect(status(project)).toBe(`A  ${file}\n`)
+    expect(project.git('status', '--porcelain')).toBe(`A  ${file}\n`)
   })
 
   it('stops when a parallel run claims the folder for unstaged changes first', async () => {
@@ -194,7 +196,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       ),
     })
 
-    expect(normalized(project, stderr)).toBe(failure(LEFTOVER_ERROR))
+    expect(project.normalize(stderr)).toBe(cliError(LEFTOVER_ERROR))
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(readdirSync(project.path('.git/uncheck-unstaged'))).toEqual([])
@@ -205,13 +207,13 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
   it('keeps the unstaged mode of a file, whether or not the checks change it', async () => {
     const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
 
-    chmodSync(project.path(file), 0o755)
+    project.chmod(file, 0o755)
 
     const checked = await project.uncheck(['staged', '--only=oxlint'], { cwd: folder })
 
     expect(checked.exitCode).toBe(0)
     expect(project.read(file)).toBe(VERSIONS.unstaged)
-    expect(mode(project, file)).toBe(0o755)
+    expect(project.mode(file)).toBe(0o755)
 
     const fixed = await project.uncheck(['staged', '--fix', '--only=oxfmt'], { cwd: folder })
 
@@ -219,7 +221,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(inIndex(project, file)).toBe(VERSIONS.fixed)
     expect(project.git('ls-files', '--stage', '--', file)).toMatch(/^100644 /)
     expect(project.read(file)).toBe(VERSIONS.merged)
-    expect(mode(project, file)).toBe(0o755)
+    expect(project.mode(file)).toBe(0o755)
   })
 
   it('keeps an edit a tool saves to a partially staged file while the checks run', async () => {
@@ -249,7 +251,9 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     const { exitCode } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], { cwd: folder })
 
     expect(exitCode).toBe(0)
+    expect(inIndex(project, file)).toBe(VERSIONS.fixed)
     expect(project.read(file)).toBe(VERSIONS.merged)
+    expect(project.git('status', '--porcelain')).toBe(`MM ${file}\n`)
   })
 
   it('reads every unstaged change right, a rename among them', async () => {
@@ -267,28 +271,9 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(exitCode).toBe(0)
     expect(inIndex(project, file)).toBe(VERSIONS.fixed)
     expect(project.read(file)).toBe(VERSIONS.merged)
-    expect(status(project)).toBe(`MM ${file}\n R ${app}src/aaa.ts -> ${app}src/moved.ts\n`)
-  })
-
-  it('sets unstaged changes aside and back without running the post-checkout hook', async () => {
-    const project = create({ [file]: 'export const extra = 1;\n' })
-
-    project.write({
-      '.git/hooks/post-checkout': '#!/bin/sh\ntouch .git/post-checkout-ran\nexit 1\n',
-    })
-    chmodSync(project.path('.git/hooks/post-checkout'), 0o755)
-    stage(project, { [file]: 'export const   extra = 42\n' })
-    project.write({ [file]: 'export const   extra = 43\n' })
-
-    const { exitCode, stderr } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], {
-      cwd: folder,
-    })
-
-    expect(stderr).toBe(failure(conflictError('src/extra.ts')))
-    expect(exitCode).toBe(1)
-    expect(project.exists('.git/post-checkout-ran')).toBe(false)
-    expect(inIndex(project, file)).toBe('export const   extra = 42\n')
-    expect(project.read(file)).toBe('export const   extra = 43\n')
+    expect(project.git('status', '--porcelain')).toBe(
+      `MM ${file}\n R ${app}src/aaa.ts -> ${app}src/moved.ts\n`,
+    )
   })
 
   it('puts unstaged changes back from a folder whose name has a newline', async () => {
@@ -311,27 +296,44 @@ describe.each(LAYOUTS)(
     const folder = folderOf(app)
     const file = `${app}src/extra.ts`
     const saved = `.git/uncheck-unstaged/${file}`
-    const whereKept =
-      '  their unstaged versions are in <project>/.git/uncheck-unstaged, at their paths from the top of the repository: copy back what your files are missing and delete the folder\n'
 
-    it('keeps the unstaged changes aside and stops when a check leaves the file unwritable', async () => {
-      const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
+    it.runIf(PERMISSIONS_ENFORCED)(
+      'keeps the unstaged changes aside and stops when a check leaves the file unwritable',
+      async () => {
+        const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
 
-      project.fake('oxlint', "require('node:fs').chmodSync('src/extra.ts', 0o444)\n")
+        project.fake('oxlint', "require('node:fs').chmodSync('src/extra.ts', 0o444)\n")
 
-      const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--only=oxlint'], {
-        cwd: folder,
-      })
+        const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--only=oxlint'], {
+          cwd: folder,
+        })
 
-      expect(stderr).toBe(failure(strandedError('src/extra.ts')))
-      expect(exitCode).toBe(1)
-      expect(normalized(project, stdout)).toContain(
-        `${stranded('src/extra.ts', `PlatformError: PermissionDenied: FileSystem.copyFile (<project>/${saved})`)}\n${whereKept}`,
-      )
-      expect(project.read(saved)).toBe(VERSIONS.unstaged)
-      expect(project.read(file)).toBe(VERSIONS.staged)
-      expect(inIndex(project, file)).toBe(VERSIONS.staged)
-    })
+        const output = project.normalize(stdout)
+        const strandedLine = stranded(
+          'src/extra.ts',
+          `PlatformError: PermissionDenied: FileSystem.copyFile (<project>/${saved})`,
+        )
+
+        expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
+        expect(exitCode).toBe(1)
+        expect(report(output)).toEqual([
+          `uncheck staged in ${project.normalize(project.path(folder))}`,
+          '○ unstaged changes of src/extra.ts set aside until the checks finish',
+          '○ sherif skipped, not selected by --only',
+          '▶ oxlint --no-error-on-unmatched-pattern src/extra.ts',
+          '✔ oxlint passed',
+          '○ oxfmt skipped, not selected by --only',
+          '○ tsc skipped, not selected by --only',
+          '✔ all checks passed (oxlint)',
+          strandedLine,
+        ])
+        expect(output).toContain(`\n${strandedLine}\n${STRANDED_HINT}`)
+        expect(project.read(saved)).toBe(VERSIONS.unstaged)
+        expect(project.read(file)).toBe(VERSIONS.staged)
+        expect(project.mode(file)).toBe(0o444)
+        expect(inIndex(project, file)).toBe(VERSIONS.staged)
+      },
+    )
 
     it('keeps the unstaged changes aside and stops when a check replaces the file with a folder', async () => {
       const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
@@ -343,13 +345,12 @@ describe.each(LAYOUTS)(
 
       const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--only=oxlint'], {
         cwd: folder,
-        env: UNTRANSLATED,
       })
 
-      expect(stderr).toBe(failure(strandedError('src/extra.ts')))
+      expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
       expect(exitCode).toBe(1)
-      expect(normalized(project, stdout)).toContain(
-        `${stranded('src/extra.ts', `git -c core.safecrlf=false hash-object -w --path=src/extra.ts [1 paths] failed: fatal: Unable to add ${file} to database`)}\n${whereKept}`,
+      expect(project.normalize(stdout)).toContain(
+        `${stranded('src/extra.ts', `git -c core.safecrlf=false hash-object -w --path=src/extra.ts [1 paths] failed: fatal: Unable to add ${file} to database`)}\n${STRANDED_HINT}`,
       )
       expect(project.read(saved)).toBe(VERSIONS.unstaged)
       expect(inIndex(project, file)).toBe(VERSIONS.staged)
@@ -370,15 +371,15 @@ describe.each(LAYOUTS)(
 
       const { exitCode, stdout, stderr } = await project.uncheck(
         ['staged', '--fix', '--only=oxfmt'],
-        { cwd: folder, env: UNTRANSLATED },
+        { cwd: folder },
       )
 
       const merged = await run(['git', 'hash-object', '--no-filters', '--stdin'], {
-        cwd: project.path('.'),
+        cwd: project.dir,
         input: VERSIONS.merged,
       })
 
-      expect(stderr).toBe(failure(strandedError('src/extra.ts')))
+      expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
       expect(exitCode).toBe(1)
       expect(report(stdout).slice(-2)).toEqual([
         '✔ staged the fixes to src/extra.ts',
@@ -405,7 +406,7 @@ describe.each(LAYOUTS)(
         },
       )
 
-      expect(stderr).toBe(failure(strandedError('src/extra.ts')))
+      expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
       expect(exitCode).toBe(1)
       expect(report(stdout).at(-2)).toBe('✔ staged the fixes to src/extra.ts')
       expect(report(stdout).at(-1)).toMatch(
@@ -416,22 +417,25 @@ describe.each(LAYOUTS)(
       expect(project.read(saved)).toBe(VERSIONS.unstaged)
     })
 
-    it('stops before touching a partially staged file it cannot read', async () => {
-      const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
+    it.runIf(PERMISSIONS_ENFORCED)(
+      'stops before touching a partially staged file it cannot read',
+      async () => {
+        const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
 
-      chmodSync(project.path(file), 0o000)
+        project.chmod(file, 0o000)
 
-      const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
+        const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
 
-      expect(normalized(project, stderr)).toBe(
-        failure(`PermissionDenied: FileSystem.copyFile (<project>/${file})`),
-      )
-      expect(exitCode).toBe(1)
-      expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
-      expect(project.exists('.git/uncheck-unstaged')).toBe(false)
-      chmodSync(project.path(file), 0o644)
-      expect(project.read(file)).toBe(VERSIONS.unstaged)
-    })
+        expect(project.normalize(stderr)).toBe(
+          cliError(`PermissionDenied: FileSystem.copyFile (<project>/${file})`),
+        )
+        expect(exitCode).toBe(1)
+        expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
+        expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+        expect(project.mode(file)).toBe(0o000)
+        expect(project.chmod(file, 0o644).read(file)).toBe(VERSIONS.unstaged)
+      },
+    )
 
     it('puts back what it set aside when git fails to check out the staged versions', async () => {
       const other = `${app}src/other.ts`
@@ -450,14 +454,13 @@ describe.each(LAYOUTS)(
 
       const { exitCode, stdout, stderr } = await project.uncheck(['staged'], {
         cwd: folder,
-        env: UNTRANSLATED,
       })
 
       const filter =
         "external filter 'if [ -e .git/failed ]; then cat; else touch .git/failed; exit 1; fi' failed"
 
       expect(stderr).toBe(
-        failure(
+        cliError(
           `git checkout-index -f [2 paths] failed: error: ${filter} 1\nerror: ${filter}\nfatal: ${other}: smudge filter flaky failed`,
         ),
       )
@@ -465,7 +468,7 @@ describe.each(LAYOUTS)(
       expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
       expect(project.read(file)).toBe(VERSIONS.unstaged)
       expect(project.read(other)).toBe(VERSIONS.unstaged)
-      expect(status(project)).toBe(`MM ${file}\nMM ${other}\n`)
+      expect(project.git('status', '--porcelain')).toBe(`MM ${file}\nMM ${other}\n`)
       expect(project.exists('.git/uncheck-unstaged')).toBe(false)
     })
   },

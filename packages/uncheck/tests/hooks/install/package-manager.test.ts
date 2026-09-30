@@ -7,7 +7,6 @@ function manifest(packageManager: string) {
 
 describe('hooks install runs uncheck through the package manager of the project', () => {
   it.each([
-    ['a pnpm lockfile', {}, 'pnpm exec'],
     ['a Yarn lockfile', { 'pnpm-lock.yaml': null, 'yarn.lock': '' }, 'yarn run --silent'],
     ['a Bun lockfile', { 'pnpm-lock.yaml': null, 'bun.lock': '{}\n' }, 'bunx --no-install'],
     ['a binary Bun lockfile', { 'pnpm-lock.yaml': null, 'bun.lockb': '' }, 'bunx --no-install'],

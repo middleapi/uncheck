@@ -1,6 +1,15 @@
 import { readFileSync } from 'node:fs'
 
-import { CLI, LAYOUTS, report, run, singleRepo, temporaryDirectory } from '../utils/project'
+import {
+  CLI,
+  cliError,
+  LAYOUTS,
+  report,
+  run,
+  singleRepo,
+  temporaryDirectory,
+} from '../utils/project'
+import { CODE_WITH_VAR } from './utils'
 
 const { version } = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
@@ -19,7 +28,7 @@ function onlyOxlint(dir: string): string[] {
 }
 
 describe.each(LAYOUTS)('uncheck --cwd in a $name', ({ create, app }) => {
-  const legacyOutsideSrc = { [`${app}legacy.ts`]: 'var count = 1;\nexport { count };\n' }
+  const legacyOutsideSrc = { [`${app}legacy.ts`]: CODE_WITH_VAR }
 
   it('checks the directory given relative to the current one', async () => {
     const project = create(legacyOutsideSrc)
@@ -52,7 +61,9 @@ describe.each(LAYOUTS)('uncheck --cwd in a $name', ({ create, app }) => {
 
     expect(stdout).toContain('USAGE')
     expect(stderr).toBe(
-      `\nERROR\n  Invalid value for flag --cwd: "${app}${cwd}". Expected: ${problem}: ${project.path(app, cwd)}\n`,
+      cliError(
+        `Invalid value for flag --cwd: "${app}${cwd}". Expected: ${problem}: ${project.path(app, cwd)}`,
+      ),
     )
     expect(exitCode).toBe(1)
   })
@@ -105,7 +116,7 @@ describe('uncheck command line', () => {
     const { exitCode, stdout, stderr } = await singleRepo().uncheck([flag])
 
     expect(stdout).toContain('USAGE')
-    expect(stderr).toBe(`\nERROR\n  Unrecognized flag: ${flag} in command uncheck\n`)
+    expect(stderr).toBe(cliError(`Unrecognized flag: ${flag} in command uncheck`))
     expect(exitCode).toBe(1)
   })
 })

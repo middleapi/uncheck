@@ -1,7 +1,7 @@
-import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
-import { failure, folderOf, inIndex, stage, TSC_COMMAND } from './utils'
+import { cliError, LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import { folderOf, inIndex } from './utils'
 
-describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
+describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
   const folder = folderOf(app)
 
   it('needs a git repository', async () => {
@@ -9,7 +9,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
 
-    expect(stderr).toBe(failure('`uncheck staged` needs a git repository'))
+    expect(stderr).toBe(cliError('`uncheck staged` needs a git repository'))
     expect(stdout).toBe('')
     expect(exitCode).toBe(1)
   })
@@ -32,7 +32,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
   it('passes clean staged files and leaves unstaged and untracked ones out', async () => {
     const project = create()
 
-    stage(project, { [`${app}src/extra.ts`]: 'export const extra: number = 1;\n' })
+    project.stage({ [`${app}src/extra.ts`]: 'export const extra: number = 1;\n' })
     project.write({
       [`${app}src/index.ts`]: `${project.read(`${app}src/index.ts`)}var   unstaged = 1\n`,
       [`${app}src/untracked.ts`]: 'var   untracked = 1\n',
@@ -49,15 +49,18 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
       '✔ oxlint passed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
-      TSC_COMMAND[name],
+      tsc,
       '✔ tsc passed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
+    expect(project.git('status', '--porcelain')).toBe(
+      `A  ${app}src/extra.ts\n M ${app}src/index.ts\n?? ${app}src/untracked.ts\n`,
+    )
   })
 
   it('fails on lint, format and type errors in the staged files without touching them', async () => {
     const broken = 'var   answer: number = "42"\nexport { answer }\n'
-    const project = stage(create(), { [`${app}src/index.ts`]: broken })
+    const project = create().stage({ [`${app}src/index.ts`]: broken })
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
 
@@ -70,7 +73,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
       '✘ oxlint failed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts',
       '✘ oxfmt failed',
-      TSC_COMMAND[name],
+      tsc,
       '✘ tsc failed',
       '✘ 3 of 3 checks failed: oxlint, oxfmt, tsc',
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
@@ -81,7 +84,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
   })
 
   it('passes --skip, --only and --require through to the checks', async () => {
-    const project = stage(create({ [`${app}README.md`]: '# app\n' }), {
+    const project = create({ [`${app}README.md`]: '# app\n' }).stage({
       [`${app}README.md`]: '# app\n\nmore\n',
       [`${app}src/extra.ts`]: 'export const   extra = 1\n',
     })
@@ -132,7 +135,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ name, create, app }) => {
   })
 
   it('lists more than three files as a count', async () => {
-    const project = stage(create(), {
+    const project = create().stage({
       [`${app}src/a.ts`]: 'export const   a = 1\n',
       [`${app}src/b.ts`]: 'export const   b = 1\n',
       [`${app}src/c.ts`]: 'export const   c = 1\n',
@@ -168,7 +171,7 @@ describe('uncheck staged flags', () => {
       '--skip=oxlint',
     ])
 
-    expect(stderr).toBe(failure('--only=oxlint and --skip=oxlint contradict each other.'))
+    expect(stderr).toBe(cliError('--only=oxlint and --skip=oxlint contradict each other.'))
     expect(stdout).toBe('')
     expect(exitCode).toBe(1)
   })
@@ -181,7 +184,7 @@ describe('uncheck staged in a package of a monorepo', () => {
   }
 
   it('checks and fixes only the staged files of the package it runs in', async () => {
-    const project = stage(monorepo(), edits)
+    const project = monorepo().stage(edits)
 
     const inside = await project.uncheck(['staged', '--only=oxfmt'], { cwd: 'packages/app' })
     const fromTop = await project.uncheck(['staged', '--only=oxfmt', '--cwd', 'packages/app'])
@@ -219,7 +222,7 @@ describe('uncheck staged in a package of a monorepo', () => {
       dependencies: { '@repo/core': 'workspace:*' },
       devDependencies: { typescript: '^6.0.0' },
     }
-    const project = stage(monorepo(), {
+    const project = monorepo().stage({
       'packages/app/package.json': manifest,
       'packages/app/src/index.ts': 'var   app = 1\nexport { app }\n',
     })

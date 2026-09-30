@@ -1,28 +1,67 @@
-import { LAYOUTS, report } from '../utils/project'
-import { layoutChecks } from './utils'
+import { writeFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+import { LAYOUTS, report, temporaryDirectory } from '../utils/project'
+import { CLEAN_CODE, CODE_WITH_VAR, NOT_COVERED, selectedReport } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
 
-describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
-  const { tsc } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ create, app, tsc }) => {
+  it('hands oxlint and oxfmt the given files alone and runs tsc on the config covering them', async () => {
+    const project = create({
+      [`${app}src/extra.ts`]: CLEAN_CODE,
+      [`${app}src/legacy.ts`]: CODE_WITH_VAR,
+    })
 
-  it('checks only the given files with every tool', async () => {
-    const project = create({ [`${app}src/legacy.ts`]: 'var count = 1;\nexport { count };\n' })
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      `${app}src/index.ts`,
+      `${app}src/extra.ts`,
+    ])
 
-    const { exitCode, stdout } = await project.uncheck([`${app}src/index.ts`])
-
+    expect(stderr).toBe('')
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, no package.json among the given files',
-      `▶ oxlint --no-error-on-unmatched-pattern ${app}src/index.ts`,
+      `▶ oxlint --no-error-on-unmatched-pattern ${app}src/extra.ts ${app}src/index.ts`,
       '✔ oxlint passed',
-      `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}src/index.ts`,
+      `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}src/extra.ts ${app}src/index.ts`,
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(exitCode).toBe(0)
+  })
+
+  it('lists every file for "." but leaves the choice to each tool without paths', async () => {
+    const project = create({
+      [`${app}src/routes/home.ts`]: CLEAN_CODE,
+      [`${app}src/routes/legacy.ts`]: CODE_WITH_VAR,
+    })
+
+    const dot = await project.uncheck([...ONLY_FILE_CHECKS, '.'], { cwd: `${app}src/routes` })
+    const everything = await project.uncheck(ONLY_FILE_CHECKS, { cwd: `${app}src/routes` })
+
+    expect(dot.exitCode).toBe(1)
+    expect(selectedReport(dot.stdout)).toEqual([
+      `uncheck in ${project.path(app, 'src/routes')}`,
+      '▶ oxlint --no-error-on-unmatched-pattern home.ts legacy.ts',
+      '✘ oxlint failed',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern home.ts legacy.ts',
+      '✔ oxfmt passed',
+      '✘ 1 of 2 checks failed: oxlint',
+      '  rerun with `--fix` to apply oxlint fixes',
+    ])
+    expect(everything.exitCode).toBe(1)
+    expect(selectedReport(everything.stdout)).toEqual([
+      `uncheck in ${project.path(app, 'src/routes')}`,
+      '▶ oxlint',
+      '✘ oxlint failed',
+      '▶ oxfmt --check',
+      '✔ oxfmt passed',
+      '✘ 1 of 2 checks failed: oxlint',
+      '  rerun with `--fix` to apply oxlint fixes',
+    ])
   })
 
   it('fixes only the given files', async () => {
@@ -50,7 +89,10 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
   })
 
   it('passes files that no tool handles to the linter and formatter without failing', async () => {
-    const project = create({ [`${app}notes.txt`]: 'var   draft\n', [`${app}README.md`]: '# App\n' })
+    const project = create({
+      [`${app}notes.txt`]: 'var   draft\n',
+      [`${app}README.md`]: '# App\n',
+    })
 
     const { exitCode, stdout } = await project.uncheck([`${app}notes.txt`, `${app}README.md`])
 
@@ -61,62 +103,8 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
       '✔ oxlint passed',
       `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}README.md ${app}notes.txt`,
       '✔ oxfmt passed',
-      '○ tsc skipped, no tsconfig.json covers the given files',
+      NOT_COVERED,
       '✔ all checks passed (oxlint, oxfmt)',
-    ])
-    expect(exitCode).toBe(0)
-  })
-
-  it('fails on paths that match no file', async () => {
-    const project = create()
-
-    const { exitCode, stdout, stderr } = await project.uncheck([
-      `${app}src/index.ts`,
-      `${app}missing.ts`,
-      `${app}lib/**`,
-    ])
-
-    expect(report(stdout)).toEqual([`uncheck in ${project.dir}`])
-    expect(stderr).toBe(
-      `\nERROR\n  No files match ${app}missing.ts, ${app}lib/**. Pass --no-error-on-unmatched-pattern to run with whatever matched.\n`,
-    )
-    expect(exitCode).toBe(1)
-  })
-
-  it('runs with whatever matched when unmatched patterns are allowed', async () => {
-    const project = create()
-
-    const { exitCode, stdout } = await project.uncheck([
-      '--no-error-on-unmatched-pattern',
-      ...ONLY_FILE_CHECKS,
-      `${app}src/index.ts`,
-      `${app}missing.ts`,
-    ])
-
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      '○ sherif skipped, not selected by --only',
-      `▶ oxlint --no-error-on-unmatched-pattern ${app}src/index.ts`,
-      '✔ oxlint passed',
-      `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}src/index.ts`,
-      '✔ oxfmt passed',
-      '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxlint, oxfmt)',
-    ])
-    expect(exitCode).toBe(0)
-  })
-
-  it('passes when nothing matches and unmatched patterns are allowed', async () => {
-    const project = create()
-
-    const { exitCode, stdout } = await project.uncheck([
-      '--no-error-on-unmatched-pattern',
-      `${app}missing.ts`,
-    ])
-
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      `○ nothing to check, no files match ${app}missing.ts`,
     ])
     expect(exitCode).toBe(0)
   })
@@ -136,14 +124,22 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
       `${app}lib/b.ts`,
     ])
 
-    expect(report(three.stdout)).toContain(
+    expect(selectedReport(three.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
       `▶ oxlint --no-error-on-unmatched-pattern ${app}lib/a.ts ${app}lib/b.ts ${app}lib/c.ts`,
-    )
+      '✔ oxlint passed',
+      '✔ all checks passed (oxlint)',
+    ])
     expect(three.exitCode).toBe(0)
 
     const four = await project.uncheck(['--only=oxlint', `${app}lib`])
 
-    expect(report(four.stdout)).toContain('▶ oxlint --no-error-on-unmatched-pattern [4 files]')
+    expect(selectedReport(four.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      '▶ oxlint --no-error-on-unmatched-pattern [4 files]',
+      '✔ oxlint passed',
+      '✔ all checks passed (oxlint)',
+    ])
     expect(four.exitCode).toBe(0)
   })
 
@@ -153,7 +149,7 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
     const files = Object.fromEntries(
       Array.from({ length: 301 }, (_, index) => [name(index), 'export const value = 1;\n']),
     )
-    const project = create({ ...files, [name(300)]: 'var value = 1;\nexport { value };\n' })
+    const project = create({ ...files, [name(300)]: CODE_WITH_VAR })
 
     const { exitCode, stdout } = await project.uncheck([...ONLY_FILE_CHECKS, `${app}generated`])
 
@@ -176,7 +172,7 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
 
   it('hands tools file names starting with - or ! as files', async () => {
     const project = create({
-      [`${app}-draft.ts`]: 'var draft = 1;\nexport { draft };\n',
+      [`${app}-draft.ts`]: CODE_WITH_VAR,
       [`${app}!notes.ts`]: 'export const   notes = 1\n',
     })
 
@@ -201,7 +197,36 @@ describe.each(LAYOUTS)('uncheck with paths in a $name', ({ create, app }) => {
     const fix = await project.uncheck(['--fix', ...ONLY_FILE_CHECKS, '*.ts'], { cwd: app })
 
     expect(fix.exitCode).toBe(0)
-    expect(project.read(`${app}-draft.ts`)).toBe('const draft = 1;\nexport { draft };\n')
+    expect(project.read(`${app}-draft.ts`)).toBe('const count = 1;\nexport { count };\n')
     expect(project.read(`${app}!notes.ts`)).toBe('export const notes = 1;\n')
+  })
+
+  it('hands oxlint and oxfmt a file above the directory it runs in as a "../" path they reject', async () => {
+    const project = create()
+    const outside = temporaryDirectory()
+    writeFileSync(join(outside, 'shared.ts'), CLEAN_CODE)
+    const handed = relative(project.dir, join(outside, 'shared.ts'))
+
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      ...ONLY_FILE_CHECKS,
+      join(outside, 'shared.ts'),
+    ])
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(1)
+    expect(selectedReport(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      `▶ oxlint --no-error-on-unmatched-pattern ${handed}`,
+      '✘ oxlint failed',
+      `▶ oxfmt --check --no-error-on-unmatched-pattern ${handed}`,
+      '✘ oxfmt failed',
+      '✘ 2 of 2 checks failed: oxlint, oxfmt',
+      '  rerun with `--fix` to apply oxlint and oxfmt fixes',
+    ])
+    expect(
+      stdout
+        .split('\n')
+        .filter((line) => line === `Error: \`${handed}\`: PATH must not contain ".."`),
+    ).toHaveLength(2)
   })
 })

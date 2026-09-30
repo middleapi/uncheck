@@ -1,4 +1,4 @@
-import { LAYOUTS, singleRepo } from '../../utils/project'
+import { LAYOUTS, cliError, singleRepo } from '../../utils/project'
 import {
   asWritten,
   claudeSettings,
@@ -6,7 +6,6 @@ import {
   cursorHooks,
   hookCommand,
   installOutput,
-  readConfig,
 } from './utils'
 
 describe.each(LAYOUTS)('hooks install writes the agent configs in a $name', ({ create, app }) => {
@@ -68,14 +67,15 @@ describe.each(LAYOUTS)('hooks install writes the agent configs in a $name', ({ c
       cwd: app,
     })
 
+    expect(first.exitCode).toBe(0)
     expect(first.stdout).toBe(
       installOutput(
         ['Claude Code .claude/settings.json created', 'Cursor .cursor/hooks.json created'],
         fast,
       ),
     )
-    expect(readConfig(project, `${app}.claude/settings.json`)).toEqual(claudeSettings(fast))
-    expect(readConfig(project, `${app}.cursor/hooks.json`)).toEqual(cursorHooks(fast))
+    expect(project.read(`${app}.claude/settings.json`)).toBe(asWritten(claudeSettings(fast)))
+    expect(project.read(`${app}.cursor/hooks.json`)).toBe(asWritten(cursorHooks(fast)))
 
     const command = hookCommand(app)
     const second = await project.uncheck(['hooks', 'install', 'claude', 'cursor'], { cwd: app })
@@ -127,18 +127,26 @@ describe('hooks install arguments', () => {
 
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
-    expect(stderr).toBe(`\nERROR\n  ${message}\n`)
+    expect(stderr).toBe(cliError(message))
     expect(project.exists('.claude')).toBe(false)
   })
 
-  it('refuses an agent it does not know', async () => {
+  it('refuses an agent it does not know, showing the usage', async () => {
     const project = singleRepo()
 
-    const { exitCode, stderr } = await project.uncheck(['hooks', 'install', 'claude', 'emacs'])
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      'hooks',
+      'install',
+      'claude',
+      'emacs',
+    ])
 
     expect(exitCode).toBe(1)
+    expect(stdout).toContain('USAGE\n  uncheck hooks install [flags] [<agents...>]\n')
     expect(stderr).toBe(
-      '\nERROR\n  Invalid value for argument <agents>: "emacs". Expected: "claude" | "codebuddy" | "cursor" | "copilot"\n',
+      cliError(
+        'Invalid value for argument <agents>: "emacs". Expected: "claude" | "codebuddy" | "cursor" | "copilot"',
+      ),
     )
     expect(project.exists('.claude')).toBe(false)
   })

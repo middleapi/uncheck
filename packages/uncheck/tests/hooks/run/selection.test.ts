@@ -1,5 +1,5 @@
-import { LAYOUTS, singleRepo } from '../../utils/project'
-import { CLAUDE_CODE_STOP, TYPE_ERROR, lines, location, stopHook } from './utils'
+import { LAYOUTS, cliError, report, singleRepo } from '../../utils/project'
+import { CLAUDE_CODE_STOP, TYPE_ERROR, stopHook } from './utils'
 
 describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ create, app }) => {
   it('skips a check with --skip', async () => {
@@ -14,8 +14,8 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
 
     expect(exitCode).toBe(0)
     expect(stdout).toBe('')
-    expect(lines(project, stderr)).toEqual([
-      `uncheck in ${location(app)}`,
+    expect(report(stderr)).toEqual([
+      `uncheck in ${project.path(app, '.')}`,
       '○ sherif skipped, no package.json among the given files',
       '○ oxlint skipped, disabled with --skip=oxlint',
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
@@ -35,8 +35,8 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
 
     expect(optional.exitCode).toBe(0)
     expect(optional.stdout).toBe('')
-    expect(lines(project, optional.stderr)).toEqual([
-      `uncheck in ${location(app)}`,
+    expect(report(optional.stderr)).toEqual([
+      `uncheck in ${project.path(app, '.')}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
@@ -50,8 +50,8 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
 
     expect(required.exitCode).toBe(2)
     expect(required.stdout).toBe('')
-    expect(lines(project, required.stderr)).toEqual([
-      `uncheck in ${location(app)}`,
+    expect(report(required.stderr)).toEqual([
+      `uncheck in ${project.path(app, '.')}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
@@ -70,6 +70,7 @@ describe('hooks run check selection', () => {
     })
 
     expect(unchanged.exitCode).toBe(0)
+    expect(unchanged.stdout).toBe('')
     expect(unchanged.stderr).toBe('')
 
     project.write({ 'src/extra.ts': 'export const extra = 1;\n' })
@@ -80,6 +81,6 @@ describe('hooks run check selection', () => {
 
     expect(changed.exitCode).toBe(1)
     expect(changed.stdout).toBe('')
-    expect(changed.stderr).toBe('\nERROR\n  --only=tsc and --skip=tsc contradict each other.\n')
+    expect(changed.stderr).toBe(cliError('--only=tsc and --skip=tsc contradict each other.'))
   })
 })

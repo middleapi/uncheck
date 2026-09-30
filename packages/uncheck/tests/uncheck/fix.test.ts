@@ -1,14 +1,21 @@
-import { LAYOUTS, monorepo, report } from '../utils/project'
-import { layoutChecks, updateJson } from './utils'
+import type { Project } from '../utils/project'
+import { LAYOUTS, report } from '../utils/project'
+import {
+  CODE_WITH_TYPE_ERROR,
+  CODE_WITH_VAR,
+  layoutChecks,
+  monorepoWithMismatchedVersions,
+  UNFORMATTED_CODE,
+} from './utils'
 
-const LEGACY = 'var count = 1;\nexport { count };\n'
-const UGLY = 'export const   ugly = {a:1,\n b:2}\n'
-
-describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app }) => {
-  const { sherif, tsc, checks } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
+  const { sherif, checks } = layoutChecks(app)
 
   it('applies lint fixes and rewrites formatting, then passes', async () => {
-    const project = create({ [`${app}src/legacy.ts`]: LEGACY, [`${app}src/ugly.ts`]: UGLY })
+    const project = create({
+      [`${app}src/legacy.ts`]: CODE_WITH_VAR,
+      [`${app}src/ugly.ts`]: UNFORMATTED_CODE,
+    })
 
     const { exitCode, stdout } = await project.uncheck(['--fix'])
 
@@ -29,7 +36,10 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app }) => {
   })
 
   it('offers the fixes of every fixable check that failed', async () => {
-    const project = create({ [`${app}src/legacy.ts`]: LEGACY, [`${app}src/ugly.ts`]: UGLY })
+    const project = create({
+      [`${app}src/legacy.ts`]: CODE_WITH_VAR,
+      [`${app}src/ugly.ts`]: UNFORMATTED_CODE,
+    })
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', '--only=oxfmt'])
 
@@ -42,8 +52,8 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app }) => {
 
   it('leaves type errors out of the fixes it offers', async () => {
     const project = create({
-      [`${app}src/legacy.ts`]: LEGACY,
-      [`${app}src/broken.ts`]: 'export const broken: number = "42";\n',
+      [`${app}src/legacy.ts`]: CODE_WITH_VAR,
+      [`${app}src/broken.ts`]: CODE_WITH_TYPE_ERROR,
     })
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', '--only=tsc'])
@@ -57,7 +67,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app }) => {
 
   it('leaves a required check that cannot run out of the fixes it offers', async () => {
     const project = create(
-      { [`${app}src/legacy.ts`]: LEGACY },
+      { [`${app}src/legacy.ts`]: CODE_WITH_VAR },
       { tools: ['sherif', 'oxlint', 'typescript'] },
     )
 
@@ -99,26 +109,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app }) => {
   })
 })
 
-function monorepoWithMismatchedVersions(sherif: object = {}) {
-  const project = monorepo()
-
-  updateJson(project, 'package.json', (manifest) => ({
-    ...manifest,
-    sherif: { noInstall: true, ...sherif },
-  }))
-  updateJson(project, 'packages/core/package.json', (manifest) => ({
-    ...manifest,
-    dependencies: { zod: '^3.0.0' },
-  }))
-  updateJson(project, 'packages/app/package.json', (manifest) => ({
-    ...manifest,
-    dependencies: { '@repo/core': 'workspace:*', 'zod': '^3.1.0' },
-  }))
-
-  return project
-}
-
-function zodVersions(project: ReturnType<typeof monorepo>) {
+function zodVersions(project: Project) {
   return ['core', 'app'].map(
     (name) =>
       (
@@ -161,7 +152,7 @@ describe('uncheck --fix in a monorepo', () => {
 
   it('only reports what sherif finds in CI, where sherif refuses to fix', async () => {
     const project = monorepoWithMismatchedVersions()
-    project.write({ 'packages/app/src/legacy.ts': LEGACY })
+    project.write({ 'packages/app/src/legacy.ts': CODE_WITH_VAR })
 
     const { exitCode, stdout } = await project.uncheck(['--fix', '--skip=tsc'], {
       env: { CI: 'true' },
@@ -207,7 +198,10 @@ describe('uncheck --fix in a monorepo', () => {
 
   it('offers the fixes of three checks as a list', async () => {
     const project = monorepoWithMismatchedVersions()
-    project.write({ 'packages/app/src/legacy.ts': LEGACY, 'packages/app/src/ugly.ts': UGLY })
+    project.write({
+      'packages/app/src/legacy.ts': CODE_WITH_VAR,
+      'packages/app/src/ugly.ts': UNFORMATTED_CODE,
+    })
 
     const { exitCode, stdout } = await project.uncheck(['--skip=tsc'])
 

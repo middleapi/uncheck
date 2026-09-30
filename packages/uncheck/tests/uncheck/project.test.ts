@@ -1,8 +1,14 @@
-import { LAYOUTS, monorepo, report } from '../utils/project'
-import { layoutChecks, updateJson } from './utils'
+import { LAYOUTS, report } from '../utils/project'
+import {
+  CODE_WITH_TYPE_ERROR,
+  CODE_WITH_VAR,
+  layoutChecks,
+  monorepoWithMismatchedVersions,
+  UNFORMATTED_CODE,
+} from './utils'
 
-describe.each(LAYOUTS)('uncheck in a $name', ({ create, app }) => {
-  const { sherif, tsc, checks } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
+  const { sherif, checks } = layoutChecks(app)
 
   it('passes a clean project', async () => {
     const project = create()
@@ -25,7 +31,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app }) => {
   })
 
   it('fails on a lint error and still runs the other checks', async () => {
-    const project = create({ [`${app}src/legacy.ts`]: 'var count = 1;\nexport { count };\n' })
+    const project = create({ [`${app}src/legacy.ts`]: CODE_WITH_VAR })
 
     const { exitCode, stdout, stderr } = await project.uncheck()
 
@@ -48,7 +54,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app }) => {
   })
 
   it('fails on a formatting issue', async () => {
-    const project = create({ [`${app}src/ugly.ts`]: 'export const   ugly = {a:1,\n b:2}\n' })
+    const project = create({ [`${app}src/ugly.ts`]: UNFORMATTED_CODE })
 
     const { exitCode, stdout } = await project.uncheck()
 
@@ -69,12 +75,13 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app }) => {
   })
 
   it('fails on a type error without offering fixes', async () => {
-    const project = create({ [`${app}src/broken.ts`]: 'export const broken: number = "42";\n' })
+    const project = create({ [`${app}src/broken.ts`]: CODE_WITH_TYPE_ERROR })
 
     const { exitCode, stdout } = await project.uncheck()
 
-    expect(stdout).toContain(`${app}src/broken.ts`)
-    expect(stdout).toContain('TS2322')
+    expect(stdout).toContain(
+      `${app}src/broken.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.`,
+    )
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
@@ -111,15 +118,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app }) => {
 
 describe('uncheck in a monorepo', () => {
   it('fails on a workspace issue sherif finds', async () => {
-    const project = monorepo()
-    updateJson(project, 'packages/core/package.json', (manifest) => ({
-      ...manifest,
-      dependencies: { zod: '^3.0.0' },
-    }))
-    updateJson(project, 'packages/app/package.json', (manifest) => ({
-      ...manifest,
-      dependencies: { '@repo/core': 'workspace:*', 'zod': '^3.1.0' },
-    }))
+    const project = monorepoWithMismatchedVersions()
 
     const { exitCode, stdout } = await project.uncheck()
 

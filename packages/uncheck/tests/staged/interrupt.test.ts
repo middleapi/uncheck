@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
 
 import { LAYOUTS, report } from '../utils/project'
-import { folderOf, inIndex, stagePartially, startUncheck, status, VERSIONS } from './utils'
+import { folderOf, inIndex, stagePartially, startUncheck, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -53,7 +53,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app }
 
     expect(exitCode).toBe(0)
     expect(project.read(file)).toBe(VERSIONS.unstaged)
-    expect(status(project)).toBe(`MM ${file}\n`)
+    expect(project.git('status', '--porcelain')).toBe(`MM ${file}\n`)
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 })

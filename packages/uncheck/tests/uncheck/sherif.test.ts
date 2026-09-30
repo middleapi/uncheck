@@ -1,5 +1,4 @@
 import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
-import { updateJson } from './utils'
 
 const OTHERS_NOT_SELECTED = [
   '○ oxlint skipped, not selected by --only',
@@ -130,11 +129,11 @@ describe('uncheck sherif in a monorepo', () => {
 
   it('finds a workspace declared in the workspaces field of package.json', async () => {
     const project = monorepo({ 'pnpm-workspace.yaml': null })
-    updateJson(project, 'package.json', (manifest) => ({ ...manifest, workspaces: ['packages/*'] }))
-    updateJson(project, 'packages/app/package.json', (manifest) => ({
-      ...manifest,
-      dependencies: { 'zod': '^3.0.0', '@repo/core': 'workspace:*' },
-    }))
+      .update('package.json', (manifest) => ({ ...manifest, workspaces: ['packages/*'] }))
+      .update('packages/app/package.json', (manifest) => ({
+        ...manifest,
+        dependencies: { 'zod': '^3.0.0', '@repo/core': 'workspace:*' },
+      }))
 
     const { exitCode, stdout } = await project.uncheck(['--only=sherif'])
 

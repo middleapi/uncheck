@@ -1,5 +1,5 @@
-import { LAYOUTS } from '../utils/project'
-import { conflictError, failure, folderOf, inIndex, stage, status } from './utils'
+import { cliError, LAYOUTS } from '../utils/project'
+import { conflictError, folderOf, inIndex } from './utils'
 
 const crlf = (text: string) => text.replaceAll('\n', '\r\n')
 
@@ -13,7 +13,7 @@ describe.each(LAYOUTS)('uncheck staged with CRLF files in a $name', ({ create, a
     const project = create({ [file]: `export const answer: number = 42;\n${LINES}` })
 
     project.git('config', 'core.autocrlf', 'true')
-    stage(project, { [file]: crlf(`export const   answer: number = 43\n${LINES}`) })
+    project.stage({ [file]: crlf(`export const   answer: number = 43\n${LINES}`) })
     project.write({
       [file]: crlf(`export const   answer: number = 43\n${LINES}export const d = 4;\n`),
     })
@@ -33,7 +33,7 @@ describe.each(LAYOUTS)('uncheck staged with CRLF files in a $name', ({ create, a
       [file]: crlf(`export const answer: number = 42;\n${LINES}`),
     })
 
-    stage(project, { [file]: crlf(`export const   answer: number = 43\n${LINES}`) })
+    project.stage({ [file]: crlf(`export const   answer: number = 43\n${LINES}`) })
     project.write({
       [file]: crlf(`export const   answer: number = 43\n${LINES}export const d = 4;\n`),
     })
@@ -61,7 +61,7 @@ describe.each(LAYOUTS)('uncheck staged with CRLF files in a $name', ({ create, a
       const unstaged = `${kept}export const c = 3;\r\nexport const d = 4;\r\n`
 
       project.git('config', 'core.safecrlf', 'true')
-      stage(project, { [file]: `${kept}export const c = 3;\r\n` })
+      project.stage({ [file]: `${kept}export const c = 3;\r\n` })
       project.write({ [file]: unstaged })
 
       const { exitCode, stderr } = await project.uncheck(['staged', '--only=oxlint'], {
@@ -71,21 +71,21 @@ describe.each(LAYOUTS)('uncheck staged with CRLF files in a $name', ({ create, a
       expect(stderr).toBe('')
       expect(exitCode).toBe(0)
       expect(project.read(file)).toBe(unstaged)
-      expect(status(project)).toBe(`MM ${file}\n`)
+      expect(project.git('status', '--porcelain')).toBe(`MM ${file}\n`)
     })
 
     it('undoes its fixes rather than turn its line endings to LF', async () => {
       const project = legacy()
       const unstaged = `var c = 3;\r\n${kept}export { c };\r\nexport const d = 4;\r\n`
 
-      stage(project, { [file]: `var c = 3;\r\n${kept}export { c };\r\n` })
+      project.stage({ [file]: `var c = 3;\r\n${kept}export { c };\r\n` })
       project.write({ [file]: unstaged })
 
       const { exitCode, stderr } = await project.uncheck(['staged', '--fix', '--only=oxlint'], {
         cwd: folder,
       })
 
-      expect(stderr).toBe(failure(conflictError('src/crlf.ts')))
+      expect(stderr).toBe(cliError(conflictError('src/crlf.ts')))
       expect(exitCode).toBe(1)
       expect(project.read(file)).toBe(unstaged)
       expect(inIndex(project, file)).toBe(`var c = 3;\r\n${kept}export { c };\r\n`)

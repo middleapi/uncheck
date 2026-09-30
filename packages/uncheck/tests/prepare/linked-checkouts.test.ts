@@ -1,45 +1,35 @@
-import { join } from 'node:path'
+import { basename } from 'node:path'
 
-import type { Project } from '../utils/project'
-import { CLI, LAYOUTS, monorepo, run, singleRepo, temporaryDirectory } from '../utils/project'
-import { chmod, HEADER, hookLine, prepare, written } from './utils'
-
-function addWorktree(project: Project): string {
-  const worktree = join(temporaryDirectory(), 'wt')
-
-  project.git('worktree', 'add', '--quiet', worktree)
-
-  return worktree
-}
+import { LAYOUTS, linkedWorktree, monorepo, run, singleRepo } from '../utils/project'
+import { HEADER, hookLine, prepare, written } from './utils'
 
 describe.each(LAYOUTS)('prepare in a linked worktree of a $name', ({ create, app }) => {
   it('writes the hook the worktree shares with the main one, named by its full path', async () => {
     const project = create()
-    const worktree = addWorktree(project)
+    const worktree = linkedWorktree(project, app)
 
-    const { exitCode, stdout, stderr } = await run([...CLI, 'prepare', '--pre-commit'], {
-      cwd: join(worktree, app),
-    })
+    const { exitCode, stdout, stderr } = await prepare(worktree, [], { cwd: app })
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
     expect(stdout).toBe(written(project.path('.git/hooks/pre-commit'), 'created'))
     expect(project.read('.git/hooks/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
-    expect(project.exists('.git/worktrees/wt/hooks')).toBe(false)
+    expect(project.exists(`.git/worktrees/${basename(worktree.dir)}/hooks`)).toBe(false)
   })
 })
 
 describe('prepare run by a git hook in a linked worktree of a monorepo', () => {
   it('enters the package folder although git exported the git folder of the worktree', async () => {
     const project = monorepo()
-    const worktree = addWorktree(project)
-    project.write({
-      '.git/hooks/post-checkout': `#!/bin/sh\ncd packages/app && '${project.path('node_modules/.bin/uncheck')}' prepare --pre-commit\n`,
-    })
-    chmod(project, '.git/hooks/post-checkout', 0o755)
+    const worktree = linkedWorktree(project, 'packages/app/')
+    project
+      .write({
+        '.git/hooks/post-checkout': `#!/bin/sh\ncd packages/app && '${project.path('node_modules/.bin/uncheck')}' prepare --pre-commit\n`,
+      })
+      .chmod('.git/hooks/post-checkout', 0o755)
 
     const { exitCode, stderr } = await run(['git', 'checkout', '--quiet', '-b', 'feature'], {
-      cwd: worktree,
+      cwd: worktree.dir,
     })
 
     expect(exitCode).toBe(0)

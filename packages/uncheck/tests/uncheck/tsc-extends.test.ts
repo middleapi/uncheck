@@ -1,5 +1,5 @@
 import { LAYOUTS, monorepo } from '../utils/project'
-import { ALLOW_JS, CONFIG_DIR, NOT_COVERED, tscPlan, withFakeTsc } from './tsc.utils'
+import { ALLOW_JS, CONFIG_DIR, NOT_COVERED, tscPlan, withFakeTsc } from './utils'
 
 const NO_JS = { compilerOptions: { allowJs: false } }
 

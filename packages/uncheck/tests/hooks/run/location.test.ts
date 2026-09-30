@@ -1,5 +1,14 @@
-import { CLI, LAYOUTS, monorepo, run, singleRepo, temporaryDirectory } from '../../utils/project'
-import { CLAUDE_CODE_STOP, lines, location, stopHook } from './utils'
+import {
+  CLI,
+  LAYOUTS,
+  cliError,
+  monorepo,
+  report,
+  run,
+  singleRepo,
+  temporaryDirectory,
+} from '../../utils/project'
+import { CLAUDE_CODE_STOP, stopHook } from './utils'
 
 const UNFORMATTED = 'export const   extra = 1\n'
 const FORMATTED = 'export const extra = 1;\n'
@@ -10,29 +19,6 @@ const ONLY_OXFMT = [
 ]
 
 describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app }) => {
-  it('checks the package it was installed for from wherever the agent moved to', async () => {
-    const project = create({ 'docs/guide.md': '# Guide\n' }).write({
-      [`${app}src/extra.ts`]: UNFORMATTED,
-    })
-
-    const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
-      args: ['--fix', '--only=oxfmt'],
-      cwd: 'docs',
-    })
-
-    expect(exitCode).toBe(0)
-    expect(stdout).toBe('')
-    expect(lines(project, stderr)).toEqual([
-      `uncheck in ${location(app)}`,
-      ...ONLY_OXFMT,
-      '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
-      '✔ oxfmt passed',
-      '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxfmt)',
-    ])
-    expect(project.read(`${app}src/extra.ts`)).toBe(FORMATTED)
-  })
-
   it('checks the directory given with --cwd, wherever it runs', async () => {
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
@@ -43,8 +29,8 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app 
 
     expect(exitCode).toBe(0)
     expect(stdout).toBe('')
-    expect(lines(project, stderr)).toEqual([
-      `uncheck in ${location(app)}`,
+    expect(report(stderr)).toEqual([
+      `uncheck in ${project.path(app, '.')}`,
       ...ONLY_OXFMT,
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
@@ -64,15 +50,17 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app 
 
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
-    expect(stderr.replaceAll(project.dir, '<project>')).toBe(
-      `\nERROR\n  --dir=${app}gone names nothing in <project>, run \`uncheck hooks install\` again from the project\n`,
+    expect(stderr).toBe(
+      cliError(
+        `--dir=${app}gone names nothing in ${project.dir}, run \`uncheck hooks install\` again from the project`,
+      ),
     )
     expect(project.read(`${app}src/extra.ts`)).toBe(UNFORMATTED)
   })
 })
 
 describe('hooks run in a monorepo', () => {
-  it('checks only the package in --dir, and the whole repository without it', async () => {
+  it('checks only the package in --dir from wherever the agent moved to, and the whole repository without it', async () => {
     const project = monorepo().write({
       'packages/app/src/extra.ts': UNFORMATTED,
       'packages/core/src/extra.ts': UNFORMATTED,
@@ -84,8 +72,9 @@ describe('hooks run in a monorepo', () => {
     })
 
     expect(app.exitCode).toBe(2)
-    expect(lines(project, app.stderr)).toEqual([
-      'uncheck in <project>/packages/app',
+    expect(app.stdout).toBe('')
+    expect(report(app.stderr)).toEqual([
+      `uncheck in ${project.path('packages/app')}`,
       ...ONLY_OXFMT,
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
       '✘ oxfmt failed',
@@ -100,8 +89,9 @@ describe('hooks run in a monorepo', () => {
     })
 
     expect(top.exitCode).toBe(0)
-    expect(lines(project, top.stderr)).toEqual([
-      'uncheck in <project>',
+    expect(top.stdout).toBe('')
+    expect(report(top.stderr)).toEqual([
+      `uncheck in ${project.dir}`,
       ...ONLY_OXFMT,
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/src/extra.ts packages/core/src/extra.ts',
       '✔ oxfmt passed',
@@ -133,8 +123,8 @@ describe('hooks run in a monorepo', () => {
 
     expect(exitCode).toBe(0)
     expect(stdout).toBe('')
-    expect(lines(project, stderr)).toEqual([
-      'uncheck in <project>/packages/app',
+    expect(report(stderr)).toEqual([
+      `uncheck in ${project.path('packages/app')}`,
       ...ONLY_OXFMT,
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
@@ -158,7 +148,7 @@ describe('hooks run arguments', () => {
     expect(exitCode).toBe(1)
     expect(stdout).toContain('USAGE\n  uncheck hooks run [flags]\n')
     expect(stderr).toBe(
-      `\nERROR\n  Invalid value for flag --cwd: "${gone}". Expected: Path does not exist: ${gone}\n`,
+      cliError(`Invalid value for flag --cwd: "${gone}". Expected: Path does not exist: ${gone}`),
     )
     expect(project.read('src/extra.ts')).toBe(UNFORMATTED)
   })

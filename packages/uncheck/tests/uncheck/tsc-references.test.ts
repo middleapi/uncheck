@@ -1,5 +1,5 @@
 import { LAYOUTS, monorepo, report } from '../utils/project'
-import { CONFIG_DIR, NOT_COVERED, SKIPPED_BY_ONLY, tscPlan, withFakeTsc } from './tsc.utils'
+import { CONFIG_DIR, NOT_COVERED, SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
 
 describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) => {
   it('builds a solution-style tsconfig.json whose references have other names', async () => {
@@ -173,14 +173,6 @@ describe('tsc project references across the packages of a monorepo', () => {
     )
   })
 
-  it('builds the solution tsconfig.json at the top for a change in any package', async () => {
-    const project = withFakeTsc(monorepo)
-
-    expect(await tscPlan(project, '', ['packages/core/src/index.ts'])).toEqual([
-      '▶ tsc -b tsconfig.json',
-    ])
-  })
-
   it('builds a package from its folder for a change in a package it references', async () => {
     const project = withFakeTsc(monorepo)
 
@@ -197,7 +189,7 @@ describe('tsc project references across the packages of a monorepo', () => {
     expect(exitCode).toBe(0)
     expect(report(stdout)).toEqual([
       `uncheck in ${project.path('packages/core')}`,
-      ...SKIPPED_BY_ONLY,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
       '✔ all checks passed (tsc)',

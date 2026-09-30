@@ -4,10 +4,8 @@ import { HEADER, hookLine, prepare, shownHook, written } from './utils'
 
 const YARN = 'yarn run --silent uncheck staged --fix'
 
-function declarePackageManager(project: Project, dir: string, packageManager: unknown): void {
-  const manifest = JSON.parse(project.read(`${dir}package.json`)) as object
-
-  project.write({ [`${dir}package.json`]: { ...manifest, packageManager } })
+function declarePackageManager(project: Project, dir: string, packageManager: unknown): Project {
+  return project.update(`${dir}package.json`, (manifest) => ({ ...manifest, packageManager }))
 }
 
 describe.each(LAYOUTS)('prepare picking the package manager in a $name', ({ create, app }) => {
@@ -39,8 +37,11 @@ describe.each(LAYOUTS)('prepare picking the package manager in a $name', ({ crea
   ])(
     'runs uncheck through the declared packageManager %s over the lockfile',
     async (declared, command) => {
-      const project = create({ 'pnpm-lock.yaml': null, [`${app}yarn.lock`]: '' })
-      declarePackageManager(project, app, declared)
+      const project = declarePackageManager(
+        create({ 'pnpm-lock.yaml': null, [`${app}yarn.lock`]: '' }),
+        app,
+        declared,
+      )
 
       await expectHookCommand(project, command)
     },
@@ -50,8 +51,11 @@ describe.each(LAYOUTS)('prepare picking the package manager in a $name', ({ crea
     ['an unknown packageManager', 'deno@2.0.0'],
     ['a packageManager that is not a string', { name: 'bun' }],
   ])('falls back to the lockfile with %s', async (_, declared) => {
-    const project = create({ 'pnpm-lock.yaml': null, [`${app}yarn.lock`]: '' })
-    declarePackageManager(project, app, declared)
+    const project = declarePackageManager(
+      create({ 'pnpm-lock.yaml': null, [`${app}yarn.lock`]: '' }),
+      app,
+      declared,
+    )
 
     await expectHookCommand(project, YARN)
   })
@@ -74,8 +78,7 @@ describe.each(LAYOUTS)('prepare picking the package manager in a $name', ({ crea
   })
 
   it('runs uncheck with npx --no when nothing names a package manager', async () => {
-    const project = create({ 'pnpm-lock.yaml': null })
-    declarePackageManager(project, '', undefined)
+    const project = declarePackageManager(create({ 'pnpm-lock.yaml': null }), '', undefined)
 
     await expectHookCommand(project, 'npx --no uncheck staged --fix')
   })

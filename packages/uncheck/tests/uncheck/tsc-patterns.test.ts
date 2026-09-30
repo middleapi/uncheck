@@ -1,5 +1,5 @@
 import { LAYOUTS } from '../utils/project'
-import { ALLOW_JS, NOT_COVERED, tscPlan, withFakeTsc } from './tsc.utils'
+import { ALLOW_JS, NOT_COVERED, tscPlan, withFakeTsc } from './utils'
 
 describe.each(LAYOUTS)('tsc include and exclude patterns in a $name', ({ create, app }) => {
   it('reads a pattern without extension or wildcard as a folder', async () => {

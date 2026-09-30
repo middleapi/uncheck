@@ -1,24 +1,13 @@
-import { chmodSync, mkdirSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 
-import { git, LAYOUTS, report } from '../utils/project'
-import {
-  EMPTY_COMMIT_ERROR,
-  failure,
-  folderOf,
-  inIndex,
-  mode,
-  normalized,
-  stage,
-  status,
-  TSC_COMMAND,
-  UNTRANSLATED,
-} from './utils'
+import { cliError, git, LAYOUTS, report } from '../utils/project'
+import { EMPTY_COMMIT_ERROR, folderOf, inIndex } from './utils'
 
-describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }) => {
+describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc }) => {
   const folder = folderOf(app)
 
   it('applies the lint and format fixes and stages them', async () => {
-    const project = stage(create(), {
+    const project = create().stage({
       [`${app}src/index.ts`]: 'var   answer = 42\nexport { answer }\n',
     })
 
@@ -33,26 +22,27 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxfmt passed',
-      TSC_COMMAND[name],
+      tsc,
       '✔ tsc passed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
       '✔ staged the fixes to src/index.ts',
     ])
     expect(inIndex(project, `${app}src/index.ts`)).toBe('const answer = 42;\nexport { answer };\n')
     expect(project.read(`${app}src/index.ts`)).toBe('const answer = 42;\nexport { answer };\n')
-    expect(status(project)).toBe(`M  ${app}src/index.ts\n`)
+    expect(project.git('status', '--porcelain')).toBe(`M  ${app}src/index.ts\n`)
   })
 
   it('stages the fixes even when a check still fails', async () => {
-    const project = stage(create(), {
+    const project = create().stage({
       [`${app}src/index.ts`]: 'export const   answer: number = "42"\n',
     })
 
-    const { exitCode, stdout } = await project.uncheck(
+    const { exitCode, stdout, stderr } = await project.uncheck(
       ['staged', '--fix', '--only=oxfmt', '--only=tsc'],
       { cwd: folder },
     )
 
+    expect(stderr).toBe('')
     expect(exitCode).toBe(1)
     expect(report(stdout).slice(-2)).toEqual([
       '✘ 1 of 2 checks failed: tsc',
@@ -62,7 +52,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
   })
 
   it('stages nothing when the fixes change nothing', async () => {
-    const project = stage(create(), { [`${app}src/extra.ts`]: 'export const extra = 1;\n' })
+    const project = create().stage({ [`${app}src/extra.ts`]: 'export const extra = 1;\n' })
 
     const { exitCode, stdout } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], {
       cwd: folder,
@@ -70,23 +60,23 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
 
     expect(exitCode).toBe(0)
     expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxfmt)')
-    expect(status(project)).toBe(`A  ${app}src/extra.ts\n`)
+    expect(project.git('status', '--porcelain')).toBe(`A  ${app}src/extra.ts\n`)
   })
 
   it('fails when the fixes undo every staged change, unless empty commits are allowed', async () => {
     const project = create({ [`${app}src/extra.ts`]: 'export const extra = 1;\n' })
     const unformatted = { [`${app}src/extra.ts`]: 'export const   extra = 1\n' }
 
-    stage(project, unformatted)
+    project.stage(unformatted)
 
     const empty = await project.uncheck(['staged', '--fix', '--only=oxfmt'], { cwd: folder })
 
-    expect(empty.stderr).toBe(failure(EMPTY_COMMIT_ERROR))
+    expect(empty.stderr).toBe(cliError(EMPTY_COMMIT_ERROR))
     expect(empty.exitCode).toBe(1)
     expect(report(empty.stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
-    expect(status(project)).toBe('')
+    expect(project.git('status', '--porcelain')).toBe('')
 
-    stage(project, unformatted)
+    project.stage(unformatted)
 
     const allowed = await project.uncheck(['staged', '--fix', '--allow-empty', '--only=oxfmt'], {
       cwd: folder,
@@ -95,21 +85,31 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     expect(allowed.stderr).toBe('')
     expect(allowed.exitCode).toBe(0)
     expect(report(allowed.stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
-    expect(status(project)).toBe('')
+    expect(project.git('status', '--porcelain')).toBe('')
   })
 
   it('reports why git refused to stage the fixes', async () => {
-    const project = stage(create(), { [`${app}src/extra.ts`]: 'export const   extra = 1\n' })
+    const project = create().stage({ [`${app}src/extra.ts`]: 'export const   extra = 1\n' })
 
     project.write({ '.git/index.lock': '' })
 
     const { exitCode, stdout, stderr } = await project.uncheck(
       ['staged', '--fix', '--only=oxfmt'],
-      { cwd: folder, env: UNTRANSLATED },
+      { cwd: folder },
     )
 
-    expect(normalized(project, stderr)).toMatch(
-      /^\nERROR\n {2}git update-index \[1 paths\] failed: fatal: Unable to create '<project>\/\.git\/index\.lock': File exists\.\n/,
+    expect(project.normalize(stderr)).toBe(
+      cliError(
+        [
+          "git update-index [1 paths] failed: fatal: Unable to create '<project>/.git/index.lock': File exists.",
+          '',
+          'Another git process seems to be running in this repository, e.g.',
+          "an editor opened by 'git commit'. Please make sure all processes",
+          'are terminated then try again. If it still fails, a git process',
+          'may have crashed in this repository earlier:',
+          'remove the file manually to continue.',
+        ].join('\n'),
+      ),
     )
     expect(exitCode).toBe(1)
     expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxfmt)')
@@ -140,8 +140,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     const project = create()
     const file = `${app}src/run.ts`
 
-    project.write({ [file]: 'export const   run = 1\n' })
-    chmodSync(project.path(file), 0o755)
+    project.write({ [file]: 'export const   run = 1\n' }).chmod(file, 0o755)
     project.git('add', '--', file)
 
     const { exitCode, stdout } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], {
@@ -153,8 +152,8 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/run.ts')
     expect(project.git('ls-files', '--stage', '--', file)).toMatch(/^100755 /)
     expect(inIndex(project, file)).toBe('export const run = 1;\n')
-    expect(mode(project, file)).toBe(0o755)
-    expect(status(project)).toBe(`A  ${file}\n`)
+    expect(project.mode(file)).toBe(0o755)
+    expect(project.git('status', '--porcelain')).toBe(`A  ${file}\n`)
   })
 
   it('checks regular files only, never a staged symlink or deletion', async () => {
@@ -175,7 +174,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     ])
 
     project.write({ [`${app}src/link.ts`]: null })
-    stage(project, { [`${app}src/link.ts`]: 'export const   link = 1\n' })
+    project.stage({ [`${app}src/link.ts`]: 'export const   link = 1\n' })
 
     const { exitCode, stdout } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], {
       cwd: folder,
@@ -186,8 +185,8 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/link.ts')
     expect(inIndex(project, `${app}src/link.ts`)).toBe('export const link = 1;\n')
     expect(project.read(`${app}src/messy.ts`)).toBe('export const   messy = 1\n')
-    expect(status(project)).toBe(
-      `A  ${app}src/alias.ts\nD  ${app}src/gone.ts\nT  ${app}src/link.ts\n`,
+    expect(project.git('status', '--porcelain')).toBe(
+      `A  ${app}src/alias.ts\nD  ${app}src/gone.ts\nT  ${app}src/link.ts\n?? ${app}src/messy.ts\n`,
     )
   })
 
@@ -195,7 +194,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     const project = create({ [`${app}routes/i/page.ts`]: 'export const i = 1;\n' })
 
     project.write({ [`${app}routes/i/page.ts`]: 'export const   i = 2\n' })
-    stage(project, {
+    project.stage({
       [`${app}!x.ts`]: 'export const   bang = 1\n',
       [`${app}-x.ts`]: 'export const   dash = 1\n',
       [`${app}routes/[id]/page.ts`]: 'export const   id = 1\n',
@@ -222,7 +221,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     expect(inIndex(project, `${app}!x.ts`)).toBe('export const bang = 1;\n')
     expect(inIndex(project, `${app}-x.ts`)).toBe('export const dash = 1;\n')
     expect(inIndex(project, `${app}routes/[id]/page.ts`)).toBe('export const id = 1;\n')
-    expect(status(project)).toBe(
+    expect(project.git('status', '--porcelain')).toBe(
       `A  ${app}!x.ts\nA  ${app}-x.ts\nA  ${app}routes/[id]/page.ts\n M ${app}routes/i/page.ts\n`,
     )
   })
@@ -240,7 +239,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ name, create, app }
     project.commit('submodule')
     commit('two')
     project.git('add', '--', `${app}vendor`)
-    stage(project, { [`${app}src/extra.ts`]: 'export const   extra = 1\n' })
+    project.stage({ [`${app}src/extra.ts`]: 'export const   extra = 1\n' })
     commit('three')
 
     const before = project.git('rev-parse', `:${app}vendor`)

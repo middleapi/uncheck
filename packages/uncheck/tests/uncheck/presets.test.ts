@@ -84,8 +84,8 @@ export function pause() {
   })
 }
 
-describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ create, app }) => {
-  const { sherif, tsc, checks } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ create, app, tsc }) => {
+  const { sherif, checks } = layoutChecks(app)
 
   it('reports the problems the presets catch', async () => {
     const project = presetProject(create, app)

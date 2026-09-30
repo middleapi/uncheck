@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { LAYOUTS, monorepo } from '../utils/project'
-import { COMMAND, HEADER, hookLine, mode, notWritten, prepare, shownHook, written } from './utils'
+import { COMMAND, HEADER, hookLine, notWritten, prepare, shownHook, written } from './utils'
 
 const HOOK = '.git/hooks/pre-commit'
 
@@ -135,7 +135,7 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
 
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(`${line}\n`)
-    expect(mode(project, HOOK)).toBe(0o755)
+    expect(project.mode(HOOK)).toBe(0o755)
   })
 
   it('leaves a hook in another language alone and says what it should run', async () => {

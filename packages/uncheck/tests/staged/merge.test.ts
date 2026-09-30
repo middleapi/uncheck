@@ -1,14 +1,5 @@
-import { LAYOUTS, report, run } from '../utils/project'
-import {
-  commitOnSide,
-  failure,
-  folderOf,
-  inIndex,
-  stage,
-  stagePartially,
-  UNTRANSLATED,
-  VERSIONS,
-} from './utils'
+import { cliError, LAYOUTS, report, run } from '../utils/project'
+import { commitOnSide, folderOf, inIndex, stagePartially, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -30,7 +21,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
       '○ nothing to check, every staged file comes from the branch being merged in',
     ])
 
-    stage(project, { [other]: 'export const   other = 4\n' })
+    project.stage({ [other]: 'export const   other = 4\n' })
 
     const { exitCode, stdout } = await project.uncheck(['staged', '--fix', '--only=oxfmt'], {
       cwd: folder,
@@ -49,7 +40,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
     })
 
     project.git('merge', '--quiet', '--no-commit', '--no-ff', 'side')
-    stage(project, { [other]: 'export const   other = 2\n' })
+    project.stage({ [other]: 'export const   other = 2\n' })
 
     const { exitCode, stdout, stderr } = await project.uncheck(
       ['staged', '--fix', '--only=oxfmt'],
@@ -70,14 +61,12 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
     const file = `${app}src/extra.ts`
     const project = commitOnSide(
       create({ [file]: VERSIONS.committed, [other]: 'export const other = 1;\n' }),
-      {
-        [other]: 'export const other = 2;\n',
-      },
+      { [other]: 'export const other = 2;\n' },
     )
 
     project.write({ [other]: 'export const other = 3;\n' }).commit('main')
 
-    const merge = await run(['git', 'merge', 'side'], { cwd: project.path('.') })
+    const merge = await run(['git', 'merge', 'side'], { cwd: project.dir })
 
     expect(merge.exitCode).toBe(1)
 
@@ -85,7 +74,6 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--only=oxfmt'], {
       cwd: folder,
-      env: UNTRANSLATED,
     })
 
     const unmerged = project
@@ -96,7 +84,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
       .join('')
 
     expect(stderr).toBe(
-      failure(`git write-tree failed: ${unmerged}fatal: git-write-tree: error building trees`),
+      cliError(`git write-tree failed: ${unmerged}fatal: git-write-tree: error building trees`),
     )
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])

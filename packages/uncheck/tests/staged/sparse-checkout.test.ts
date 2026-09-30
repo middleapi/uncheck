@@ -1,5 +1,5 @@
-import { LAYOUTS, report, run } from '../utils/project'
-import { commitOnSide, conflictError, failure, folderOf, inIndex, stage, status } from './utils'
+import { cliError, LAYOUTS, report, run } from '../utils/project'
+import { commitOnSide, conflictError, folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -14,14 +14,14 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
 
     project.git('sparse-checkout', 'set', `${app}src`)
     project.git('merge', '--quiet', '--squash', 'side')
-    stage(project, { [file]: 'export const   extra = 42\n' })
+    project.stage({ [file]: 'export const   extra = 42\n' })
     project.write({ [file]: 'export const   extra = 43\n' })
 
     const conflicted = await project.uncheck(['staged', '--fix', '--only=oxfmt'], { cwd: folder })
 
-    expect(conflicted.stderr).toBe(failure(conflictError('src/extra.ts')))
+    expect(conflicted.stderr).toBe(cliError(conflictError('src/extra.ts')))
     expect(conflicted.exitCode).toBe(1)
-    expect(status(project)).toBe(`M  ${outside}\nMM ${file}\n`)
+    expect(project.git('status', '--porcelain')).toBe(`M  ${outside}\nMM ${file}\n`)
     expect(project.read(file)).toBe('export const   extra = 43\n')
 
     project.git('add', '--', file)
@@ -46,7 +46,7 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
     project.write({ [outside]: 'export const lib = 3;\n' }).commit('main')
     project.git('sparse-checkout', 'set', `${app}src`)
 
-    const merge = await run(['git', 'merge', '--quiet', 'side'], { cwd: project.path('.') })
+    const merge = await run(['git', 'merge', '--quiet', 'side'], { cwd: project.dir })
 
     expect(merge.exitCode).toBe(1)
 

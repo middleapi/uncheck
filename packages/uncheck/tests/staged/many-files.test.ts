@@ -1,5 +1,5 @@
 import { LAYOUTS, report } from '../utils/project'
-import { folderOf, inIndex, stage, VERSIONS } from './utils'
+import { folderOf, inIndex, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged with many files in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -16,7 +16,7 @@ describe.each(LAYOUTS)('uncheck staged with many files in a $name', ({ create, a
       Object.fromEntries(files.map((file) => [file, version]))
     const project = create(withVersion([...fixed, ...partial], VERSIONS.committed))
 
-    stage(project, {
+    project.stage({
       ...withVersion(fixed, VERSIONS.staged),
       ...withVersion(partial, VERSIONS.fixed),
     })

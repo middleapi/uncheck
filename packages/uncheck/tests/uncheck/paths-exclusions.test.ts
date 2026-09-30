@@ -1,6 +1,6 @@
 import type { Project } from '../utils/project'
 import { LAYOUTS, report } from '../utils/project'
-import { checkedFiles, listingProject } from './paths-utils'
+import { checkedFiles, listingProject } from './utils'
 
 const ROUTES = [
   '#draft.ts',

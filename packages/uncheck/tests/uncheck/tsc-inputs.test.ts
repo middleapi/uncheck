@@ -1,15 +1,12 @@
-import { writeFileSync } from 'node:fs'
-import { delimiter, join, resolve } from 'node:path'
-
-import { environment, LAYOUTS, monorepo, report, temporaryDirectory } from '../utils/project'
+import { LAYOUTS, monorepo, report, wrappedGit } from '../utils/project'
 import {
   ALLOW_JS,
   CONFIG_DIR,
   NOT_COVERED,
-  SKIPPED_BY_ONLY,
+  SKIPPED_BESIDE_TSC,
   tscPlan,
   withFakeTsc,
-} from './tsc.utils'
+} from './utils'
 
 describe.each(LAYOUTS)('tsc inputs in a $name', ({ create, app }) => {
   it('takes files, include and exclude from the last config setting them, relative to it', async () => {
@@ -180,24 +177,17 @@ describe.each(LAYOUTS)('tsc inputs in a $name', ({ create, app }) => {
       [`${app}web/src/index.ts`]: '',
       [`${app}web/data.json`]: '{}\n',
     })
-    const gitDeletingDataJson = temporaryDirectory()
-
-    writeFileSync(
-      join(gitDeletingDataJson, 'git'),
-      `#!/bin/sh\n[ "$1" = ls-files ] && rm -f web/data.json\nPATH=\${PATH#*:} exec git "$@"\n`,
-      { mode: 0o755 },
-    )
 
     const { exitCode, stdout } = await project.uncheck(
       ['--only=tsc', 'web/src/index.ts', 'web/data.json'],
-      { cwd: app, env: { PATH: `${gitDeletingDataJson}${delimiter}${environment().PATH}` } },
+      { cwd: app, env: wrappedGit('[ "$1" = ls-files ] && rm -f web/data.json') },
     )
 
     expect(project.exists(`${app}web/data.json`)).toBe(false)
     expect(exitCode).toBe(0)
     expect(report(stdout)).toEqual([
-      `uncheck in ${resolve(project.dir, app)}`,
-      ...SKIPPED_BY_ONLY,
+      `uncheck in ${project.path(app, '.')}`,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -p web/tsconfig.json --noEmit',
       '✔ tsc passed',
       '✔ all checks passed (tsc)',

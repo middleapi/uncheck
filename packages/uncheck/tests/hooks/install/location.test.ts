@@ -1,19 +1,19 @@
-import { CLI, LAYOUTS, monorepo, run, temporaryDirectory } from '../../utils/project'
 import {
+  CLI,
+  LAYOUTS,
   PERMISSIONS_ENFORCED,
-  asWritten,
-  claudeSettings,
-  copilotHooks,
-  hookCommand,
-  installOutput,
-  withMode,
-} from './utils'
+  cliError,
+  monorepo,
+  run,
+  temporaryDirectory,
+} from '../../utils/project'
+import { asWritten, claudeSettings, copilotHooks, hookCommand, installOutput } from './utils'
 
 describe.each(LAYOUTS)('hooks install finds the package in a $name', ({ create, app }) => {
   it('names a folder below the top of the repository in the hook command', async () => {
     const folder = `${app}tools/@scope_v=1.2+x-y`
     const project = create({ [`${folder}/index.ts`]: 'export const tool = 1;\n' })
-    const command = `pnpm exec uncheck hooks run --fix --dir=${folder}`
+    const command = hookCommand(`${folder}/`)
 
     const { exitCode, stdout } = await project.uncheck(['hooks', 'install', 'claude'], {
       cwd: folder,
@@ -37,7 +37,9 @@ describe.each(LAYOUTS)('hooks install finds the package in a $name', ({ create, 
       expect(exitCode).toBe(1)
       expect(stdout).toBe('')
       expect(stderr).toBe(
-        `\nERROR\n  The hook command cannot name ${folder}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-\n`,
+        cliError(
+          `The hook command cannot name ${folder}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-`,
+        ),
       )
       expect(project.exists(`${folder}/.claude`)).toBe(false)
     },
@@ -89,24 +91,30 @@ describe.each(LAYOUTS)('hooks install finds the package in a $name', ({ create, 
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
     expect(stderr).toBe(
-      `\nERROR\n  BadResource: FileSystem.readFile (${project.path(`${app}.claude/settings.json`)})\n`,
+      cliError(`BadResource: FileSystem.readFile (${project.path(`${app}.claude/settings.json`)})`),
     )
   })
 
   it.runIf(PERMISSIONS_ENFORCED)(
     'reports a config it cannot write, after writing the ones before it',
     async () => {
-      const project = create({ [`${app}.cursor/rules.md`]: '# Rules\n' })
+      const project = create({ [`${app}.cursor/rules.md`]: '# Rules\n' }).chmod(
+        `${app}.cursor`,
+        0o555,
+      )
       const command = hookCommand(app)
 
-      const { exitCode, stdout, stderr } = await withMode(project, `${app}.cursor`, 0o555, () =>
-        project.uncheck(['hooks', 'install', 'cursor', 'claude'], { cwd: app }),
+      const { exitCode, stdout, stderr } = await project.uncheck(
+        ['hooks', 'install', 'cursor', 'claude'],
+        { cwd: app },
       )
 
       expect(exitCode).toBe(1)
       expect(stdout).toBe('✔ Claude Code .claude/settings.json created\n')
       expect(stderr).toBe(
-        `\nERROR\n  PermissionDenied: FileSystem.writeFile (${project.path(`${app}.cursor/hooks.json`)})\n`,
+        cliError(
+          `PermissionDenied: FileSystem.writeFile (${project.path(`${app}.cursor/hooks.json`)})`,
+        ),
       )
       expect(project.read(`${app}.claude/settings.json`)).toBe(asWritten(claudeSettings(command)))
       expect(project.exists(`${app}.cursor/hooks.json`)).toBe(false)
@@ -114,16 +122,21 @@ describe.each(LAYOUTS)('hooks install finds the package in a $name', ({ create, 
   )
 
   it.runIf(PERMISSIONS_ENFORCED)('reports a folder it cannot look into', async () => {
-    const project = create({ [`${app}locked/notes.md`]: '# Notes\n' })
+    const project = create({ [`${app}locked/notes.md`]: '# Notes\n' }).chmod(`${app}locked`, 0o644)
 
-    const { exitCode, stdout, stderr } = await withMode(project, `${app}locked`, 0o644, () =>
-      project.uncheck(['hooks', 'install', 'claude', `--cwd=${project.path(`${app}locked`)}`]),
-    )
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      'hooks',
+      'install',
+      'claude',
+      `--cwd=${project.path(`${app}locked`)}`,
+    ])
 
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
     expect(stderr).toBe(
-      `\nERROR\n  PermissionDenied: FileSystem.readFile (${project.path(`${app}locked/.claude/settings.json`)})\n`,
+      cliError(
+        `PermissionDenied: FileSystem.readFile (${project.path(`${app}locked/.claude/settings.json`)})`,
+      ),
     )
   })
 })
@@ -140,7 +153,9 @@ describe('hooks install in a monorepo package', () => {
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
     expect(stderr).toBe(
-      '\nERROR\n  Copilot reads .github/hooks only at the top of the repository, not in packages/app: install copilot from there\n',
+      cliError(
+        'Copilot reads .github/hooks only at the top of the repository, not in packages/app: install copilot from there',
+      ),
     )
     expect(project.exists('packages/app/.claude')).toBe(false)
     expect(project.exists('packages/app/.github')).toBe(false)

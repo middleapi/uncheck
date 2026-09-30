@@ -1,7 +1,6 @@
 import { mkdirSync } from 'node:fs'
 
-import { LAYOUTS, report } from '../utils/project'
-import { selectedReport } from './paths-utils'
+import { cliError, LAYOUTS, report } from '../utils/project'
 
 describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app }) => {
   it('fails before checking anything and names every path that matched no file', async () => {
@@ -9,7 +8,6 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
     mkdirSync(project.path(app, 'src/empty'))
 
     const { exitCode, stdout, stderr } = await project.uncheck([
-      '--only=oxlint',
       `${app}src/index.ts`,
       `${app}missing.ts`,
       `${app}src/**/*.tsx`,
@@ -20,7 +18,9 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([`uncheck in ${project.dir}`])
     expect(stderr).toBe(
-      `\nERROR\n  No files match ${app}missing.ts, ${app}src/**/*.tsx, ${app}lib/, ${app}src/empty. Pass --no-error-on-unmatched-pattern to run with whatever matched.\n`,
+      cliError(
+        `No files match ${app}missing.ts, ${app}src/**/*.tsx, ${app}lib/, ${app}src/empty. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
+      ),
     )
   })
 
@@ -28,8 +28,9 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
     const project = create()
 
     const { exitCode, stdout, stderr } = await project.uncheck([
-      '--only=oxlint',
       '--no-error-on-unmatched-pattern',
+      '--only=oxlint',
+      '--only=oxfmt',
       `${app}missing.ts`,
       `${app}src/index.ts`,
       `${app}src/**/*.tsx`,
@@ -37,11 +38,15 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
-    expect(selectedReport(stdout)).toEqual([
+    expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
+      '○ sherif skipped, not selected by --only',
       `▶ oxlint --no-error-on-unmatched-pattern ${app}src/index.ts`,
       '✔ oxlint passed',
-      '✔ all checks passed (oxlint)',
+      `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}src/index.ts`,
+      '✔ oxfmt passed',
+      '○ tsc skipped, not selected by --only',
+      '✔ all checks passed (oxlint, oxfmt)',
     ])
   })
 

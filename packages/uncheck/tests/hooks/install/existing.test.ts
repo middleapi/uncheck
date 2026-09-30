@@ -1,4 +1,4 @@
-import { LAYOUTS, singleRepo } from '../../utils/project'
+import { LAYOUTS, cliError, singleRepo } from '../../utils/project'
 import {
   TIMEOUT,
   asWritten,
@@ -6,7 +6,6 @@ import {
   cursorHooks,
   hookCommand,
   installOutput,
-  readConfig,
 } from './utils'
 
 const MENTIONS = [
@@ -45,23 +44,27 @@ describe.each(LAYOUTS)(
           command,
         ),
       )
-      expect(readConfig(project, `${app}.claude/settings.json`)).toEqual({
-        permissions: { allow: ['Bash(pnpm test)'] },
-        hooks: {
-          PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo done' }] }],
-          Stop: [
-            { hooks: [{ type: 'command', command: 'notify-send done' }] },
-            { hooks: [{ type: 'command', command, timeout: TIMEOUT }] },
-          ],
-        },
-      })
-      expect(readConfig(project, `${app}.cursor/hooks.json`)).toEqual({
-        version: 1,
-        hooks: {
-          afterFileEdit: [{ command: 'echo edited' }],
-          stop: [{ command, timeout: TIMEOUT }],
-        },
-      })
+      expect(project.read(`${app}.claude/settings.json`)).toBe(
+        asWritten({
+          permissions: { allow: ['Bash(pnpm test)'] },
+          hooks: {
+            PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo done' }] }],
+            Stop: [
+              { hooks: [{ type: 'command', command: 'notify-send done' }] },
+              { hooks: [{ type: 'command', command, timeout: TIMEOUT }] },
+            ],
+          },
+        }),
+      )
+      expect(project.read(`${app}.cursor/hooks.json`)).toBe(
+        asWritten({
+          hooks: {
+            afterFileEdit: [{ command: 'echo edited' }],
+            stop: [{ command, timeout: TIMEOUT }],
+          },
+          version: 1,
+        }),
+      )
     })
 
     it('replaces its own stop entry where it is, keeping what the user set on it', async () => {
@@ -107,26 +110,31 @@ describe.each(LAYOUTS)(
           command,
         ),
       )
-      expect(readConfig(project, `${app}.claude/settings.json`)).toEqual({
-        hooks: {
-          PostToolUse: postToolUse,
-          Stop: [
-            { hooks: [{ type: 'command', command: 'notify-send done' }] },
-            {
-              matcher: '',
-              hooks: [{ type: 'command', command, statusMessage: 'Checking', timeout: 1800 }],
-            },
-            { hooks: [{ type: 'command', command: 'echo last' }] },
-          ],
-        },
-      })
-      expect(readConfig(project, `${app}.cursor/hooks.json`)).toEqual({
-        version: 2,
-        hooks: { stop: [{ command, timeout: TIMEOUT }, { command: 'echo last' }] },
-      })
+      expect(project.read(`${app}.claude/settings.json`)).toBe(
+        asWritten({
+          hooks: {
+            PostToolUse: postToolUse,
+            Stop: [
+              { hooks: [{ type: 'command', command: 'notify-send done' }] },
+              {
+                matcher: '',
+                hooks: [{ type: 'command', command, statusMessage: 'Checking', timeout: 1800 }],
+              },
+              { hooks: [{ type: 'command', command: 'echo last' }] },
+            ],
+          },
+        }),
+      )
+      expect(project.read(`${app}.cursor/hooks.json`)).toBe(
+        asWritten({
+          version: 2,
+          hooks: { stop: [{ command, timeout: TIMEOUT }, { command: 'echo last' }] },
+        }),
+      )
 
       const again = await project.uncheck(['hooks', 'install', 'claude', 'cursor'], { cwd: app })
 
+      expect(again.exitCode).toBe(0)
       expect(again.stdout).toBe(
         installOutput(
           ['Claude Code .claude/settings.json unchanged', 'Cursor .cursor/hooks.json unchanged'],
@@ -166,18 +174,23 @@ describe.each(LAYOUTS)(
           command,
         ),
       )
-      expect(readConfig(project, `${app}.claude/settings.json`)).toEqual({
-        hooks: {
-          Stop: [...claudeStop, { hooks: [{ type: 'command', command, timeout: TIMEOUT }] }],
-        },
-      })
-      expect(readConfig(project, `${app}.cursor/hooks.json`)).toEqual({
-        version: 1,
-        hooks: { stop: [...cursorStop, { command, timeout: TIMEOUT }] },
-      })
+      expect(project.read(`${app}.claude/settings.json`)).toBe(
+        asWritten({
+          hooks: {
+            Stop: [...claudeStop, { hooks: [{ type: 'command', command, timeout: TIMEOUT }] }],
+          },
+        }),
+      )
+      expect(project.read(`${app}.cursor/hooks.json`)).toBe(
+        asWritten({
+          hooks: { stop: [...cursorStop, { command, timeout: TIMEOUT }] },
+          version: 1,
+        }),
+      )
 
       const again = await project.uncheck(['hooks', 'install', 'claude', 'cursor'], { cwd: app })
 
+      expect(again.exitCode).toBe(0)
       expect(again.stdout).toBe(
         installOutput(
           ['Claude Code .claude/settings.json unchanged', 'Cursor .cursor/hooks.json unchanged'],
@@ -232,10 +245,9 @@ describe.each(LAYOUTS)(
           command,
         ),
       )
-      expect(readConfig(project, `${app}.claude/settings.json`)).toEqual({
-        model: 'opus',
-        ...claudeSettings(command),
-      })
+      expect(project.read(`${app}.claude/settings.json`)).toBe(
+        asWritten({ model: 'opus', ...claudeSettings(command) }),
+      )
       expect(project.read(`${app}.codebuddy/settings.json`)).toBe(
         asWritten(claudeSettings(command)),
       )
@@ -255,19 +267,20 @@ describe.each(LAYOUTS)(
       expect(cursor.exitCode).toBe(1)
       expect(cursor.stdout).toBe('')
       expect(cursor.stderr).toBe(
-        '\nERROR\n  .cursor/hooks.json has InvalidSymbol on line 3, fix it and run again\n',
+        cliError('.cursor/hooks.json has InvalidSymbol on line 3, fix it and run again'),
       )
 
       for (const [agent, file] of [
         ['claude', '.claude/settings.json'],
         ['codebuddy', '.codebuddy/settings.json'],
       ] as const) {
-        const { exitCode, stderr } = await project.uncheck(['hooks', 'install', agent], {
+        const { exitCode, stdout, stderr } = await project.uncheck(['hooks', 'install', agent], {
           cwd: app,
         })
 
         expect(exitCode).toBe(1)
-        expect(stderr).toBe(`\nERROR\n  ${file} is not a JSON object, fix it and run again\n`)
+        expect(stdout).toBe('')
+        expect(stderr).toBe(cliError(`${file} is not a JSON object, fix it and run again`))
       }
 
       expect(project.read(`${app}.cursor/hooks.json`)).toBe(broken)
@@ -278,13 +291,15 @@ describe.each(LAYOUTS)(
     it('writes no config when another one it was asked for is broken', async () => {
       const project = create({ [`${app}.cursor/hooks.json`]: '{ "version": 1' })
 
-      const { exitCode, stderr } = await project.uncheck(['hooks', 'install', 'claude', 'cursor'], {
-        cwd: app,
-      })
+      const { exitCode, stdout, stderr } = await project.uncheck(
+        ['hooks', 'install', 'claude', 'cursor'],
+        { cwd: app },
+      )
 
       expect(exitCode).toBe(1)
+      expect(stdout).toBe('')
       expect(stderr).toBe(
-        '\nERROR\n  .cursor/hooks.json has CloseBraceExpected on line 1, fix it and run again\n',
+        cliError('.cursor/hooks.json has CloseBraceExpected on line 1, fix it and run again'),
       )
       expect(project.exists(`${app}.claude`)).toBe(false)
     })
@@ -312,15 +327,17 @@ describe('hooks install merges into an existing GitHub Copilot config', () => {
     expect(stdout).toBe(
       installOutput(['GitHub Copilot .github/hooks/uncheck.json updated'], command),
     )
-    expect(readConfig(project, '.github/hooks/uncheck.json')).toEqual({
-      version: 1,
-      hooks: {
-        agentStop: [
-          { type: 'command', bash: command, powershell: command, timeout: 1800 },
-          { type: 'command', bash: command, powershell: command, timeoutSec: 1200 },
-        ],
-      },
-    })
+    expect(project.read('.github/hooks/uncheck.json')).toBe(
+      asWritten({
+        version: 1,
+        hooks: {
+          agentStop: [
+            { type: 'command', bash: command, timeout: 1800, powershell: command },
+            { type: 'command', powershell: command, timeoutSec: 1200, bash: command },
+          ],
+        },
+      }),
+    )
   })
 
   it('leaves Copilot hooks that only mention it alone, adding its own next to them', async () => {
@@ -338,14 +355,16 @@ describe('hooks install merges into an existing GitHub Copilot config', () => {
     expect(stdout).toBe(
       installOutput(['GitHub Copilot .github/hooks/uncheck.json updated'], command),
     )
-    expect(readConfig(project, '.github/hooks/uncheck.json')).toEqual({
-      version: 1,
-      hooks: {
-        agentStop: [
-          ...agentStop,
-          { type: 'command', bash: command, powershell: command, timeoutSec: TIMEOUT },
-        ],
-      },
-    })
+    expect(project.read('.github/hooks/uncheck.json')).toBe(
+      asWritten({
+        hooks: {
+          agentStop: [
+            ...agentStop,
+            { type: 'command', bash: command, powershell: command, timeoutSec: TIMEOUT },
+          ],
+        },
+        version: 1,
+      }),
+    )
   })
 })

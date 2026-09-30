@@ -1,13 +1,13 @@
 import { stripVTControlCharacters } from 'node:util'
 
-import { LAYOUTS } from '../../utils/project'
-import { CLAUDE_CODE_STOP, GITIGNORE, lines, location, stopHook, tscCommand } from './utils'
+import { LAYOUTS, report } from '../../utils/project'
+import { CLAUDE_CODE_STOP, stopHook } from './utils'
 
 const UNFORMATTED = 'export const   legacy = 1\n'
 
 describe.each(LAYOUTS)(
   'hooks run checks what changed since the last commit in a $name',
-  ({ create, app }) => {
+  ({ create, app, tsc }) => {
     it('stays silent when nothing changed', async () => {
       const project = create({ [`${app}src/legacy.ts`]: UNFORMATTED })
 
@@ -20,10 +20,7 @@ describe.each(LAYOUTS)(
     })
 
     it('fixes the changed and untracked files, leaving ignored and unchanged ones alone', async () => {
-      const project = create({
-        ...GITIGNORE,
-        [`${app}src/legacy.ts`]: UNFORMATTED,
-      })
+      const project = create({ [`${app}src/legacy.ts`]: UNFORMATTED })
       const index = project.read(`${app}src/index.ts`)
 
       project.write({
@@ -39,14 +36,14 @@ describe.each(LAYOUTS)(
       expect(exitCode).toBe(0)
       expect(stdout).toBe('')
       expect(stripVTControlCharacters(stderr)).toBe(stderr)
-      expect(lines(project, stderr)).toEqual([
-        `uncheck in ${location(app)}`,
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, no package.json among the given files',
         '▶ oxlint --fix --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
         '✔ oxlint passed',
         '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
         '✔ oxfmt passed',
-        tscCommand(app),
+        tsc,
         '✔ tsc passed',
         '✔ all checks passed (oxlint, oxfmt, tsc)',
       ])
@@ -66,8 +63,8 @@ describe.each(LAYOUTS)(
 
       expect(deleted.exitCode).toBe(0)
       expect(deleted.stdout).toBe('')
-      expect(lines(project, deleted.stderr)).toEqual([
-        `uncheck in ${location(app)}`,
+      expect(report(deleted.stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
         '○ nothing to check, no files match src/[id].ts',
       ])
       expect(project.read(`${app}src/i.ts`)).toBe(UNFORMATTED)
@@ -79,8 +76,9 @@ describe.each(LAYOUTS)(
       })
 
       expect(alongside.exitCode).toBe(0)
-      expect(lines(project, alongside.stderr)).toEqual([
-        `uncheck in ${location(app)}`,
+      expect(alongside.stdout).toBe('')
+      expect(report(alongside.stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not selected by --only',
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --no-error-on-unmatched-pattern src/new.ts',
@@ -101,14 +99,14 @@ describe.each(LAYOUTS)(
 
       expect(exitCode).toBe(2)
       expect(stdout).toBe('')
-      expect(lines(project, stderr)).toEqual([
-        `uncheck in ${location(app)}`,
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not a workspace root',
         '▶ oxlint',
         '✔ oxlint passed',
         '▶ oxfmt --check',
         '✘ oxfmt failed',
-        tscCommand(app),
+        tsc,
         '✔ tsc passed',
         '✘ 1 of 3 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
@@ -125,8 +123,8 @@ describe.each(LAYOUTS)(
 
       expect(exitCode).toBe(2)
       expect(stdout).toBe('')
-      expect(lines(project, stderr)).toEqual([
-        `uncheck in ${location(app)}`,
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not selected by --only',
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --check',

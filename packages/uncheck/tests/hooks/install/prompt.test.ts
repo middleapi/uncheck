@@ -1,10 +1,15 @@
-import { LAYOUTS, monorepo } from '../../utils/project'
+import { LAYOUTS, cliError, monorepo } from '../../utils/project'
 import { asWritten, claudeSettings, cursorHooks, hookCommand, installOutput } from './utils'
 
 const QUESTION = 'Which agents should run uncheck when they finish a turn?'
+const CHOICES = `? ${QUESTION} › \n  Select All\n  Inverse Selection\n  ☐ Claude Code \n  ☐ CodeBuddy \n  ☐ Cursor \n  ☐ GitHub Copilot `
 const DOWN = '\u001B[B'
 const SPACE = ' '
 const ENTER = '\r'
+
+function fromAnswer(output: string): string {
+  return output.slice(output.lastIndexOf(`✔ ${QUESTION}`))
+}
 
 describe.each(LAYOUTS)('hooks install without agents in a $name', ({ create, app }) => {
   it('writes the agents chosen in a terminal', async () => {
@@ -18,11 +23,12 @@ describe.each(LAYOUTS)('hooks install without agents in a $name', ({ create, app
     })
 
     expect(exitCode).toBe(0)
-    expect(stdout.split(' Claude Code, Cursor\n').at(-1)).toBe(
-      installOutput(
+    expect(stdout.slice(0, CHOICES.length)).toBe(CHOICES)
+    expect(fromAnswer(stdout)).toBe(
+      `✔ ${QUESTION} …  Claude Code, Cursor\n${installOutput(
         ['Claude Code .claude/settings.json created', 'Cursor .cursor/hooks.json created'],
         command,
-      ),
+      )}`,
     )
     expect(project.read(`${app}.claude/settings.json`)).toBe(asWritten(claudeSettings(command)))
     expect(project.read(`${app}.cursor/hooks.json`)).toBe(asWritten(cursorHooks(command)))
@@ -37,7 +43,9 @@ describe.each(LAYOUTS)('hooks install without agents in a $name', ({ create, app
     expect(exitCode).toBe(1)
     expect(stdout).toBe('')
     expect(stderr).toBe(
-      '\nERROR\n  Pass the agents to configure, for example: uncheck hooks install claude codebuddy cursor copilot\n',
+      cliError(
+        'Pass the agents to configure, for example: uncheck hooks install claude codebuddy cursor copilot',
+      ),
     )
     expect(project.exists(`${app}.claude`)).toBe(false)
   })
@@ -54,8 +62,10 @@ describe('hooks install without agents in a monorepo package', () => {
     })
 
     expect(exitCode).toBe(1)
-    expect(stdout).toContain(
-      '\nERROR\n  Copilot reads .github/hooks only at the top of the repository, not in packages/app: install copilot from there\n',
+    expect(fromAnswer(stdout)).toBe(
+      `✔ ${QUESTION} …  Claude Code, CodeBuddy, Cursor, GitHub Copilot\n${cliError(
+        'Copilot reads .github/hooks only at the top of the repository, not in packages/app: install copilot from there',
+      )}`,
     )
     expect(project.exists('packages/app/.claude')).toBe(false)
     expect(project.exists('packages/app/.github')).toBe(false)

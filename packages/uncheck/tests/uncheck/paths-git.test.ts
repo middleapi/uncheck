@@ -1,8 +1,8 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { LAYOUTS, temporaryDirectory } from '../utils/project'
-import { CLEAN_CODE, CODE_WITH_VAR, selectedReport } from './paths-utils'
+import { cliError, LAYOUTS, temporaryDirectory } from '../utils/project'
+import { CLEAN_CODE, CODE_WITH_VAR, selectedReport } from './utils'
 
 describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({ create, app }) => {
   const routes = `${app}src/routes`
@@ -29,7 +29,9 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     }
     expect(ignoredDirectory.exitCode).toBe(1)
     expect(ignoredDirectory.stderr).toBe(
-      `\nERROR\n  No files match ${routes}/dist. Pass --no-error-on-unmatched-pattern to run with whatever matched.\n`,
+      cliError(
+        `No files match ${routes}/dist. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
+      ),
     )
     expect(named.exitCode).toBe(1)
     expect(selectedReport(named.stdout)).toEqual([

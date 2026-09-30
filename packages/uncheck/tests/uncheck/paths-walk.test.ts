@@ -1,9 +1,6 @@
-import { chmodSync } from 'node:fs'
-import process from 'node:process'
-
 import type { Project } from '../utils/project'
-import { LAYOUTS } from '../utils/project'
-import { checkedFiles, listingProject } from './paths-utils'
+import { LAYOUTS, PERMISSIONS_ENFORCED } from '../utils/project'
+import { checkedFiles, listingProject } from './utils'
 
 describe.each(LAYOUTS)('uncheck with paths outside git in a $name', ({ create, app }) => {
   const routes = `${app}src/routes`
@@ -77,15 +74,9 @@ describe.each(LAYOUTS)('uncheck with paths outside git in a $name', ({ create, a
     ])
   })
 
-  // Root reads a folder whatever its mode.
-  it.skipIf(process.getuid?.() === 0)('walks past a folder it cannot read', async () => {
-    const project = walkedProject('home.ts', 'locked/secret.ts')
-    chmodSync(project.path(routes, 'locked'), 0)
+  it.runIf(PERMISSIONS_ENFORCED)('walks past a folder it cannot read', async () => {
+    const project = walkedProject('home.ts', 'locked/secret.ts').chmod(`${routes}/locked`, 0)
 
-    try {
-      expect(await check(project, routes)).toEqual([`${routes}/home.ts`])
-    } finally {
-      chmodSync(project.path(routes, 'locked'), 0o755)
-    }
+    expect(await check(project, routes)).toEqual([`${routes}/home.ts`])
   })
 })

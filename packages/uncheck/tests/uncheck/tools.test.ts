@@ -17,8 +17,8 @@ Module._resolveFilename = function (request, ...rest) {
 };
 `
 
-describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app }) => {
-  const { sherif, tsc, checks } = layoutChecks(app)
+describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }) => {
+  const { sherif, checks } = layoutChecks(app)
 
   it('skips oxlint and oxfmt when they are not installed', async () => {
     const project = create({}, { tools: ['sherif', 'typescript'] })
@@ -107,7 +107,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app }) => 
   it('finds a tool through the resolver of Yarn PnP', async () => {
     const project = create(
       {
-        '.gitignore': 'node_modules\ndist\n.yarn\n.pnp.cjs\n',
+        '.gitignore': 'node_modules\ndist\n*.tsbuildinfo\n.yarn\n.pnp.cjs\n',
         '.pnp.cjs': YARN_PNP_RESOLVER,
         '.yarn/unplugged/oxlint/package.json': { name: 'oxlint', bin: { oxlint: 'bin.js' } },
         '.yarn/unplugged/oxlint/bin.js': "console.log('oxlint from the Yarn cache');\n",

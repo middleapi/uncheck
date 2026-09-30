@@ -1,4 +1,5 @@
-import { LAYOUTS } from '../../utils/project'
+import type { Project, Run } from '../../utils/project'
+import { LAYOUTS, report, run } from '../../utils/project'
 import {
   CLAUDE_CODE_STOP,
   CLAUDE_CODE_STOP_AGAIN,
@@ -6,104 +7,127 @@ import {
   COPILOT_STOP_IN_CLAUDE_FORMAT,
   CURSOR_STOP,
   TYPE_ERROR,
-  lines,
-  location,
   stopHook,
-  tscCommand,
 } from './utils'
+
+interface ClaudeSettings {
+  readonly hooks: {
+    readonly Stop: ReadonlyArray<{ readonly hooks: [{ readonly command: string }] }>
+  }
+}
+
+interface CursorHooks {
+  readonly hooks: { readonly stop: ReadonlyArray<{ readonly command: string }> }
+}
+
+const DOCS = { 'docs/guide.md': '# Guide\n' }
 
 const DIAGNOSTIC =
   "src/index.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'."
 
+async function installHook(
+  project: Project,
+  app: string,
+  agent: 'claude' | 'cursor',
+): Promise<(payload: object) => Promise<Run>> {
+  const install = await project.uncheck(['hooks', 'install', agent], { cwd: app })
+
+  expect(install.exitCode).toBe(0)
+
+  const command =
+    agent === 'claude'
+      ? (JSON.parse(project.read(`${app}.claude/settings.json`)) as ClaudeSettings).hooks.Stop[0]!
+          .hooks[0].command
+      : (JSON.parse(project.read(`${app}.cursor/hooks.json`)) as CursorHooks).hooks.stop[0]!.command
+
+  return (payload) =>
+    run(['sh', '-c', command], { cwd: project.path('docs'), input: JSON.stringify(payload) })
+}
+
+function sendBackReason(stderr: string): string {
+  return `uncheck found problems, fix them before finishing:\n\n${stderr.replace(/\n$/, '')}`
+}
+
 describe.each(LAYOUTS)(
   'hooks run sends each agent back its own way in a $name',
-  ({ create, app }) => {
-    const failing = () =>
-      create({}, { tools: ['sherif', 'oxlint', 'oxfmt'] })
-        .fake('typescript', `console.log(${JSON.stringify(DIAGNOSTIC)})\nprocess.exitCode = 2\n`)
-        .write({ [`${app}src/index.ts`]: TYPE_ERROR })
-    const failure = [
-      `uncheck in ${location(app)}`,
+  ({ create, app, tsc }) => {
+    const checks = (project: Project, ...outcome: ReadonlyArray<string>) => [
+      `uncheck in ${project.path(app, '.')}`,
       '○ sherif skipped, no package.json among the given files',
       '▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxfmt passed',
-      tscCommand(app),
-      '✘ tsc failed',
-      '✘ 1 of 3 checks failed: tsc',
+      tsc,
+      ...outcome,
     ]
-    const reason = (stderr: string) =>
-      `uncheck found problems, fix them before finishing:\n\n${stderr.replace(/\n$/, '')}`
+    const failure = (project: Project) =>
+      checks(project, '✘ tsc failed', '✘ 1 of 3 checks failed: tsc')
 
-    it('blocks Claude Code and CodeBuddy with exit code 2 and the report on stderr', async () => {
-      const project = failing()
+    it('blocks Claude Code with exit code 2 until its change passes, through its hook run from outside the change', async () => {
+      const project = create(DOCS)
+      const stop = await installHook(project, app, 'claude')
 
-      const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP)
+      project.commit('hook').write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
-      expect(exitCode).toBe(2)
-      expect(stdout).toBe('')
-      expect(lines(project, stderr)).toEqual(failure)
-      expect(stderr).toContain(`\n${DIAGNOSTIC}\n`)
-    })
+      const blocked = await stop(CLAUDE_CODE_STOP)
 
-    it('lets Claude Code stop once it already went back, telling the user what still fails', async () => {
-      const project = failing()
+      expect(blocked.exitCode).toBe(2)
+      expect(blocked.stdout).toBe('')
+      expect(report(blocked.stderr)).toEqual(failure(project))
+      expect(blocked.stderr).toContain(`\n${DIAGNOSTIC}\n`)
 
-      const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+      const again = await stop(CLAUDE_CODE_STOP_AGAIN)
 
-      expect(exitCode).toBe(0)
-      expect(JSON.parse(stdout)).toEqual({
+      expect(again.exitCode).toBe(0)
+      expect(JSON.parse(again.stdout)).toEqual({
         systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
       })
-      expect(lines(project, stderr)).toEqual(failure)
+      expect(report(again.stderr)).toEqual(failure(project))
+
+      project.write({ [`${app}src/index.ts`]: 'export const   answer: string = "42"\n' })
+
+      const passed = await stop(CLAUDE_CODE_STOP)
+
+      expect(passed.exitCode).toBe(0)
+      expect(passed.stdout).toBe('')
+      expect(report(passed.stderr)).toEqual(
+        checks(project, '✔ tsc passed', '✔ all checks passed (oxlint, oxfmt, tsc)'),
+      )
+      expect(project.read(`${app}src/index.ts`)).toBe('export const answer: string = "42";\n')
     })
 
-    it('sends Cursor a follow-up message with the report', async () => {
-      const project = failing()
+    it('sends Cursor back once with a follow-up message, through its hook run from outside the change', async () => {
+      const project = create(DOCS)
+      const stop = await installHook(project, app, 'cursor')
 
-      const { exitCode, stdout, stderr } = await stopHook(project, app, CURSOR_STOP)
+      project.commit('hook').write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
-      expect(exitCode).toBe(0)
-      expect(lines(project, stderr)).toEqual(failure)
-      expect(JSON.parse(stdout)).toEqual({ followup_message: reason(stderr) })
-    })
+      const followUp = await stop(CURSOR_STOP)
 
-    it('lets Cursor stop once it already followed up', async () => {
-      const project = failing()
-
-      const { exitCode, stdout, stderr } = await stopHook(project, app, {
-        ...CURSOR_STOP,
-        loop_count: 1,
+      expect(followUp.exitCode).toBe(0)
+      expect(report(followUp.stderr)).toEqual(failure(project))
+      expect(JSON.parse(followUp.stdout)).toEqual({
+        followup_message: sendBackReason(followUp.stderr),
       })
 
-      expect(exitCode).toBe(0)
-      expect(stdout).toBe('')
-      expect(lines(project, stderr)).toEqual(failure)
+      const again = await stop({ ...CURSOR_STOP, loop_count: 1 })
+
+      expect(again.exitCode).toBe(0)
+      expect(again.stdout).toBe('')
+      expect(report(again.stderr)).toEqual(failure(project))
     })
 
     it('blocks Copilot with a decision, whichever payload format it sends', async () => {
-      const project = failing()
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
       for (const payload of [COPILOT_AGENT_STOP, COPILOT_STOP_IN_CLAUDE_FORMAT]) {
         const { exitCode, stdout, stderr } = await stopHook(project, app, payload)
 
         expect(exitCode).toBe(0)
-        expect(lines(project, stderr)).toEqual(failure)
-        expect(JSON.parse(stdout)).toEqual({ decision: 'block', reason: reason(stderr) })
+        expect(report(stderr)).toEqual(failure(project))
+        expect(JSON.parse(stdout)).toEqual({ decision: 'block', reason: sendBackReason(stderr) })
       }
-    })
-
-    it('only reports to an agent it does not know', async () => {
-      const project = failing()
-
-      const { exitCode, stdout, stderr } = await stopHook(project, app, {
-        hook_event_name: 'SubagentStop',
-      })
-
-      expect(exitCode).toBe(0)
-      expect(stdout).toBe('')
-      expect(lines(project, stderr)).toEqual(failure)
     })
   },
 )

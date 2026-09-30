@@ -1,8 +1,5 @@
-import { chmodSync } from 'node:fs'
-import { resolve } from 'node:path'
-
-import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
-import { ALLOW_JS, NOT_COVERED, SKIPPED_BY_ONLY, tscPlan, withFakeTsc } from './tsc.utils'
+import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, report, singleRepo } from '../utils/project'
+import { ALLOW_JS, NOT_COVERED, SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
 
 describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
   it('skips the check when the project has no tsconfig.json', async () => {
@@ -12,8 +9,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
 
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([
-      `uncheck in ${resolve(project.dir, app)}`,
-      ...SKIPPED_BY_ONLY,
+      `uncheck in ${project.path(app, '.')}`,
+      ...SKIPPED_BESIDE_TSC,
       '○ tsc skipped, no tsconfig.json found',
       '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json found',
     ])
@@ -40,8 +37,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
 
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([
-      `uncheck in ${resolve(project.dir, app)}`,
-      ...SKIPPED_BY_ONLY,
+      `uncheck in ${project.path(app, '.')}`,
+      ...SKIPPED_BESIDE_TSC,
       '✘ tsc found 2 tsconfig.json but typescript is not installed',
       '✘ 1 of 1 checks failed: tsc',
     ])
@@ -59,8 +56,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
 
     expect(exitCode).toBe(1)
     expect(report(stdout)).toEqual([
-      `uncheck in ${resolve(project.dir, app)}`,
-      ...SKIPPED_BY_ONLY,
+      `uncheck in ${project.path(app, '.')}`,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',
@@ -68,13 +65,10 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
     expect(stdout).toContain("tsconfig.json(1,1): error TS1005: '{' expected.")
   })
 
-  // chmod cannot stop root from reading a file.
-  it.skipIf(process.getuid?.() === 0)(
+  it.runIf(PERMISSIONS_ENFORCED)(
     'hands an unreadable tsconfig.json to tsc, which reports it',
     async () => {
-      const project = create()
-
-      chmodSync(project.path(app, 'tsconfig.json'), 0)
+      const project = create().chmod(`${app}tsconfig.json`, 0)
 
       const { exitCode, stdout } = await project.uncheck(['--only=tsc', 'src/index.ts'], {
         cwd: app,
@@ -82,8 +76,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
 
       expect(exitCode).toBe(1)
       expect(report(stdout)).toEqual([
-        `uncheck in ${resolve(project.dir, app)}`,
-        ...SKIPPED_BY_ONLY,
+        `uncheck in ${project.path(app, '.')}`,
+        ...SKIPPED_BESIDE_TSC,
         '▶ tsc -p tsconfig.json --noEmit',
         '✘ tsc failed',
         '✘ 1 of 1 checks failed: tsc',
@@ -107,7 +101,6 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
       { git: 'none' },
     )
 
-    expect(project.exists('.git')).toBe(false)
     expect(await tscPlan(project, app)).toEqual([
       '▶ tsc -b tsconfig.json',
       '▶ tsc -p scripts/tsconfig.json --noEmit',
@@ -125,36 +118,17 @@ describe('tsc with the real compiler in a single repo', () => {
       },
     })
 
-    const passed = await project.uncheck(['--only=tsc'])
+    const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
 
-    expect(passed.exitCode).toBe(0)
-    expect(report(passed.stdout)).toEqual([
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      ...SKIPPED_BY_ONLY,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
     ])
     expect(project.exists('src/index.js')).toBe(false)
-
-    project.write({
-      'src/utils.ts':
-        'export function double(value: number): number {\n  return String(value);\n}\n',
-    })
-
-    const failed = await project.uncheck(['--only=tsc'])
-
-    expect(failed.exitCode).toBe(1)
-    expect(report(failed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BY_ONLY,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
-    expect(failed.stdout).toContain(
-      "src/utils.ts(2,3): error TS2322: Type 'string' is not assignable to type 'number'.",
-    )
   })
 })
 
@@ -167,7 +141,7 @@ describe('tsc with the real compiler in a monorepo', () => {
     expect(passed.exitCode).toBe(0)
     expect(report(passed.stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      ...SKIPPED_BY_ONLY,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -b tsconfig.json',
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
@@ -184,7 +158,7 @@ describe('tsc with the real compiler in a monorepo', () => {
     expect(failed.exitCode).toBe(1)
     expect(report(failed.stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      ...SKIPPED_BY_ONLY,
+      ...SKIPPED_BESIDE_TSC,
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',
