@@ -250,10 +250,11 @@ export function runInTerminal(
   command: ReadonlyArray<string>,
   { cwd, env, keys = [], waitFor }: Omit<TerminalOptions, 'cwd'> & { readonly cwd: string },
 ): Promise<Run> {
+  // Without exec, the shell that script starts also gets Ctrl-C and exits 130 whatever the command does.
   const args =
     process.platform === 'darwin'
       ? ['-q', '/dev/null', ...command]
-      : ['-qfec', command.map(shellQuote).join(' '), '/dev/null']
+      : ['-qfec', `exec ${command.map(shellQuote).join(' ')}`, '/dev/null']
 
   return new Promise((resolve, reject) => {
     const child = spawn('script', args, { cwd: inside(cwd), env: environment(env) })
