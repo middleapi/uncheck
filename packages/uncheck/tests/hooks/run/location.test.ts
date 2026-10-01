@@ -1,6 +1,9 @@
+import { join } from 'node:path'
+
 import {
   CLI,
   LAYOUTS,
+  Project,
   cliError,
   git,
   linkedWorktree,
@@ -255,6 +258,30 @@ describe('hooks run in a monorepo', () => {
     ])
     expect(project.read('packages/app/src/extra.ts')).toBe(FORMATTED)
     expect(project.read('packages/core/src/extra.ts')).toBe(UNFORMATTED)
+  })
+})
+
+describe('hooks run in a repository whose work tree lies below its .git folder', () => {
+  it("checks that repository when the agent's project is another one", async () => {
+    const project = singleRepo()
+    const holder = temporaryDirectory()
+    const checkout = new Project(join(holder, 'checkout'))
+      .write({ '.gitignore': 'node_modules\n' })
+      .link('node_modules', project.path('node_modules'))
+
+    git(holder, ['init', '--quiet'])
+    git(holder, ['config', 'core.worktree', checkout.dir])
+    checkout.commit('init').write({ 'src/extra.ts': UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(checkout, '', CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: 'src',
+      env: { CLAUDE_PROJECT_DIR: project.dir },
+    })
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(checkout.dir))
   })
 })
 

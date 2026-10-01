@@ -124,6 +124,24 @@ describe.each(LAYOUTS)(
       expect(nextTurn.exitCode).toBe(2)
       expect(nextTurn.stdout).toBe('')
       expect(report(nextTurn.stderr)).toEqual(failure(project))
+
+      project.write({ [`${app}src/index.ts`]: 'export const answer: string = "42";\n' })
+
+      const passingTurn = await stopHook(project, app, CLAUDE_CODE_STOP)
+
+      expect(passingTurn.exitCode).toBe(0)
+      expect(passingTurn.stdout).toBe('')
+      expect(report(passingTurn.stderr)).toEqual(
+        checks(project, '✔ tsc passed', '✔ all checks passed (oxlint, oxfmt, tsc)'),
+      )
+
+      project.write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const continuedAfterPassing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(continuedAfterPassing.exitCode).toBe(2)
+      expect(continuedAfterPassing.stdout).toBe('')
+      expect(report(continuedAfterPassing.stderr)).toEqual(failure(project))
     })
 
     it('takes a continued turn without a session id as one uncheck already blocked', async () => {

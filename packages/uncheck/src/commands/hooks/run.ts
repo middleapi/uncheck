@@ -224,14 +224,18 @@ const topToCheck = Effect.fn(function* (start: string, projectDir: string | unde
   // Claude Code keeps the project folder on the main checkout while the agent works in a linked
   // worktree, which shares its common dir: only a submodule or a nested clone, with a common dir of
   // its own, gives way to the project's repository above it.
+  let folder = here.top
   let outer: Repository | undefined = here
 
   while (
     outer !== undefined &&
     outer.commonDir !== project.commonDir &&
-    outer.top !== path.dirname(outer.top)
+    folder !== path.dirname(folder)
   ) {
-    outer = yield* repositoryAround(path.dirname(outer.top))
+    // A repository whose core.worktree is a subfolder names that subfolder as its top from above it
+    // too, so climbing from its top alone would ask about the same folder forever.
+    folder = path.dirname(path.relative(outer.top, folder).startsWith('..') ? folder : outer.top)
+    outer = yield* repositoryAround(folder)
   }
 
   return outer?.commonDir === project.commonDir ? outer.top : here.top
