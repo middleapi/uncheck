@@ -71,6 +71,15 @@ describe.each(LAYOUTS)('uncheck with exclusions in a $name', ({ create, app }) =
     )
   })
 
+  it('leaves out everything below the folders a glob matches', async () => {
+    const project = routesProject()
+
+    expect(await check(project, '.', '!**/nested')).toEqual(
+      without('nested/deep.ts', 'nested/more/deeper.ts'),
+    )
+    expect(await check(project, '.', '!*/more')).toEqual(without('nested/more/deeper.ts'))
+  })
+
   it('leaves out the files a glob matches, dot files included', async () => {
     const project = routesProject()
 

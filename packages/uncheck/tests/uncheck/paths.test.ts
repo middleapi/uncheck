@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { cliError, LAYOUTS, monorepo, report, temporaryDirectory } from '../utils/project'
@@ -99,6 +99,57 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
       '✔ oxlint passed',
       '✔ all checks passed (oxlint)',
     ])
+  })
+
+  it('takes an absolute path through a linked folder to the directory it runs in', async () => {
+    const routes = `${app}src/routes`
+    const project = create({
+      [`${routes}/home.ts`]: CLEAN_CODE,
+      [`${routes}/legacy.ts`]: CODE_WITH_VAR,
+    })
+    const links = temporaryDirectory()
+    const linked = join(links, 'linked')
+    const elsewhere = temporaryDirectory()
+    writeFileSync(join(elsewhere, 'shared.ts'), CLEAN_CODE)
+    symlinkSync(project.dir, linked)
+    symlinkSync(elsewhere, join(links, 'elsewhere'))
+
+    const through = await project.uncheck([
+      '--only=oxlint',
+      join(linked, routes, 'home.ts'),
+      join(linked, routes, '*.ts'),
+      `!${join(linked, routes, 'legacy.ts')}`,
+    ])
+    const fromLink = await project.uncheck([
+      '--only=oxlint',
+      `--cwd=${linked}`,
+      project.path(routes, 'home.ts'),
+    ])
+    const outside = join(links, 'elsewhere/shared.ts')
+    const rejected = await project.uncheck(['--only=oxlint', outside])
+
+    expect(through.stderr).toBe('')
+    expect(through.exitCode).toBe(0)
+    expect(selectedReport(through.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      `▶ oxlint --no-error-on-unmatched-pattern ${routes}/home.ts`,
+      '✔ oxlint passed',
+      '✔ all checks passed (oxlint)',
+    ])
+    expect(fromLink.stderr).toBe('')
+    expect(fromLink.exitCode).toBe(0)
+    expect(selectedReport(fromLink.stdout)).toEqual([
+      `uncheck in ${linked}`,
+      `▶ oxlint --no-error-on-unmatched-pattern ${routes}/home.ts`,
+      '✔ oxlint passed',
+      '✔ all checks passed (oxlint)',
+    ])
+    expect(rejected.exitCode).toBe(1)
+    expect(rejected.stderr).toBe(
+      cliError(
+        `${outside} is outside ${project.dir}, run from a folder that contains it or pass one with --cwd`,
+      ),
+    )
   })
 
   it('fails naming a file, directory or glob above the directory it runs in', async () => {

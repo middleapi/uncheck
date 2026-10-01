@@ -1,7 +1,7 @@
-import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, report, singleRepo } from '../utils/project'
+import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, report, run, singleRepo } from '../utils/project'
 import { ALLOW_JS, NOT_COVERED, SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
 
-describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
+describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
   it('skips the check when the project has no tsconfig.json', async () => {
     const project = create({ [`${app}tsconfig.json`]: null })
 
@@ -21,6 +21,27 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app }) => {
 
     expect(project.git('ls-files', `${app}tsconfig.json`)).toBe(`${app}tsconfig.json\n`)
     expect(await tscPlan(project, app)).toEqual(['○ tsc skipped, no tsconfig.json found'])
+  })
+
+  it('checks a tsconfig.json with merge conflicts once', async () => {
+    const project = withFakeTsc(create)
+    const config = `${app}tsconfig.json`
+    const include = (folder: string) => (value: Record<string, unknown>) => ({
+      ...value,
+      include: ['src', folder],
+    })
+
+    project.git('checkout', '--quiet', '-b', 'side')
+    project.update(config, include('side')).commit('side')
+    project.git('checkout', '--quiet', 'main')
+    project.update(config, include('main')).commit('main')
+
+    expect((await run(['git', 'merge', 'side'], { cwd: project.dir })).exitCode).toBe(1)
+
+    project.git('checkout', '--theirs', '--', config)
+
+    expect(project.git('ls-files', '--', config)).toBe(`${config}\n`.repeat(3))
+    expect(await tscPlan(project, app)).toEqual([tsc])
   })
 
   it('skips the check when no tsconfig.json covers the given files', async () => {

@@ -47,9 +47,9 @@ uncheck needs Node 22.20 or later. Install only the tools you want: a check runs
 $ npx uncheck
 uncheck in /home/me/my-app
 ○ sherif skipped, not installed
-▶ oxlint
+▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern
 ✔ oxlint passed 67ms
-▶ oxfmt --check
+▶ oxfmt --check --no-error-on-unmatched-pattern
 Format issues found in above 2 files. Run without `--check` to fix.
 ✘ oxfmt failed 65ms
 ▶ tsc -p tsconfig.json --noEmit
@@ -83,7 +83,7 @@ npx uncheck src '!src/generated'      # a directory, minus a part of it
 npx uncheck '!**/*.gen.ts'            # everything except some files
 ```
 
-uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
+uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included, but never links that point outside the directory uncheck runs in. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. An exclusion glob also leaves out the folders it matches, as in `.gitignore`: `'!**/generated'`. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
 
 tsc then checks only the projects that include one of the files, and sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among them.
 

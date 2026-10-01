@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs'
 
 import { cliError, LAYOUTS, report } from '../utils/project'
+import { CLEAN_CODE } from './utils'
 
 describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app }) => {
   it('fails before checking anything and names every path that matched no file', async () => {
@@ -20,6 +21,30 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
     expect(stderr).toBe(
       cliError(
         `No files match ${app}missing.ts, ${app}src/**/*.tsx, ${app}lib/, ${app}src/empty. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
+      ),
+    )
+  })
+
+  it('fails a glob or directory whose only git entries are no files', async () => {
+    const project = create({
+      [`${app}legacy/old.ts`]: CLEAN_CODE,
+      [`${app}shared/util.ts`]: CLEAN_CODE,
+    })
+      .link(`${app}links/shared`, '../shared')
+      .commit()
+      .write({ [`${app}legacy/old.ts`]: null })
+
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      '--only=oxlint',
+      `${app}legacy/*.ts`,
+      `${app}links`,
+    ])
+
+    expect(exitCode).toBe(1)
+    expect(report(stdout)).toEqual([`uncheck in ${project.dir}`])
+    expect(stderr).toBe(
+      cliError(
+        `No files match ${app}legacy/*.ts, ${app}links. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
       ),
     )
   })

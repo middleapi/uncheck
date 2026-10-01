@@ -24,7 +24,7 @@ describe.each(LAYOUTS)('uncheck sherif in a $name', ({ create, app }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not installed',
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
@@ -96,9 +96,9 @@ describe('uncheck sherif in a single repo', () => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '✘ sherif not a workspace root',
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',

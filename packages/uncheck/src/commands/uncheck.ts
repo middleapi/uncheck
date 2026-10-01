@@ -11,7 +11,7 @@ import { oxlint } from '../checks/oxlint'
 import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, platformMessage, userError } from '../errors'
-import { existingFiles, listProjectFiles, resolvePaths } from '../files'
+import { checkableFiles, listProjectFiles, resolvePaths } from '../files'
 import { bold, dim, green, listFiles, red } from '../style'
 import { captureLines, execute } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
@@ -142,7 +142,7 @@ export const checkPaths = Effect.fn(function* (
 
   if (paths.length > 0) {
     const resolved = literal
-      ? { files: yield* existingFiles(paths, cwd), unmatched: [] }
+      ? { files: yield* checkableFiles(paths, cwd), unmatched: [] }
       : yield* resolvePaths(paths, cwd, projectFiles)
 
     if (resolved.unmatched.length > 0 && !allowUnmatched) {

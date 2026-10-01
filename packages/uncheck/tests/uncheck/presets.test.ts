@@ -110,9 +110,9 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✘ oxfmt failed',
       tsc,
       '✘ tsc failed',
@@ -158,9 +158,9 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...layoutChecks(app, { fix: true }).sherif,
-      '▶ oxlint --fix',
+      '▶ oxlint --fix --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✘ oxlint failed',
-      '▶ oxfmt',
+      '▶ oxfmt --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,

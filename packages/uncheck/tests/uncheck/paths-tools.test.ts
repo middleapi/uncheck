@@ -52,13 +52,36 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
     expect(everything.exitCode).toBe(1)
     expect(selectedReport(everything.stdout)).toEqual([
       `uncheck in ${project.path(app, 'src/routes')}`,
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '✘ 1 of 2 checks failed: oxlint',
       '  rerun with `--fix` to apply oxlint fixes',
     ])
+  })
+
+  it('passes oxlint and oxfmt without paths in a folder holding nothing they handle', async () => {
+    const project = create({
+      [`${app}config/base.json`]: { compilerOptions: { strict: true } },
+      [`${app}notes/todo.txt`]: 'var   draft\n',
+    })
+
+    for (const folder of ['config', 'notes']) {
+      const { exitCode, stdout } = await project.uncheck(ONLY_FILE_CHECKS, {
+        cwd: `${app}${folder}`,
+      })
+
+      expect(selectedReport(stdout)).toEqual([
+        `uncheck in ${project.path(app, folder)}`,
+        '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+        '✔ oxlint passed',
+        '▶ oxfmt --check --no-error-on-unmatched-pattern',
+        '✔ oxfmt passed',
+        '✔ all checks passed (oxlint, oxfmt)',
+      ])
+      expect(exitCode).toBe(0)
+    }
   })
 
   it('fixes only the given files', async () => {

@@ -1,6 +1,8 @@
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
-import { LAYOUTS, report } from '../../utils/project'
+import { LAYOUTS, report, temporaryDirectory } from '../../utils/project'
 import { CLAUDE_CODE_STOP, stopHook } from './utils'
 
 const UNFORMATTED = 'export const   legacy = 1\n'
@@ -53,6 +55,38 @@ describe.each(LAYOUTS)(
       expect(project.read(`${app}dist/bundle.js`)).toBe('export var   bundle = 1\n')
     })
 
+    it('leaves installed packages that no ignore rule covers and links leaving the project alone', async () => {
+      const store = temporaryDirectory()
+      writeFileSync(join(store, 'shared.ts'), UNFORMATTED)
+      const dependency = `${app}lib/node_modules/dep/index.js`
+      const project = create({ '.gitignore': '/node_modules\ndist\n*.tsbuildinfo\n' })
+        .write({
+          [dependency]: 'export var   dep = 1\n',
+          [`${app}src/extra.ts`]: 'export const   extra = 1\n',
+        })
+        .link(`${app}src/shared.ts`, join(store, 'shared.ts'))
+
+      const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+        args: ['--fix', '--only=oxlint', '--only=oxfmt'],
+      })
+
+      expect(exitCode).toBe(0)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
+        '○ sherif skipped, not selected by --only',
+        '▶ oxlint --fix --no-error-on-unmatched-pattern src/extra.ts',
+        '✔ oxlint passed',
+        '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
+        '✔ oxfmt passed',
+        '○ tsc skipped, not selected by --only',
+        '✔ all checks passed (oxlint, oxfmt)',
+      ])
+      expect(project.read(`${app}src/extra.ts`)).toBe('export const extra = 1;\n')
+      expect(project.read(dependency)).toBe('export var   dep = 1\n')
+      expect(readFileSync(join(store, 'shared.ts'), 'utf8')).toBe(UNFORMATTED)
+    })
+
     it('leaves a file deleted since the last commit out, even one whose name reads as a pattern', async () => {
       const project = create({
         [`${app}src/[id].ts`]: 'export const id = 1;\n',
@@ -102,9 +136,9 @@ describe.each(LAYOUTS)(
       expect(report(stderr)).toEqual([
         `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not a workspace root',
-        '▶ oxlint',
+        '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
         '✔ oxlint passed',
-        '▶ oxfmt --check',
+        '▶ oxfmt --check --no-error-on-unmatched-pattern',
         '✘ oxfmt failed',
         tsc,
         '✔ tsc passed',
@@ -127,7 +161,7 @@ describe.each(LAYOUTS)(
         `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not selected by --only',
         '○ oxlint skipped, not selected by --only',
-        '▶ oxfmt --check',
+        '▶ oxfmt --check --no-error-on-unmatched-pattern',
         '✘ oxfmt failed',
         '○ tsc skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',

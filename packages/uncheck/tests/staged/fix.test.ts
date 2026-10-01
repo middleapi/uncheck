@@ -183,6 +183,37 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
     )
   })
 
+  it('leaves staged files under node_modules alone', async () => {
+    const dependency = `${app}vendor/node_modules/dep/index.js`
+    const project = create().write({
+      [dependency]: 'export var   dep = 1\n',
+      [`${app}src/extra.ts`]: 'export const   extra = 1\n',
+    })
+
+    project.git('add', '--force', '--', dependency, `${app}src/extra.ts`)
+
+    const { exitCode, stdout, stderr } = await project.uncheck(
+      ['staged', '--fix', '--only=oxlint', '--only=oxfmt'],
+      { cwd: folder },
+    )
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ sherif skipped, not selected by --only',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxlint passed',
+      '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxfmt passed',
+      '○ tsc skipped, not selected by --only',
+      '✔ all checks passed (oxlint, oxfmt)',
+      '✔ staged the fixes to src/extra.ts',
+    ])
+    expect(inIndex(project, dependency)).toBe('export var   dep = 1\n')
+    expect(project.read(dependency)).toBe('export var   dep = 1\n')
+  })
+
   it('fixes and stages exactly the staged files, whatever their names look like', async () => {
     const project = create({ [`${app}routes/i/page.ts`]: 'export const i = 1;\n' })
 

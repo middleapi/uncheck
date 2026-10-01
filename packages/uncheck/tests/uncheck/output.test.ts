@@ -61,14 +61,14 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
     const { exitCode, stdout } = await project.uncheck(['--skip=tsc'])
 
     expect(stdout).toMatch(
-      /^▶ oxlint\nProcess interrupted due to receipt of signal: 'SIGKILL'\n✘ oxlint failed /m,
+      /^▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nProcess interrupted due to receipt of signal: 'SIGKILL'\n✘ oxlint failed /m,
     )
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
@@ -152,7 +152,7 @@ describe('uncheck output', () => {
       `${paint('dim', '○')} ${paint('bold', 'sherif')} ${paint('dim', 'skipped, not selected by --only')}\n`,
     )
     expect(stdout).toContain(
-      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check')}\nthe tool sees FORCE_COLOR=1\n`,
+      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check --no-error-on-unmatched-pattern')}\nthe tool sees FORCE_COLOR=1\n`,
     )
     expect(stdout).toContain(
       `${paint('green', '✔')} ${paint('bold', 'oxfmt')} ${paint('green', 'passed')} `,
@@ -162,7 +162,7 @@ describe('uncheck output', () => {
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
@@ -200,7 +200,9 @@ describe('uncheck output', () => {
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint'])
 
-    expect(stdout).toContain('▶ oxlint\nthe tool sees FORCE_COLOR=undefined\n')
+    expect(stdout).toContain(
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nthe tool sees FORCE_COLOR=undefined\n',
+    )
     expect(stdout).not.toContain('\u001B[')
     expect(exitCode).toBe(0)
   })

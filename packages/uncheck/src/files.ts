@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs'
 
 import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
@@ -21,11 +21,17 @@ export type ProjectFiles = Effect.Effect<
  */
 export function listProjectFiles(cwd: string): ProjectFiles {
   return gitPaths(cwd, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).pipe(
-    // git lists a linked node_modules as one file, which a `node_modules/` ignore rule misses.
-    Effect.map((files) => files.filter((file) => !/(?:^|\/)node_modules(?:\/|$)/.test(file))),
+    Effect.map((files) => files.filter((file) => !inNodeModules(file))),
     Effect.catch(() => walk(cwd)),
-    Effect.map((files) => [...files].sort()),
+    // git lists a file with merge conflicts once per side.
+    Effect.map((files) => [...new Set(files)].sort()),
   )
+}
+
+// Ignore rules can miss it (a linked one, a nested one under `/node_modules`, or no rule at all), and a
+// fix there rewrites installed packages, through pnpm's hard links even those of its shared store.
+export function inNodeModules(file: string): boolean {
+  return /(?:^|\/)node_modules(?:\/|$)/.test(file)
 }
 
 /**
@@ -47,7 +53,9 @@ export function listChangedFiles(
     ],
     { concurrency: 'unbounded' },
   ).pipe(
-    Effect.map(([tracked, untracked]) => [...new Set([...tracked, ...untracked])].sort()),
+    Effect.map(([tracked, untracked]) =>
+      [...new Set([...tracked, ...untracked])].filter((file) => !inNodeModules(file)).sort(),
+    ),
     Effect.orElseSucceed(() => undefined),
   )
 }
@@ -60,12 +68,26 @@ export const resolvePaths = Effect.fn(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  // A backslash is a glob escape on POSIX, never a separator.
-  const relative = (pattern: string) =>
-    path.relative(cwd, path.resolve(cwd, pattern)).split(path.sep).join('/')
+  const realCwd = realpathSync(cwd)
+  const isCheckable = checkableFile(path, cwd, realCwd)
+
+  const relative = (pattern: string) => {
+    const resolved = path.resolve(cwd, pattern)
+    const lexical = slashedRelative(path, cwd, resolved)
+
+    if (!isOutside(path, lexical)) {
+      return lexical
+    }
+
+    // The current directory is a real path, while an absolute path may run through a linked folder.
+    const real = slashedRelative(path, realCwd, resolveFolders(path, resolved))
+
+    return isOutside(path, real) ? lexical : real
+  }
 
   const includes = patterns.filter((pattern) => !pattern.startsWith('!'))
   const matched = new Set<string>()
+  const named = new Set<string>()
   const unmatched: string[] = []
   let universe: ReadonlyArray<string> | undefined
 
@@ -73,7 +95,7 @@ export const resolvePaths = Effect.fn(function* (
     const target = relative(pattern)
 
     // oxlint and oxfmt reject a path containing "..".
-    if (target === '..' || target.startsWith('../') || path.isAbsolute(target)) {
+    if (isOutside(path, target)) {
       return yield* userError(
         `${pattern} is outside ${cwd}, run from a folder that contains it or pass one with --cwd`,
       )
@@ -87,6 +109,7 @@ export const resolvePaths = Effect.fn(function* (
 
     if (kind === 'File') {
       matched.add(target)
+      named.add(target)
       continue
     }
 
@@ -106,7 +129,7 @@ export const resolvePaths = Effect.fn(function* (
       matched.add(hit)
     }
 
-    if (hits.length === 0) {
+    if (!hits.some((hit) => isCheckable(hit))) {
       unmatched.push(pattern)
     }
   }
@@ -125,28 +148,79 @@ export const resolvePaths = Effect.fn(function* (
         return (file: string) => file === target || file.startsWith(`${target}/`)
       }
 
-      return glob(target)
+      const matches = glob(target)
+      const matchesInside = glob(`${target}/**`)
+
+      return (file: string) => matches(file) || matchesInside(file)
     })
 
   // One fiber per file costs far more than the check itself on a large project.
   const files = yield* Effect.sync(() =>
     [...matched].filter(
-      (file) => !excludes.some((excluded) => excluded(file)) && isFile(path.resolve(cwd, file)),
+      (file) =>
+        !excludes.some((excluded) => excluded(file)) && (named.has(file) || isCheckable(file)),
     ),
   )
 
   return { files: files.sort(), unmatched }
 })
 
+/** The given files the tools may get, the way a directory or glob keeps them. */
+export const checkableFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
+  const path = yield* Path.Path
+  const isCheckable = checkableFile(path, cwd, realpathSync(cwd))
+
+  return files.filter((file) => isCheckable(file))
+})
+
 const GLOB_CHARACTERS = /[*?[\]{}()]/
 
-// git lists a linked folder as one file, which the tools would check through the link.
-function isFile(file: string): boolean {
-  try {
-    return statSync(file).isFile()
-  } catch {
-    return false
+// git lists a linked folder as one file, and a fix through a link rewrites its target, so of the links
+// only those to a file inside `cwd` are kept.
+function checkableFile(path: Path.Path, cwd: string, realCwd: string): (file: string) => boolean {
+  return (file) => {
+    const absolute = path.resolve(cwd, file)
+
+    try {
+      const info = lstatSync(absolute)
+
+      if (!info.isSymbolicLink()) {
+        return info.isFile()
+      }
+
+      const target = realpathSync(absolute)
+
+      return statSync(target).isFile() && !isOutside(path, slashedRelative(path, realCwd, target))
+    } catch {
+      return false
+    }
   }
+}
+
+function isOutside(path: Path.Path, relative: string): boolean {
+  return relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)
+}
+
+function slashedRelative(path: Path.Path, from: string, to: string): string {
+  // A backslash is a glob escape on POSIX, never a separator.
+  return path.relative(from, to).split(path.sep).join('/')
+}
+
+/** `file` with every linked folder on its way resolved. A linked file keeps its own name. */
+function resolveFolders(path: Path.Path, file: string): string {
+  const rest: string[] = []
+  let folder = file
+
+  while (!isDirectory(folder)) {
+    rest.unshift(path.basename(folder))
+    folder = path.dirname(folder)
+  }
+
+  return path.join(realpathSync(folder), ...rest)
+}
+
+function isDirectory(file: string): boolean {
+  return statSync(file, { throwIfNoEntry: false })?.isDirectory() === true
 }
 
 /** Dot files match too, as they do for oxfmt and for a directory given as it is. */

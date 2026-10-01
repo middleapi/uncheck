@@ -1,5 +1,8 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import type { Project } from '../utils/project'
-import { LAYOUTS, PERMISSIONS_ENFORCED } from '../utils/project'
+import { LAYOUTS, PERMISSIONS_ENFORCED, temporaryDirectory } from '../utils/project'
 import { checkedFiles, listingProject } from './utils'
 
 describe.each(LAYOUTS)('uncheck with paths outside git in a $name', ({ create, app }) => {
@@ -52,16 +55,28 @@ describe.each(LAYOUTS)('uncheck with paths outside git in a $name', ({ create, a
     ])
   })
 
-  it('checks a file the walk skips when it is named', async () => {
-    const project = walkedProject('.env.ts', 'node_modules/dep/index.ts')
-    const named = [`${routes}/.env.ts`, `${routes}/node_modules/dep/index.ts`]
+  it('checks a file the walk skips or a link leaving the project when it is named', async () => {
+    const store = temporaryDirectory()
+    writeFileSync(join(store, 'vendor.ts'), '')
+    const project = walkedProject('.env.ts', 'node_modules/dep/index.ts').link(
+      `${routes}/vendor.ts`,
+      join(store, 'vendor.ts'),
+    )
+    const named = [
+      `${routes}/.env.ts`,
+      `${routes}/node_modules/dep/index.ts`,
+      `${routes}/vendor.ts`,
+    ]
 
     expect(await check(project, ...named)).toEqual(named)
   })
 
-  it('lists a linked file but never enters a linked folder or follows a broken link', async () => {
+  it('lists a linked file inside the project but never enters a linked folder or follows a broken link', async () => {
+    const store = temporaryDirectory()
+    writeFileSync(join(store, 'vendor.ts'), '')
     const project = walkedProject('home.ts', 'shared/util.ts')
       .link(`${routes}/alias.ts`, 'home.ts')
+      .link(`${routes}/vendor.ts`, join(store, 'vendor.ts'))
       .link(`${routes}/broken.ts`, 'missing.ts')
       .link(`${routes}/self.ts`, 'self.ts')
       .link(`${routes}/up`, '..')

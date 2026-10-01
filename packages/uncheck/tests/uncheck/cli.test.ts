@@ -19,7 +19,7 @@ function onlyOxlint(dir: string): string[] {
   return [
     `uncheck in ${dir}`,
     '○ sherif skipped, not selected by --only',
-    '▶ oxlint',
+    '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
     '✔ oxlint passed',
     '○ oxfmt skipped, not selected by --only',
     '○ tsc skipped, not selected by --only',

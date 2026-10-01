@@ -49,12 +49,14 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxfmt'])
 
-    expect(stdout).toContain('▶ oxfmt --check\noxfmt ran with --check\n')
+    expect(stdout).toContain(
+      '▶ oxfmt --check --no-error-on-unmatched-pattern\noxfmt ran with --check --no-error-on-unmatched-pattern\n',
+    )
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
@@ -94,9 +96,9 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
     expect(report(stdout)).toEqual([
       `uncheck in ${project.path(app, 'src')}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
@@ -119,13 +121,15 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       env: { NODE_OPTIONS: `--require ${project.path('.pnp.cjs')}` },
     })
 
-    expect(stdout).toContain('▶ oxlint\noxlint from the Yarn cache\n')
+    expect(stdout).toContain(
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\noxlint from the Yarn cache\n',
+    )
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not installed',
-      '▶ oxlint',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
@@ -147,7 +151,9 @@ describe('uncheck finding tools in a monorepo', () => {
 
     const inPackage = await project.uncheck(['--only=oxlint'], { cwd: 'packages/app' })
 
-    expect(inPackage.stdout).toContain('▶ oxlint\noxlint of packages/app\n')
+    expect(inPackage.stdout).toContain(
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\noxlint of packages/app\n',
+    )
     expect(inPackage.exitCode).toBe(0)
 
     const atRoot = await project.uncheck(['--only=oxlint'])

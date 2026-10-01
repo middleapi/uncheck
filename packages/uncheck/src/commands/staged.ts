@@ -4,7 +4,7 @@ import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
-import { existingFiles } from '../files'
+import { existingFiles, inNodeModules } from '../files'
 import { git, gitBytes, GitFailed, gitLocation, gitPaths } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
@@ -227,7 +227,9 @@ const rawDiff = (cwd: string, ...args: ReadonlyArray<string>) =>
 
 const stagedFiles = (cwd: string, ...against: ReadonlyArray<string>) =>
   Effect.map(rawDiff(cwd, '--cached', '--diff-filter=ACMT', ...against), (entries) =>
-    entries.filter((entry) => REGULAR_FILE_MODE.test(entry.toMode)).map((entry) => entry.file),
+    entries
+      .filter((entry) => REGULAR_FILE_MODE.test(entry.toMode) && !inNodeModules(entry.file))
+      .map((entry) => entry.file),
   )
 
 const partiallyStaged = Effect.fn(function* (

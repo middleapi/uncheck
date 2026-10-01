@@ -14,17 +14,13 @@ export const oxfmt: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not installed' }))
     }
 
-    const args = fix ? [] : ['--check']
+    // A folder with nothing oxfmt handles, or a given file it does not (a .txt file), is no failure.
+    const args = [...(fix ? [] : ['--check']), '--no-error-on-unmatched-pattern']
 
     if (files === undefined) {
       return [{ bin, args }]
     }
 
-    // Given files may include ones oxfmt does not handle (a .txt file), which is not a failure.
-    return argvBatches(files).map((batch) => ({
-      bin,
-      args: [...args, '--no-error-on-unmatched-pattern'],
-      files: batch,
-    }))
+    return argvBatches(files).map((batch) => ({ bin, args, files: batch }))
   }),
 }
