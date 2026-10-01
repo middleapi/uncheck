@@ -138,18 +138,14 @@ export function temporaryDirectory(): string {
   return mkdtempSync(join(ROOT, 'tmp-'))
 }
 
-/** The environment of every process the tests start, free of whatever the machine or a git hook set. */
-export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
-  // Under GitHub Actions, oxlint prints annotations in place of its report.
-  const inherited = Object.entries(process.env).filter(
-    ([key]) =>
-      !/^(?:GIT_\w+|CI|GITHUB_ACTIONS|FORCE_COLOR|NO_COLOR|NODE_DISABLE_COLORS|NODE_OPTIONS)$/.test(
-        key,
-      ),
-  )
+// Tools change their output on CI, under GitHub Actions and in the AI agents they detect, so nothing
+// else of the machine's environment reaches the processes the tests start.
+const INHERITED = new Set(['HOME', 'TMPDIR', 'NODE_V8_COVERAGE'])
 
+/** The environment of every process the tests start, the same on every machine. */
+export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
   return {
-    ...Object.fromEntries(inherited),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => INHERITED.has(key))),
     PATH: `${SHIMS}${delimiter}${process.env.PATH}`,
     // git translates the messages tests assert to the language of the machine.
     LC_ALL: 'C',

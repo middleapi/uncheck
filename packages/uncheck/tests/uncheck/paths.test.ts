@@ -15,7 +15,7 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', `${app}src/routes/`])
 
     expect(exitCode).toBe(1)
-    expect(stdout).toContain(`${app}src/routes/nested/legacy.ts:1:1: error eslint(no-var)`)
+    expect(stdout).toContain(`,-[${app}src/routes/nested/legacy.ts:1:1]`)
     expect(stdout).not.toContain('scripts/legacy.ts')
     expect(selectedReport(stdout)).toEqual([
       `uncheck in ${project.dir}`,
