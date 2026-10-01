@@ -65,8 +65,8 @@ export interface RunSettings extends CheckSelection {
   readonly allowUnmatched?: boolean
   /** The paths are file names from git: never patterns, and a run where none has anything to check passes. */
   readonly literal?: boolean
-  /** Fixes are staged again, so only the ones that stay within the given files apply. */
-  readonly staged?: boolean
+  /** Only the fixes that stay within the given files apply. */
+  readonly fixesWithinFiles?: boolean
   /** Paths the change deletes. Only for `literal` runs: without paths, any other run checks everything. */
   readonly deleted?: ReadonlyArray<string>
 }
@@ -144,7 +144,7 @@ export const checkPaths = Effect.fn(function* (
     deleted = [],
   } = settings
   const appliesFixes = (fixes: Check['fixes']) =>
-    settings.staged === true ? fixes === 'files' : fixes !== false
+    settings.fixesWithinFiles === true ? fixes === 'files' : fixes !== false
   const { cwd } = settings
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 

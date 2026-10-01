@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
-import { LAYOUTS, report, singleRepo, temporaryDirectory } from '../../utils/project'
+import { LAYOUTS, monorepo, report, singleRepo, temporaryDirectory } from '../../utils/project'
 import { CLAUDE_CODE_STOP, stopHook, UTILS_NOT_FOUND } from './utils'
 
 const UNFORMATTED = 'export const   legacy = 1\n'
@@ -247,5 +247,40 @@ describe('hooks run with deleted files in a single repo', () => {
       '✘ 1 of 3 checks failed: tsc',
     ])
     expect(stderr).toContain(UTILS_NOT_FOUND)
+  })
+})
+
+describe('hooks run with a changed package.json in a monorepo', () => {
+  it('only reports what sherif finds, since its fixes reach beyond the change', async () => {
+    const project = monorepo()
+      .update('packages/core/package.json', (manifest) => ({
+        ...manifest,
+        dependencies: { zod: '^3.0.0' },
+      }))
+      .commit('zod')
+      .update('packages/app/package.json', (manifest) => ({
+        ...manifest,
+        dependencies: { '@repo/core': 'workspace:*', 'zod': '^3.1.0' },
+      }))
+    const manifests = ['package.json', 'packages/core/package.json', 'packages/app/package.json']
+    const before = manifests.map((file) => project.read(file))
+
+    const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP)
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual([
+      `uncheck in ${project.dir}`,
+      '▶ sherif',
+      '✘ sherif failed',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern packages/app/package.json',
+      '✔ oxlint passed',
+      '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json',
+      '✔ oxfmt passed',
+      '○ tsc skipped, no tsconfig.json covers the given files',
+      '✘ 1 of 3 checks failed: sherif',
+    ])
+    expect(stderr).toContain('multiple-dependency-versions')
+    expect(manifests.map((file) => project.read(file))).toEqual(before)
   })
 })

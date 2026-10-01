@@ -103,7 +103,7 @@ export const staged = Command.make(
             cwd,
             fix,
             literal: true,
-            staged: true,
+            fixesWithinFiles: true,
             deleted,
           }).pipe(Effect.catchTag('CheckFailed', Effect.succeed))
 

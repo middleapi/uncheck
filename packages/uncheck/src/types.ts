@@ -34,7 +34,7 @@ export interface CheckInput {
 
 export interface Check {
   readonly name: CheckName
-  /** `workspace` fixes reach beyond the given files, so a commit, which stages only those, cannot take them. */
+  /** `workspace` fixes reach beyond the given files, so the hooks, which fix only a commit or an agent's change, leave them out. */
   readonly fixes: false | 'files' | 'workspace'
   readonly plan: (
     input: CheckInput,

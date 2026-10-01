@@ -7,6 +7,7 @@ import {
   COPILOT_STOP_IN_CLAUDE_FORMAT,
   CURSOR_STOP,
   TYPE_ERROR,
+  hookEnv,
   stopHook,
 } from './utils'
 
@@ -41,7 +42,11 @@ async function installHook(
       : (JSON.parse(project.read(`${app}.cursor/hooks.json`)) as CursorHooks).hooks.stop[0]!.command
 
   return (payload) =>
-    run(['sh', '-c', command], { cwd: project.path('docs'), input: JSON.stringify(payload) })
+    run(['sh', '-c', command], {
+      cwd: project.path('docs'),
+      env: hookEnv(),
+      input: JSON.stringify(payload),
+    })
 }
 
 function sendBackReason(stderr: string): string {
@@ -97,6 +102,45 @@ describe.each(LAYOUTS)(
       expect(project.read(`${app}src/index.ts`)).toBe('export const answer: string = "42";\n')
     })
 
+    it('blocks Claude Code once per turn, even after another hook continued it', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const continued = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(continued.exitCode).toBe(2)
+      expect(continued.stdout).toBe('')
+      expect(report(continued.stderr)).toEqual(failure(project))
+
+      const again = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(again.exitCode).toBe(0)
+      expect(JSON.parse(again.stdout)).toEqual({
+        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+      })
+      expect(report(again.stderr)).toEqual(failure(project))
+
+      const nextTurn = await stopHook(project, app, CLAUDE_CODE_STOP)
+
+      expect(nextTurn.exitCode).toBe(2)
+      expect(nextTurn.stdout).toBe('')
+      expect(report(nextTurn.stderr)).toEqual(failure(project))
+    })
+
+    it('takes a continued turn without a session id as one uncheck already blocked', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, app, {
+        hook_event_name: 'Stop',
+        stop_hook_active: true,
+      })
+
+      expect(exitCode).toBe(0)
+      expect(JSON.parse(stdout)).toEqual({
+        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+      })
+      expect(report(stderr)).toEqual(failure(project))
+    })
+
     it('sends Cursor back once with a follow-up message, through its hook run from outside the change', async () => {
       const project = create(DOCS)
       const stop = await installHook(project, app, 'cursor')
@@ -116,6 +160,18 @@ describe.each(LAYOUTS)(
       expect(again.exitCode).toBe(0)
       expect(again.stdout).toBe('')
       expect(report(again.stderr)).toEqual(failure(project))
+
+      const anotherConversation = await stop({
+        ...CURSOR_STOP,
+        conversation_id: 'other',
+        loop_count: 1,
+      })
+
+      expect(anotherConversation.exitCode).toBe(0)
+      expect(report(anotherConversation.stderr)).toEqual(failure(project))
+      expect(JSON.parse(anotherConversation.stdout)).toEqual({
+        followup_message: sendBackReason(anotherConversation.stderr),
+      })
     })
 
     it('blocks Copilot with a decision, whichever payload format it sends', async () => {

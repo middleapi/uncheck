@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import process from 'node:process'
 import { stripVTControlCharacters } from 'node:util'
 
@@ -16,7 +18,7 @@ export const run = Command.make(
     cwd: Flag.Directory('cwd', { mustExist: true }).pipe(
       Flag.optional,
       Flag.withDescription(
-        'Directory to check. Defaults to the top of the git repository around the current directory, or the current directory outside git',
+        "Directory to check. Defaults to the top of the git repository around the current directory, or around the agent's project (CLAUDE_PROJECT_DIR or CODEBUDDY_PROJECT_DIR) when the current directory is outside git or in a repository nested in the project's, and to the project itself outside git",
       ),
     ),
     dir: Flag.String('dir').pipe(
@@ -25,7 +27,11 @@ export const run = Command.make(
         'Directory to check relative to the top of the git repository, whichever directory the agent moved to. `hooks install` writes it for a project below the top',
       ),
     ),
-    fix: fixFlag,
+    fix: fixFlag.pipe(
+      Flag.withDescription(
+        'Apply lint fixes (oxlint --fix) and rewrite formatting (oxfmt) in the changed files. sherif only reports here: run `uncheck --fix` for its fixes',
+      ),
+    ),
     ...selectionFlags,
   },
   Effect.fn(function* ({ cwd: given, dir, ...settings }) {
@@ -50,16 +56,44 @@ export const run = Command.make(
     }
 
     const start = Option.getOrElse(given, () => process.cwd())
-    const top = yield* git(start, ['rev-parse', '--show-toplevel']).pipe(
-      Effect.orElseSucceed(() => start),
-    )
+    const projectDir = Option.isSome(given)
+      ? undefined
+      : (process.env.CLAUDE_PROJECT_DIR ?? process.env.CODEBUDDY_PROJECT_DIR)
+    const top = yield* topToCheck(start, projectDir)
     const cwd = Option.isSome(dir) ? path.join(top, dir.value) : Option.getOrElse(given, () => top)
 
     // Checking a folder that is gone would send the agent back to fix a configuration it cannot see.
-    if (Option.isSome(dir) && !(yield* fs.exists(cwd))) {
-      return yield* userError(
-        `--dir=${dir.value} names nothing in ${top}, run \`uncheck hooks install\` again from the project`,
+    if (Option.isSome(dir)) {
+      const isFolder = yield* fs.stat(cwd).pipe(
+        Effect.map((info) => info.type === 'Directory'),
+        Effect.orElseSucceed(() => false),
       )
+
+      if (!isFolder) {
+        return yield* userError(
+          `--dir=${dir.value} names no folder in ${top}, run \`uncheck hooks install\` again from the project`,
+        )
+      }
+    }
+
+    // Agents also set these when another Stop hook (Claude Code's /goal is one) continued the turn, so
+    // only the marker uncheck leaves when it blocks tells that it already sent the agent back.
+    const continuing =
+      payload.stop_hook_active === true ||
+      (typeof payload.loop_count === 'number' && payload.loop_count > 0)
+    const sessionId = payload.session_id ?? payload.conversation_id
+    const marker =
+      typeof sessionId === 'string'
+        ? path.join(
+            tmpdir(),
+            `uncheck-stop-${createHash('sha256')
+              .update(JSON.stringify([sessionId, path.resolve(cwd)]))
+              .digest('hex')}`,
+          )
+        : undefined
+
+    if (marker !== undefined && !continuing) {
+      yield* Effect.ignore(fs.remove(marker, { force: true }))
     }
 
     const changed = yield* listChangedFiles(cwd)
@@ -72,6 +106,7 @@ export const run = Command.make(
       ...settings,
       cwd,
       literal: true,
+      fixesWithinFiles: true,
       deleted: changed?.deleted,
     }).pipe(
       Effect.map(() => false),
@@ -92,11 +127,30 @@ export const run = Command.make(
     // already continuing, and show the user nothing but a `systemMessage` from a hook that exits 0;
     // Cursor continues on a follow-up message and counts them in `loop_count`; Copilot continues on a
     // block decision, also in the Claude format, where it takes exit code 2 for a mere warning.
-    const alreadyContinued =
-      payload.stop_hook_active === true ||
-      (typeof payload.loop_count === 'number' && payload.loop_count > 0)
+    const reason = `uncheck found problems, fix them before finishing:\n\n${report}`
+    const sendBack =
+      typeof (payload.stopReason ?? payload.stop_reason) === 'string'
+        ? Console.log(JSON.stringify({ decision: 'block', reason }))
+        : payload.hook_event_name === 'Stop'
+          ? Effect.fail(new StopBlocked())
+          : payload.hook_event_name === 'stop'
+            ? Console.log(JSON.stringify({ followup_message: reason }))
+            : undefined
 
-    if (alreadyContinued) {
+    if (sendBack === undefined) {
+      return
+    }
+
+    // A marker that cannot be written counts as one that exists, so a broken temporary folder never
+    // sends the agent back on every stop.
+    const firstBlock =
+      marker !== undefined &&
+      (yield* fs.writeFileString(marker, '', { flag: 'wx' }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      ))
+
+    if (continuing && !firstBlock) {
       if (payload.hook_event_name === 'Stop') {
         const summary = report
           .split('\n')
@@ -111,22 +165,74 @@ export const run = Command.make(
       return
     }
 
-    const reason = `uncheck found problems, fix them before finishing:\n\n${report}`
-
-    if (typeof (payload.stopReason ?? payload.stop_reason) === 'string') {
-      return yield* Console.log(JSON.stringify({ decision: 'block', reason }))
-    }
-
-    if (payload.hook_event_name === 'Stop') {
-      return yield* Effect.fail(new StopBlocked())
-    }
-
-    if (payload.hook_event_name === 'stop') {
-      return yield* Console.log(JSON.stringify({ followup_message: reason }))
-    }
+    return yield* sendBack
   }),
 ).pipe(
   Command.withDescription(
     'Run as an agent stop hook: check the files changed since the last commit, report on stderr and send the agent back to fix what remains',
   ),
 )
+
+interface Repository {
+  readonly top: string
+  readonly commonDir: string
+}
+
+const repositoryAround = Effect.fn(
+  function* (folder: string) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+
+    const [top, commonDir] = yield* Effect.all(
+      [
+        git(folder, ['rev-parse', '--show-toplevel']),
+        git(folder, ['rev-parse', '--git-common-dir']),
+      ],
+      { concurrency: 'unbounded' },
+    )
+
+    // git prints the common dir relative to `folder`, which may run through a link.
+    const repository: Repository = {
+      top,
+      commonDir: yield* fs.realPath(path.resolve(folder, commonDir)),
+    }
+
+    return repository
+  },
+  Effect.orElseSucceed(() => undefined),
+)
+
+const topToCheck = Effect.fn(function* (start: string, projectDir: string | undefined) {
+  const path = yield* Path.Path
+
+  const [here, project] = yield* Effect.all(
+    [
+      repositoryAround(start),
+      projectDir === undefined ? Effect.succeed(undefined) : repositoryAround(projectDir),
+    ],
+    { concurrency: 'unbounded' },
+  )
+
+  if (project === undefined) {
+    return here?.top ?? projectDir ?? start
+  }
+
+  if (here === undefined) {
+    return project.top
+  }
+
+  // Claude Code keeps the project folder on the main checkout while the agent works in a linked
+  // worktree, which shares its common dir: only a submodule or a nested clone, with a common dir of
+  // its own, gives way to the project's repository above it.
+  let outer: Repository | undefined = here
+
+  while (
+    outer !== undefined &&
+    outer.commonDir !== project.commonDir &&
+    outer.top !== path.dirname(outer.top)
+  ) {
+    outer = yield* repositoryAround(path.dirname(outer.top))
+  }
+
+  return outer?.commonDir === project.commonDir ? outer.top : here.top
+})

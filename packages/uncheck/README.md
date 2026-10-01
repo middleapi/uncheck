@@ -138,9 +138,12 @@ npx uncheck hooks install                    # or pick them from a list
 | Cursor         | `cursor`    | `.cursor/hooks.json`         |
 | GitHub Copilot | `copilot`   | `.github/hooks/uncheck.json` |
 
-Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what it can, and when problems remain, sends the agent back to fix them. That happens at most once per turn, so an agent that cannot fix something is never stuck in a loop.
+Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back at most once per turn, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
 
+- **sherif only reports** here, since its fixes reach beyond the agent's change: they move versions in other packages and run your install. Run `npx uncheck --fix` for them.
 - **Too slow?** Leave the typecheck to CI: `npx uncheck hooks install claude --only=oxlint --only=oxfmt`. Install again to change the flags.
+- **Outside git** and before the first commit, the hook checks the whole folder, and oxlint also fixes the files that links in it point to.
+- **Installed from a package?** The hook finds uncheck only where your package manager can run it, so add uncheck to the workspace root too when the agent may work outside that package.
 - **Your config is kept.** Other hooks and settings stay, and installing again only updates uncheck's entry. Comments in the file are lost when it is rewritten.
 - **Avoid double runs.** Cursor and Copilot CLI also run the hooks in `.claude/settings.json`, so add `cursor` or `copilot` next to `claude` only where they do not read that file.
 - **Copilot** reads `.github/hooks` only at the top of the repository, so install `copilot` from there.

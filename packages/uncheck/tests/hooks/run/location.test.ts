@@ -2,13 +2,15 @@ import {
   CLI,
   LAYOUTS,
   cliError,
+  git,
+  linkedWorktree,
   monorepo,
   report,
   run,
   singleRepo,
   temporaryDirectory,
 } from '../../utils/project'
-import { CLAUDE_CODE_STOP, stopHook } from './utils'
+import { CLAUDE_CODE_STOP, TYPE_ERROR, dirFlags, hookEnv, stopHook } from './utils'
 
 const UNFORMATTED = 'export const   extra = 1\n'
 const FORMATTED = 'export const extra = 1;\n'
@@ -18,7 +20,19 @@ const ONLY_OXFMT = [
   '○ oxlint skipped, not selected by --only',
 ]
 
-describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app }) => {
+function oxfmtFailed(dir: string): string[] {
+  return [
+    `uncheck in ${dir}`,
+    ...ONLY_OXFMT,
+    '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
+    '✘ oxfmt failed',
+    '○ tsc skipped, not selected by --only',
+    '✘ 1 of 1 checks failed: oxfmt',
+    '  rerun with `--fix` to apply oxfmt fixes',
+  ]
+}
+
+describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app, tsc }) => {
   it('checks the directory given with --cwd, wherever it runs', async () => {
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
@@ -40,22 +54,130 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app 
     expect(project.read(`${app}src/extra.ts`)).toBe(FORMATTED)
   })
 
-  it('reports a --dir that names nothing instead of sending the agent back', async () => {
+  it.each(['gone', 'package.json'])(
+    'reports a --dir naming %s, which is no folder, instead of sending the agent back',
+    async (name) => {
+      const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP, {
+        args: ['--fix', `--dir=${app}${name}`],
+        cwd: `${app}src`,
+      })
+
+      expect(exitCode).toBe(1)
+      expect(stdout).toBe('')
+      expect(stderr).toBe(
+        cliError(
+          `--dir=${app}${name} names no folder in ${project.dir}, run \`uncheck hooks install\` again from the project`,
+        ),
+      )
+      expect(project.read(`${app}src/extra.ts`)).toBe(UNFORMATTED)
+    },
+  )
+
+  it.each(['CLAUDE_PROJECT_DIR', 'CODEBUDDY_PROJECT_DIR'])(
+    'checks the project in %s outside git, from the folder the agent moved to',
+    async (variable) => {
+      const project = create({ [`${app}src/index.ts`]: TYPE_ERROR }, { git: 'none' })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP, {
+        args: ['--fix', '--only=tsc'],
+        cwd: `${app}src`,
+        env: { [variable]: project.path(app) },
+      })
+
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
+        '○ sherif skipped, not selected by --only',
+        '○ oxlint skipped, not selected by --only',
+        '○ oxfmt skipped, not selected by --only',
+        tsc,
+        '✘ tsc failed',
+        '✘ 1 of 1 checks failed: tsc',
+      ])
+    },
+  )
+
+  it("checks the agent's project from a folder outside git", async () => {
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP, {
-      args: ['--fix', `--dir=${app}gone`],
-      cwd: `${app}src`,
+    const { exitCode, stdout, stderr } = await run(
+      [...CLI, 'hooks', 'run', '--only=oxfmt', ...dirFlags(app)],
+      {
+        cwd: temporaryDirectory(),
+        env: hookEnv({ CLAUDE_PROJECT_DIR: project.path(app) }),
+        input: JSON.stringify(CLAUDE_CODE_STOP),
+      },
+    )
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
+  })
+
+  it("checks the agent's project from a submodule the agent moved into", async () => {
+    const library = temporaryDirectory()
+
+    git(library, ['init', '--quiet'])
+    git(library, ['commit', '--quiet', '--allow-empty', '--message=library'])
+
+    const project = create()
+
+    project.git(
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      '--quiet',
+      library,
+      'vendor/lib',
+    )
+    project.commit('submodule').write({ [`${app}src/extra.ts`]: UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: 'vendor/lib',
+      env: { CLAUDE_PROJECT_DIR: project.path(app) },
     })
 
-    expect(exitCode).toBe(1)
+    expect(exitCode).toBe(2)
     expect(stdout).toBe('')
-    expect(stderr).toBe(
-      cliError(
-        `--dir=${app}gone names nothing in ${project.dir}, run \`uncheck hooks install\` again from the project`,
-      ),
-    )
-    expect(project.read(`${app}src/extra.ts`)).toBe(UNFORMATTED)
+    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
+  })
+
+  it('checks the linked worktree the agent works in, although its project folder is the main checkout', async () => {
+    const project = create()
+    const worktree = linkedWorktree(project, app).write({ [`${app}src/extra.ts`]: UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(worktree, app, CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: `${app}src`,
+      env: { CLAUDE_PROJECT_DIR: project.path(app) },
+    })
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(worktree.path(app, '.')))
+  })
+
+  it('checks the repository the agent moved to when it is not part of the project', async () => {
+    const elsewhere = temporaryDirectory()
+
+    git(elsewhere, ['init', '--quiet'])
+
+    const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: `${app}src`,
+      env: { CLAUDE_PROJECT_DIR: elsewhere },
+    })
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
   })
 })
 
