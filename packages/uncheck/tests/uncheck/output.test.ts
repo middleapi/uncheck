@@ -18,6 +18,8 @@ const PRINT_FORCE_COLOR = "console.log('the tool sees FORCE_COLOR=' + process.en
 
 const STANDALONE_PROJECTS = [1, 2, 3, 4, 5].map((index) => `project-${index}`)
 
+const HOLD_AT_CAP_MS = 300
+
 function countConcurrentRuns(cap: number, total: number): string {
   return `const { mkdirSync, readdirSync, renameSync, writeFileSync } = require('node:fs');
 
@@ -26,6 +28,7 @@ const marker = config.replaceAll('/', '_');
 const count = (dir) => readdirSync(dir).length;
 const giveUp = Date.now() + 10_000;
 let most = 0;
+let reachedCap;
 
 console.log(\`\${config} started\`);
 mkdirSync('running', { recursive: true });
@@ -36,7 +39,13 @@ writeFileSync(\`running/\${marker}\`, '');
   const running = count('running');
   most = Math.max(most, running);
 
-  if (running === ${cap} || running + count('finished') === ${total}) {
+  if (running >= ${cap}) {
+    reachedCap ??= Date.now();
+  }
+
+  const heldAtCap = reachedCap !== undefined && Date.now() - reachedCap >= ${HOLD_AT_CAP_MS};
+
+  if (heldAtCap || running + count('finished') === ${total}) {
     console.log(\`\${config} saw \${most} running\`);
     renameSync(\`running/\${marker}\`, \`finished/\${marker}\`);
   } else if (Date.now() > giveUp) {
