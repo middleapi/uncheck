@@ -1,7 +1,14 @@
-import { symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
-import { cliError, LAYOUTS, monorepo, report, temporaryDirectory } from '../utils/project'
+import {
+  cliError,
+  LAYOUTS,
+  monorepo,
+  PERMISSIONS_ENFORCED,
+  report,
+  temporaryDirectory,
+} from '../utils/project'
 import { CLEAN_CODE, CODE_WITH_VAR, selectedReport } from './utils'
 
 describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, app }) => {
@@ -157,11 +164,14 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
       [`${app}src/routes/home.ts`]: CLEAN_CODE,
       [`${app}src/legacy.ts`]: CODE_WITH_VAR,
     })
-    const outside = join(temporaryDirectory(), 'shared.ts')
+    const elsewhere = temporaryDirectory()
+    const outside = join(elsewhere, 'shared.ts')
+    const looping = join(elsewhere, 'loop')
     writeFileSync(outside, CLEAN_CODE)
+    symlinkSync(looping, looping)
     const routes = `${app}src/routes`
 
-    for (const pattern of ['../legacy.ts', '..', '../*.ts', outside]) {
+    for (const pattern of ['../legacy.ts', '..', '../*.ts', outside, join(looping, 'shared.ts')]) {
       const fromInside = await project.uncheck(['--only=oxlint', 'home.ts', pattern], {
         cwd: routes,
       })
@@ -183,6 +193,37 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
       }
     }
   })
+
+  it.runIf(PERMISSIONS_ENFORCED)(
+    'fails naming, and ignores leaving out, a file in a folder outside it cannot look into',
+    async () => {
+      const routes = `${app}src/routes`
+      const project = create({ [`${routes}/home.ts`]: CLEAN_CODE })
+      const locked = temporaryDirectory()
+      const hidden = join(locked, 'inner/shared.ts')
+      mkdirSync(dirname(hidden))
+      writeFileSync(hidden, CLEAN_CODE)
+      chmodSync(locked, 0)
+
+      const named = await project.uncheck(['--only=oxlint', hidden])
+      const excluded = await project.uncheck(['--only=oxlint', routes, `!${hidden}`])
+
+      expect(named.exitCode).toBe(1)
+      expect(named.stderr).toBe(
+        cliError(
+          `${hidden} is outside ${project.dir}, run from a folder that contains it or pass one with --cwd`,
+        ),
+      )
+      expect(excluded.stderr).toBe('')
+      expect(excluded.exitCode).toBe(0)
+      expect(selectedReport(excluded.stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        `▶ oxlint --no-error-on-unmatched-pattern ${routes}/home.ts`,
+        '✔ oxlint passed',
+        '✔ all checks passed (oxlint)',
+      ])
+    },
+  )
 })
 
 describe('uncheck selecting files by path in a monorepo package', () => {

@@ -80,9 +80,14 @@ export const resolvePaths = Effect.fn(function* (
     }
 
     // The current directory is a real path, while an absolute path may run through a linked folder.
-    const real = slashedRelative(path, realCwd, resolveFolders(path, resolved))
+    // `throwIfNoEntry` spares only missing paths: a locked folder or a looping link still throws.
+    try {
+      const real = slashedRelative(path, realCwd, resolveFolders(path, resolved))
 
-    return isOutside(path, real) ? lexical : real
+      return isOutside(path, real) ? lexical : real
+    } catch {
+      return lexical
+    }
   }
 
   const includes = patterns.filter((pattern) => !pattern.startsWith('!'))
