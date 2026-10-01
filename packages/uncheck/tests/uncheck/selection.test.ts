@@ -163,6 +163,35 @@ describe('uncheck check selection', () => {
   })
 
   it.each([
+    ['src/index.ts', 'no tsconfig.json found'],
+    ['README.md', 'no tsconfig.json covers the given files'],
+  ])(
+    'fails on %s in a project that uses none of the tools, even when unmatched patterns are allowed',
+    async (file, tscReason) => {
+      const project = bareProject(
+        {
+          'package.json': { name: 'bare', private: true },
+          'README.md': '# Bare\n',
+          'src/index.ts': 'export const answer = 42;\n',
+        },
+        { tools: [] },
+      )
+
+      const { exitCode, stdout } = await project.uncheck(['--no-error-on-unmatched-pattern', file])
+
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        '○ sherif skipped, not installed',
+        '○ oxlint skipped, not installed',
+        '○ oxfmt skipped, not installed',
+        `○ tsc skipped, ${tscReason}`,
+        `✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc ${tscReason}`,
+      ])
+      expect(exitCode).toBe(1)
+    },
+  )
+
+  it.each([
     {
       contradiction: 'a required check it skips',
       flags: ['--require=tsc', '--skip=tsc'],

@@ -1,4 +1,11 @@
-import { cliError, LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import {
+  cliError,
+  LAYOUTS,
+  monorepo,
+  project as bareProject,
+  report,
+  singleRepo,
+} from '../utils/project'
 import { folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
@@ -10,6 +17,22 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
     const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
 
     expect(stderr).toBe(cliError('`uncheck staged` needs a git repository'))
+    expect(stdout).toBe('')
+    expect(exitCode).toBe(1)
+  })
+
+  it('shows why git refuses the repository', async () => {
+    const project = create()
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'], {
+      cwd: folder,
+      env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+    })
+
+    expect(project.normalize(stderr)).toContain(
+      cliError("fatal: detected dubious ownership in repository at '<project>'").trimEnd(),
+    )
+    expect(stderr).toContain('safe.directory')
     expect(stdout).toBe('')
     expect(exitCode).toBe(1)
   })
@@ -158,6 +181,28 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '✔ staged the fixes to [4 files]',
     ])
     expect(inIndex(project, `${app}src/d.ts`)).toBe('export const d = 1;\n')
+  })
+})
+
+describe('uncheck staged without tools', () => {
+  it('fails when no check can run on the staged files', async () => {
+    const project = bareProject(
+      { 'package.json': { name: 'bare', private: true } },
+      { tools: [] },
+    ).stage({ 'src/index.ts': 'export const answer = 42;\n' })
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'])
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(1)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      '○ sherif skipped, not installed',
+      '○ oxlint skipped, not installed',
+      '○ oxfmt skipped, not installed',
+      '○ tsc skipped, no tsconfig.json found',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+    ])
   })
 })
 

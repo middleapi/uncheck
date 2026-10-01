@@ -6,6 +6,8 @@ import type { CheckOutcome } from './types'
 
 export class NothingToCheck extends Data.TaggedError('NothingToCheck')<{
   readonly reason: string
+  /** Lets a run on given files pass, so never for a check that is not set up. */
+  readonly unrelated?: boolean
 }> {}
 
 export class CannotCheck extends Data.TaggedError('CannotCheck')<{

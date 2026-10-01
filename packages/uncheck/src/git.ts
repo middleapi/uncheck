@@ -80,6 +80,34 @@ export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
   return Effect.map(git(cwd, args), (output) => output.split('\0').filter((entry) => entry !== ''))
 }
 
+export function rawDiff(cwd: string, ...args: ReadonlyArray<string>) {
+  return Effect.map(
+    git(cwd, [
+      'diff',
+      '--raw',
+      '--no-renames',
+      '--ignore-submodules=all',
+      '--relative',
+      '-z',
+      ...args,
+    ]),
+    (output) => {
+      const fields = output.split('\0')
+
+      return Array.from({ length: Math.floor(fields.length / 2) }, (_, index) => {
+        const [fromMode, toMode, , , status] = fields[index * 2]!.slice(1).split(' ')
+
+        return {
+          file: fields[index * 2 + 1]!,
+          status: status!,
+          fromMode: fromMode!,
+          toMode: toMode!,
+        }
+      })
+    },
+  )
+}
+
 /**
  * The folder of `cwd` below the top of the working tree, `''` or ending in `/`, and where git keeps
  * each of `names`. Fails outside a working tree.

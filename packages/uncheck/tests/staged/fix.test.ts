@@ -163,7 +163,11 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
     expect(nothing.exitCode).toBe(0)
     expect(report(nothing.stdout)).toEqual([
       `uncheck staged in ${project.path(folder)}`,
-      '○ nothing to check, no staged files',
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '○ oxfmt skipped, only deleted files',
+      '○ tsc skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt only deleted files, tsc not selected by --only',
     ])
 
     project.write({ [`${app}src/link.ts`]: null })

@@ -9,6 +9,9 @@ export function folderOf(app: string): string {
   return app.replace(/\/$/, '') || '.'
 }
 
+export const UTILS_NOT_FOUND =
+  "src/index.ts(1,24): error TS2307: Cannot find module './utils' or its corresponding type declarations."
+
 export const LEFTOVER_ERROR =
   'An earlier run left the unstaged versions of your files in <project>/.git/uncheck-unstaged, at their paths from the top of the repository. Unless another commit is running, copy back what your files are missing, delete the folder, then commit again.'
 

@@ -5,7 +5,7 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { existingFiles, inNodeModules } from '../files'
-import { git, gitBytes, GitFailed, gitLocation, gitPaths } from '../git'
+import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
 import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
@@ -39,42 +39,42 @@ export const staged = Command.make(
 
       const cwd = path.resolve(directory)
 
-      // Only regular files: tools follow a staged symlink to a file the commit does not hold.
-      const [listed, merging] = yield* Effect.all(
-        [
-          stagedFiles(cwd).pipe(
-            Effect.catchTag('GitFailed', () =>
-              userError('`uncheck staged` needs a git repository'),
-            ),
+      const {
+        prefix,
+        paths: [folder, indexLock],
+      } = yield* gitLocation(cwd, ['uncheck-unstaged', 'index.lock']).pipe(
+        Effect.catchTag('GitFailed', ({ stderr }) =>
+          // The setting git names is never translated, unlike the rest of its message.
+          userError(
+            stderr.includes('safe.directory') ? stderr : '`uncheck staged` needs a git repository',
           ),
-          mergeInProgress(cwd),
-        ],
+        ),
+      )
+
+      // Only regular files: tools follow a staged symlink to a file the commit does not hold.
+      const [listed, merging, unstaged] = yield* Effect.all(
+        [stagedFiles(cwd), mergeInProgress(cwd), rawDiff(cwd)],
         { concurrency: 'unbounded' },
       )
       // Fixing what a merge takes from the other side would commit changes neither side made.
-      const notTheirs = merging ? new Set(yield* stagedFiles(cwd, 'MERGE_HEAD')) : undefined
-      const files = notTheirs === undefined ? listed : listed.filter((file) => notTheirs.has(file))
+      const theirs = merging ? yield* stagedFiles(cwd, 'MERGE_HEAD', '--') : undefined
+      const notTheirs = theirs && new Set([...theirs.files, ...theirs.deleted])
+      const ours = (paths: ReadonlyArray<string>) =>
+        notTheirs === undefined ? paths : paths.filter((file) => notTheirs.has(file))
+      const files = ours(listed.files)
+      const deleted = ours(listed.deleted)
 
       yield* Console.log(dim(`uncheck staged in ${cwd}`))
 
-      if (files.length === 0) {
+      if (files.length === 0 && deleted.length === 0) {
         const reason =
-          listed.length > 0
+          listed.files.length > 0 || listed.deleted.length > 0
             ? 'every staged file comes from the branch being merged in'
             : 'no staged files'
 
         return yield* Console.log(`${dim('○')} nothing to check, ${reason}`)
       }
 
-      const [
-        {
-          prefix,
-          paths: [folder, indexLock],
-        },
-        unstaged,
-      ] = yield* Effect.all([gitLocation(cwd, ['uncheck-unstaged', 'index.lock']), rawDiff(cwd)], {
-        concurrency: 'unbounded',
-      })
       const saved = path.resolve(cwd, folder!)
       const aside = { cwd, saved, prefix }
 
@@ -104,6 +104,7 @@ export const staged = Command.make(
             fix,
             literal: true,
             staged: true,
+            deleted,
           }).pipe(Effect.catchTag('CheckFailed', Effect.succeed))
 
           if (!fix) {
@@ -203,34 +204,19 @@ const leftover = (saved: string) =>
 
 const REGULAR_FILE_MODE = /^100(?:644|755)$/
 
-const rawDiff = (cwd: string, ...args: ReadonlyArray<string>) =>
-  Effect.map(
-    git(cwd, [
-      'diff',
-      '--raw',
-      '--no-renames',
-      '--ignore-submodules=all',
-      '--relative',
-      '-z',
-      ...args,
-    ]),
-    (output) => {
-      const fields = output.split('\0')
-
-      return Array.from({ length: Math.floor(fields.length / 2) }, (_, index) => {
-        const [fromMode, toMode] = fields[index * 2]!.slice(1).split(' ')
-
-        return { file: fields[index * 2 + 1]!, fromMode: fromMode!, toMode: toMode! }
-      })
-    },
-  )
-
 const stagedFiles = (cwd: string, ...against: ReadonlyArray<string>) =>
-  Effect.map(rawDiff(cwd, '--cached', '--diff-filter=ACMT', ...against), (entries) =>
-    entries
-      .filter((entry) => REGULAR_FILE_MODE.test(entry.toMode) && !inNodeModules(entry.file))
-      .map((entry) => entry.file),
-  )
+  Effect.map(rawDiff(cwd, '--cached', '--diff-filter=ACMTD', ...against), (entries) => {
+    const kept = entries.filter((entry) => !inNodeModules(entry.file))
+
+    return {
+      files: kept
+        .filter((entry) => entry.status !== 'D' && REGULAR_FILE_MODE.test(entry.toMode))
+        .map((entry) => entry.file),
+      deleted: kept
+        .filter((entry) => entry.status === 'D' && REGULAR_FILE_MODE.test(entry.fromMode))
+        .map((entry) => entry.file),
+    }
+  })
 
 const partiallyStaged = Effect.fn(function* (
   unstaged: Effect.Success<ReturnType<typeof rawDiff>>,

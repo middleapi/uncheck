@@ -5,7 +5,7 @@ import type { ChildProcessSpawner } from 'effect/unstable/process'
 import { Minimatch } from 'minimatch'
 
 import { userError } from './errors'
-import { gitPaths } from './git'
+import { gitPaths, rawDiff } from './git'
 
 export type ProjectFiles = Effect.Effect<
   ReadonlyArray<string>,
@@ -34,28 +34,39 @@ export function inNodeModules(file: string): boolean {
   return /(?:^|\/)node_modules(?:\/|$)/.test(file)
 }
 
+export interface ChangedFiles {
+  readonly files: ReadonlyArray<string>
+  readonly deleted: ReadonlyArray<string>
+}
+
 /**
  * The files changed since the last commit, relative to `cwd`: modified or staged tracked files plus
- * untracked ones, ignored files excluded. `undefined` outside a git repository or before the first
- * commit, which callers treat as "everything under `cwd`".
+ * untracked ones, ignored files excluded, and apart from them the deleted ones, the old path of a
+ * rename included. `undefined` outside a git repository or before the first commit, which callers
+ * treat as "everything under `cwd`".
  */
 export function listChangedFiles(
   cwd: string,
-): Effect.Effect<
-  ReadonlyArray<string> | undefined,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> {
+): Effect.Effect<ChangedFiles | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.all(
     [
-      gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', 'HEAD']),
+      // Without `--`, a file named HEAD makes the revision ambiguous and git fails.
+      rawDiff(cwd, 'HEAD', '--'),
       gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
     ],
     { concurrency: 'unbounded' },
   ).pipe(
-    Effect.map(([tracked, untracked]) =>
-      [...new Set([...tracked, ...untracked])].filter((file) => !inNodeModules(file)).sort(),
-    ),
+    Effect.map(([tracked, untracked]) => {
+      const changed = tracked.filter((entry) => entry.status !== 'D').map((entry) => entry.file)
+      const deleted = tracked.filter((entry) => entry.status === 'D').map((entry) => entry.file)
+
+      return {
+        files: [...new Set([...changed, ...untracked])]
+          .filter((file) => !inNodeModules(file))
+          .sort(),
+        deleted: deleted.filter((file) => !inNodeModules(file)),
+      }
+    }),
     Effect.orElseSucceed(() => undefined),
   )
 }

@@ -34,6 +34,27 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
     expect(inIndex(project, `${app}src/theirs.ts`)).toBe('export const   theirs = 1\n')
   })
 
+  it('leaves out what the branch being merged in deletes, even beside a file named MERGE_HEAD', async () => {
+    const project = commitOnSide(
+      create({
+        [`${app}MERGE_HEAD`]: 'not a revision\n',
+        [`${app}src/gone.ts`]: 'export const gone = 1;\n',
+      }),
+      { [`${app}src/gone.ts`]: null },
+    )
+
+    project.git('merge', '--quiet', '--no-commit', '--no-ff', 'side')
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ nothing to check, every staged file comes from the branch being merged in',
+    ])
+  })
+
   it('never takes a merge whose fixes bring back the tree of HEAD for an empty commit', async () => {
     const project = commitOnSide(create({ [other]: 'export const other = 2;\n' }), {
       [other]: 'export const other = 3;\n',

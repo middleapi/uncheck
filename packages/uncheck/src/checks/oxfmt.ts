@@ -14,6 +14,13 @@ export const oxfmt: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not installed' }))
     }
 
+    // An empty list makes no batch, so the check would pass without running.
+    if (files?.length === 0) {
+      return yield* Effect.fail(
+        new NothingToCheck({ reason: 'only deleted files', unrelated: true }),
+      )
+    }
+
     // A folder with nothing oxfmt handles, or a given file it does not (a .txt file), is no failure.
     const args = [...(fix ? [] : ['--check']), '--no-error-on-unmatched-pattern']
 

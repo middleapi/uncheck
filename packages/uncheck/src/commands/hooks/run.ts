@@ -64,14 +64,15 @@ export const run = Command.make(
 
     const changed = yield* listChangedFiles(cwd)
 
-    if (changed?.length === 0) {
+    if (changed !== undefined && changed.files.length === 0 && changed.deleted.length === 0) {
       return
     }
 
-    const [failed, lines] = yield* runChecks(changed ?? [], {
+    const [failed, lines] = yield* runChecks(changed?.files ?? [], {
       ...settings,
       cwd,
       literal: true,
+      deleted: changed?.deleted,
     }).pipe(
       Effect.map(() => false),
       Effect.catchTag('CheckFailed', () => Effect.succeed(true)),

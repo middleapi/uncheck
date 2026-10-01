@@ -5,6 +5,7 @@ import { parse as parseJsonc } from 'jsonc-parser'
 
 import { CannotCheck, NothingToCheck } from '../errors'
 import { ancestors, readJson } from '../files'
+import type { Bin } from '../tool'
 import { resolveBin } from '../tool'
 import type { Check } from '../types'
 
@@ -15,21 +16,30 @@ import type { Check } from '../types'
 // oxlint-disable-next-line no-template-curly-in-string
 const CONFIG_DIR = '${configDir}'
 
-const NOT_COVERED = 'no tsconfig.json covers the given files'
+function notCovered(typescript: Bin | undefined): NothingToCheck {
+  return new NothingToCheck({
+    reason: 'no tsconfig.json covers the given files',
+    unrelated: typescript !== undefined,
+  })
+}
 
 export const tsc: Check = {
   name: 'tsc',
   fixes: false,
-  plan: Effect.fn(function* ({ cwd, files, projectFiles }) {
+  plan: Effect.fn(function* ({ cwd, files, deleted, projectFiles }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
-    const targets = files
-      ?.map((file) => path.resolve(cwd, file))
-      .filter((file) => CHECKABLE_EXTENSIONS.has(posix.extname(file)))
+    // Deleted files are among the targets, so selecting a project must never need one on disk.
+    const targets =
+      files === undefined
+        ? undefined
+        : [...files, ...deleted]
+            .map((file) => path.resolve(cwd, file))
+            .filter((file) => CHECKABLE_EXTENSIONS.has(posix.extname(file)))
 
     if (targets !== undefined && targets.length === 0) {
-      return yield* Effect.fail(new NothingToCheck({ reason: NOT_COVERED }))
+      return yield* Effect.fail(notCovered(yield* resolveBin('typescript', cwd, 'tsc')))
     }
 
     const [typescript, tsconfigs] = yield* Effect.all(
@@ -71,7 +81,7 @@ export const tsc: Check = {
       targets === undefined ? tsconfigs : yield* selectTsconfigs([...references.keys()], targets)
 
     if (selected.length === 0) {
-      return yield* Effect.fail(new NothingToCheck({ reason: NOT_COVERED }))
+      return yield* Effect.fail(notCovered(typescript))
     }
 
     if (typescript === undefined) {

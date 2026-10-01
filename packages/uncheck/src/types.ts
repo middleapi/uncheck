@@ -11,6 +11,7 @@ export interface CheckOutcome {
   readonly name: CheckName
   readonly status: 'passed' | 'failed' | 'skipped'
   readonly reason?: string
+  readonly unrelated?: boolean
 }
 
 export interface CheckCommand {
@@ -26,6 +27,8 @@ export interface CheckInput {
   readonly fix: boolean
   /** Files to check, relative to `cwd`, or `undefined` for everything under it. */
   readonly files: ReadonlyArray<string> | undefined
+  /** Files the change deletes, relative to `cwd`. Never handed to a tool, which would read `[id].ts` as a glob. */
+  readonly deleted: ReadonlyArray<string>
   readonly projectFiles: ProjectFiles
 }
 

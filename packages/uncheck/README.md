@@ -147,9 +147,9 @@ Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It 
 
 ## Monorepos
 
-Run uncheck from the workspace root, the folder whose `package.json` has `workspaces` or that has a `pnpm-workspace.yaml`, to check the whole monorepo.
+Run uncheck from the workspace root, the folder whose `package.json` has `workspaces` or whose `pnpm-workspace.yaml` lists `packages`, to check the whole monorepo.
 
-**sherif** checks the workspace as a whole, so it only runs at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). With `--fix`, mismatched versions move to the highest one (unless you set `select`), and your install runs afterwards (unless you set `"noInstall": true`). When `CI` is set, sherif only reports.
+**sherif** checks the workspace as a whole, so it only runs at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). With `--fix`, mismatched versions move to the highest one (unless you set `select`), and your install runs afterwards (unless you set `"noInstall": true`). When `CI` is set, sherif only reports. Leave out `"fix": true`, since uncheck decides when sherif fixes: a run that only reports fails while it is set.
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`:
 

@@ -1,4 +1,5 @@
 import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import { monorepoWithMismatchedVersions } from './utils'
 
 const OTHERS_NOT_SELECTED = [
   '○ oxlint skipped, not selected by --only',
@@ -74,6 +75,18 @@ describe.each(LAYOUTS)('uncheck sherif in a $name', ({ create, app }) => {
     expect(exitCode).toBe(1)
   })
 
+  it.each([
+    ['only holds settings', 'onlyBuiltDependencies:\n  - esbuild\n'],
+    ['is empty', ''],
+  ])('skips sherif where the pnpm-workspace.yaml %s', async (_, workspace) => {
+    const project = create({ 'pnpm-workspace.yaml': workspace })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=sherif'])
+
+    expect(report(stdout)).toEqual(sherifSkipped(project.dir, 'not a workspace root'))
+    expect(exitCode).toBe(1)
+  })
+
   it('takes a pnpm-workspace.yaml link that loops for no workspace', async () => {
     const project = create({ 'pnpm-workspace.yaml': null }).link(
       'pnpm-workspace.yaml',
@@ -126,6 +139,58 @@ describe('uncheck sherif in a monorepo', () => {
       expect(exitCode).toBe(0)
     },
   )
+
+  it('finds the packages of a pnpm-workspace.yaml with a byte order mark and a quoted key', async () => {
+    const project = monorepo({ 'pnpm-workspace.yaml': '\uFEFF"packages":\n  - packages/*\n' })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=sherif'])
+
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      '▶ sherif',
+      '✔ sherif passed',
+      ...OTHERS_NOT_SELECTED,
+      '✔ all checks passed (sherif)',
+    ])
+    expect(exitCode).toBe(0)
+  })
+
+  it('refuses to only report when the sherif field sets fix, which makes sherif fix files', async () => {
+    const project = monorepoWithMismatchedVersions({ fix: true, select: 'highest' })
+
+    project.git('add', '--', 'packages/app/package.json')
+
+    const manifests = ['package.json', 'packages/app/package.json', 'packages/core/package.json']
+    const before = manifests.map((file) => project.read(file))
+    const status = project.git('status', '--porcelain')
+    const refused =
+      '✘ sherif would fix files while uncheck only reports, remove "fix": true from the sherif field of package.json'
+
+    const runs = [
+      { header: `uncheck in ${project.dir}`, run: await project.uncheck(['--only=sherif']) },
+      {
+        header: `uncheck in ${project.dir}`,
+        run: await project.uncheck(['--fix', '--only=sherif'], { env: { CI: '1' } }),
+      },
+      {
+        header: `uncheck staged in ${project.dir}`,
+        run: await project.uncheck(['staged', '--only=sherif']),
+      },
+    ]
+
+    for (const { header, run } of runs) {
+      expect(report(run.stdout)).toEqual([
+        header,
+        refused,
+        ...OTHERS_NOT_SELECTED,
+        '✘ 1 of 1 checks failed: sherif',
+      ])
+      expect(run.exitCode).toBe(1)
+    }
+
+    expect(manifests.map((file) => project.read(file))).toEqual(before)
+    expect(project.git('status', '--porcelain')).toBe(status)
+  })
 
   it('finds a workspace declared in the workspaces field of package.json', async () => {
     const project = monorepo({ 'pnpm-workspace.yaml': null })

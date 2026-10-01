@@ -67,6 +67,8 @@ export interface RunSettings extends CheckSelection {
   readonly literal?: boolean
   /** Fixes are staged again, so only the ones that stay within the given files apply. */
   readonly staged?: boolean
+  /** Paths the change deletes. Only for `literal` runs: without paths, any other run checks everything. */
+  readonly deleted?: ReadonlyArray<string>
 }
 
 export function selectionArgs({ only, required, skipped }: CheckSelection): ReadonlyArray<string> {
@@ -132,7 +134,15 @@ export const checkPaths = Effect.fn(function* (
   paths: ReadonlyArray<string>,
   settings: RunSettings,
 ) {
-  const { fix, only, required, skipped, allowUnmatched = false, literal = false } = settings
+  const {
+    fix,
+    only,
+    required,
+    skipped,
+    allowUnmatched = false,
+    literal = false,
+    deleted = [],
+  } = settings
   const appliesFixes = (fixes: Check['fixes']) =>
     settings.staged === true ? fixes === 'files' : fixes !== false
   const { cwd } = settings
@@ -140,7 +150,7 @@ export const checkPaths = Effect.fn(function* (
 
   let files: ReadonlyArray<string> | undefined
 
-  if (paths.length > 0) {
+  if (paths.length > 0 || deleted.length > 0) {
     const resolved = literal
       ? { files: yield* checkableFiles(paths, cwd), unmatched: [] }
       : yield* resolvePaths(paths, cwd, projectFiles)
@@ -151,7 +161,7 @@ export const checkPaths = Effect.fn(function* (
       )
     }
 
-    if (resolved.files.length === 0) {
+    if (resolved.files.length === 0 && deleted.length === 0) {
       yield* Console.log(`${dim('○')} nothing to check, no files match ${paths.join(' ')}`)
       return
     }
@@ -171,13 +181,14 @@ export const checkPaths = Effect.fn(function* (
         return Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: exclusion })
       }
 
-      return plan({ cwd, fix: fix && appliesFixes(fixes), files, projectFiles }).pipe(
+      return plan({ cwd, fix: fix && appliesFixes(fixes), files, deleted, projectFiles }).pipe(
         Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
-        Effect.catchTag('NothingToCheck', ({ reason }) =>
+        Effect.catchTag('NothingToCheck', ({ reason, unrelated }) =>
           Effect.succeed<CheckPlan>({
             name,
             status: required.includes(name) ? 'failed' : 'skipped',
             reason,
+            unrelated,
           }),
         ),
         Effect.catchTag('CannotCheck', ({ reason }) =>
@@ -198,7 +209,11 @@ export const checkPaths = Effect.fn(function* (
   if (ran.length === 0) {
     const reasons = outcomes.map((outcome) => `${outcome.name} ${outcome.reason}`).join(', ')
 
-    if (files !== undefined && (allowUnmatched || literal)) {
+    if (
+      files !== undefined &&
+      (allowUnmatched || literal) &&
+      outcomes.some((outcome) => outcome.unrelated === true)
+    ) {
       return yield* Console.log(`${dim('○')} nothing to check: ${reasons}`)
     }
 

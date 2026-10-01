@@ -1,9 +1,9 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
-import { LAYOUTS, report, temporaryDirectory } from '../../utils/project'
-import { CLAUDE_CODE_STOP, stopHook } from './utils'
+import { LAYOUTS, report, singleRepo, temporaryDirectory } from '../../utils/project'
+import { CLAUDE_CODE_STOP, stopHook, UTILS_NOT_FOUND } from './utils'
 
 const UNFORMATTED = 'export const   legacy = 1\n'
 
@@ -87,7 +87,7 @@ describe.each(LAYOUTS)(
       expect(readFileSync(join(store, 'shared.ts'), 'utf8')).toBe(UNFORMATTED)
     })
 
-    it('leaves a file deleted since the last commit out, even one whose name reads as a pattern', async () => {
+    it('never hands oxlint or oxfmt a deleted file, even one whose name reads as a pattern', async () => {
       const project = create({
         [`${app}src/[id].ts`]: 'export const id = 1;\n',
         [`${app}src/i.ts`]: UNFORMATTED,
@@ -99,7 +99,12 @@ describe.each(LAYOUTS)(
       expect(deleted.stdout).toBe('')
       expect(report(deleted.stderr)).toEqual([
         `uncheck in ${project.path(app, '.')}`,
-        '○ nothing to check, no files match src/[id].ts',
+        '○ sherif skipped, no package.json among the given files',
+        '○ oxlint skipped, only deleted files',
+        '○ oxfmt skipped, only deleted files',
+        tsc,
+        '✔ tsc passed',
+        '✔ all checks passed (tsc)',
       ])
       expect(project.read(`${app}src/i.ts`)).toBe(UNFORMATTED)
 
@@ -122,6 +127,29 @@ describe.each(LAYOUTS)(
       ])
       expect(project.read(`${app}src/new.ts`)).toBe('export const fresh = 1;\n')
       expect(project.read(`${app}src/i.ts`)).toBe(UNFORMATTED)
+    })
+
+    it('checks only the changed files beside a file named HEAD', async () => {
+      const project = create({
+        [`${app}HEAD`]: 'not a revision\n',
+        [`${app}src/legacy.ts`]: UNFORMATTED,
+      }).write({ [`${app}src/extra.ts`]: 'export const extra = 1;\n' })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+        args: ['--only=oxfmt'],
+      })
+
+      expect(exitCode).toBe(0)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
+        '○ sherif skipped, not selected by --only',
+        '○ oxlint skipped, not selected by --only',
+        '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
+        '✔ oxfmt passed',
+        '○ tsc skipped, not selected by --only',
+        '✔ all checks passed (oxfmt)',
+      ])
     })
 
     it('checks everything under the directory outside git', async () => {
@@ -171,3 +199,53 @@ describe.each(LAYOUTS)(
     })
   },
 )
+
+describe('hooks run with deleted files in a single repo', () => {
+  it.each([[[]], [['--require=tsc']]])(
+    'sends the agent back when a deleted file is still imported, with %j',
+    async (flags) => {
+      const project = singleRepo().write({ 'src/utils.ts': null })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP, {
+        args: ['--fix', ...flags],
+      })
+
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.dir}`,
+        '○ sherif skipped, no package.json among the given files',
+        '○ oxlint skipped, only deleted files',
+        '○ oxfmt skipped, only deleted files',
+        '▶ tsc -p tsconfig.json --noEmit',
+        '✘ tsc failed',
+        '✘ 1 of 1 checks failed: tsc',
+      ])
+      expect(stderr).toContain(UTILS_NOT_FOUND)
+    },
+  )
+
+  it('sends the agent back when a moved file is still imported from where it was', async () => {
+    const project = singleRepo()
+
+    mkdirSync(project.path('scripts'))
+    project.git('mv', 'src/utils.ts', 'scripts/utils.ts')
+
+    const { exitCode, stdout, stderr } = await stopHook(project, '', CLAUDE_CODE_STOP)
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual([
+      `uncheck in ${project.dir}`,
+      '○ sherif skipped, no package.json among the given files',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern scripts/utils.ts',
+      '✔ oxlint passed',
+      '▶ oxfmt --no-error-on-unmatched-pattern scripts/utils.ts',
+      '✔ oxfmt passed',
+      '▶ tsc -p tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 3 checks failed: tsc',
+    ])
+    expect(stderr).toContain(UTILS_NOT_FOUND)
+  })
+})

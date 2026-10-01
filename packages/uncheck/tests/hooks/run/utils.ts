@@ -20,6 +20,9 @@ export const COPILOT_STOP_IN_CLAUDE_FORMAT = {
 
 export const TYPE_ERROR = 'export const answer: string = 1;\n'
 
+export const UTILS_NOT_FOUND =
+  "src/index.ts(1,24): error TS2307: Cannot find module './utils' or its corresponding type declarations."
+
 export function dirFlags(app: string): string[] {
   return app === '' ? [] : [`--dir=${app.slice(0, -1)}`]
 }
