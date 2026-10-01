@@ -98,18 +98,11 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       { cwd: folder },
     )
 
-    expect(project.normalize(stderr)).toBe(
+    // Each git version words the advice that follows the first line of its message differently.
+    expect(project.normalize(stderr)).toContain(
       cliError(
-        [
-          "git update-index [1 paths] failed: fatal: Unable to create '<project>/.git/index.lock': File exists.",
-          '',
-          'Another git process seems to be running in this repository, e.g.',
-          "an editor opened by 'git commit'. Please make sure all processes",
-          'are terminated then try again. If it still fails, a git process',
-          'may have crashed in this repository earlier:',
-          'remove the file manually to continue.',
-        ].join('\n'),
-      ),
+        "git update-index [1 paths] failed: fatal: Unable to create '<project>/.git/index.lock': File exists.",
+      ).trimEnd(),
     )
     expect(exitCode).toBe(1)
     expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxfmt)')

@@ -103,6 +103,19 @@ describe.each(LAYOUTS)('tsc include and exclude patterns in a $name', ({ create,
     ])
   })
 
+  it('keeps out only node_modules and .min.js spelled in their own case, as tsc does where case matters', async () => {
+    const project = withFakeTsc(create, {
+      [`${app}web/tsconfig.json`]: { include: ['src'], ...ALLOW_JS },
+    })
+
+    expect(
+      await tscPlan(project, app, ['web/src/Node_Modules/index.ts', 'web/src/vendor.Min.js']),
+    ).toEqual(['▶ tsc -p web/tsconfig.json --noEmit'])
+    expect(
+      await tscPlan(project, app, ['web/src/node_modules/index.ts', 'web/src/vendor.min.js']),
+    ).toEqual([NOT_COVERED])
+  })
+
   it('ignores case in include but not in exclude', async () => {
     const project = withFakeTsc(create, {
       [`${app}include/tsconfig.json`]: { include: ['SRC'] },

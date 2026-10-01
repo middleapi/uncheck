@@ -67,7 +67,8 @@ describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create
     const { exitCode, stdout } = await prepare(project, [], { cwd: app })
 
     expect(exitCode).toBe(0)
-    expect(stdout).toBe(
+    // Node 26 adds the path to the message.
+    expect(stdout.replace(` '${project.path(HOOK)}'`, '')).toBe(
       notWritten(shownHook(project, app), 'EISDIR: illegal operation on a directory, read'),
     )
     expect(leftoverLocksAndCopies(project)).toEqual([])

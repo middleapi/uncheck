@@ -140,8 +140,12 @@ export function temporaryDirectory(): string {
 
 /** The environment of every process the tests start, free of whatever the machine or a git hook set. */
 export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
+  // Under GitHub Actions, oxlint prints annotations in place of its report.
   const inherited = Object.entries(process.env).filter(
-    ([key]) => !/^(?:GIT_\w+|CI|FORCE_COLOR|NO_COLOR|NODE_DISABLE_COLORS|NODE_OPTIONS)$/.test(key),
+    ([key]) =>
+      !/^(?:GIT_\w+|CI|GITHUB_ACTIONS|FORCE_COLOR|NO_COLOR|NODE_DISABLE_COLORS|NODE_OPTIONS)$/.test(
+        key,
+      ),
   )
 
   return {
