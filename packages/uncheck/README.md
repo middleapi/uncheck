@@ -101,28 +101,32 @@ Add a `prepare` script, so every clone sets up the hook on install, and run it o
 
 Every commit then runs `uncheck staged --fix`: it checks the staged files, fixes what oxlint and oxfmt can, and stages those fixes. A failing check blocks the commit, and `git commit --no-verify` skips the hook. No lint-staged or simple-git-hooks needed.
 
-| `prepare` flag                  | Effect                                                                 |
+To change the hook, put flags in the `prepare` script and run it again, such as `"prepare": "uncheck prepare --pre-commit --only=oxlint --only=oxfmt"`. Every install runs the script, so a flag passed only by hand is undone by the next install.
+
+| Flag in the `prepare` script    | Effect                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------- |
 | `--no-fix`                      | The hook only checks and never changes your files                      |
 | `--allow-empty`                 | The hook lets a commit through when the fixes undo every staged change |
-| `--only`, `--skip`, `--require` | Written into the hook command                                          |
+| `--only`, `--skip`, `--require` | Pick the checks the hook runs                                          |
 
-Run `prepare` again with other flags to change the hook. What it guarantees:
+What the hook guarantees:
 
-- **You commit what was checked.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
+- **Each staged file is checked as you staged it.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
 - **Nothing is lost.** If a fix clashes with your unstaged changes, every fix is undone and the commit stops. Stage the whole file, or stash the rest, and commit again.
-- **Only fixes to staged files are staged.** During a merge, only files that differ from the branch being merged in are checked.
+- **Only fixes to staged files are staged.** An edit you save while the checks run stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
 - **No empty commits.** If the fixes undo every staged change, the commit fails, unless you pass `--allow-empty`.
 
 Good to know:
 
-- tsc checks whole projects, so it can report errors in files you did not stage. `--only=oxlint --only=oxfmt` keeps the hook inside the commit.
+- tsc checks whole projects as they are on disk, so it can report errors in files you did not stage, and pass thanks to a file you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook inside the commit.
+- A hook line checks the staged files in its folder and below, so a line at the root already covers every package. A package's own line adds its checks, with its flags, on top.
 - sherif only reports in the hook, since its fixes reach beyond the commit. Run `npx uncheck --fix` for them.
 - A commit no selected check covers, such as a README change with `--only=tsc`, passes. Add `--require=tsc` to make it fail.
 - An existing hook is kept: uncheck adds one line after its setup (comments, `source`, `export`, variables) and before its commands. With husky 9 or Vite+, it writes the `pre-commit` file they run.
-- uncheck writes nothing, and says why, outside a git repository, when `core.hooksPath` comes from your global or system git config, or when the existing hook is not a shell script. Your install keeps working.
+- uncheck writes nothing, and says why, outside a git repository, when git refuses the repository, when `core.hooksPath` comes from your global or system git config, or when the existing hook is not a shell script. Your install keeps working.
 - The hook runs uncheck through your package manager (`pnpm exec`, `yarn run --silent`, `bunx --no-install` or `npx --no`), so a missing install fails instead of downloading uncheck.
 - Yarn 2+ does not run `prepare`. Use `postinstall` instead, and in a package you publish, turn it off while packing, for example with `"prepack": "pinst --disable"` and `"postpack": "pinst --enable"`.
+- Installs that leave out devDependencies (`npm ci --omit=dev`, `NODE_ENV=production`, `bun install --production`, `yarn workspaces focus --production`) still run `prepare` or `postinstall`, but without uncheck. Append `|| exit 0` so they pass: `"prepare": "uncheck prepare --pre-commit || exit 0"`.
 
 ## Run it after every agent turn
 
@@ -206,6 +210,8 @@ The presets need oxlint 1.70+, oxfmt 0.41+ and TypeScript 5.6+. The tsconfig pre
 **A path looks like a command, a flag or an exclusion.** Start it with `./`: `./staged`, `./-draft.ts`, `'./!notes.ts'`.
 
 **`uncheck dist` says "No files match".** git ignores that folder, so it holds no project files. You can still name an ignored file directly.
+
+**`uncheck prepare` says "git refuses the repository".** git does not trust a repository another user owns, such as a checkout mounted into a container. Run the `safe.directory` command `git status` prints there, then `prepare` again.
 
 **A commit stops with "An earlier run left the unstaged versions of your files in …".** A pre-commit run was killed before it could put your unstaged changes back. Copy what your files are missing from the folder the message names, delete the folder, and commit again.
 

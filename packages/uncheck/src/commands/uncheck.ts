@@ -2,7 +2,7 @@ import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-import { Console, Duration, Effect, Fiber, Semaphore } from 'effect'
+import { Console, Duration, Effect, Fiber, FileSystem, Semaphore } from 'effect'
 import type { CliError } from 'effect/unstable/cli'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
 
@@ -19,6 +19,10 @@ import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
 
 export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
+  // git runs in the folder a symlink points to and prints its paths relative to that folder.
+  Flag.mapEffect((directory) =>
+    FileSystem.FileSystem.use((fs) => fs.realPath(directory)).pipe(Effect.orDie),
+  ),
   Flag.withDefault(Effect.sync(() => process.cwd())),
   Flag.withDescription('Directory to run in. Defaults to the current one'),
 )

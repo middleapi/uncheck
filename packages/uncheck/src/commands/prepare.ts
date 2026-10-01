@@ -179,17 +179,28 @@ export const prepare = Command.make(
 
     const cwd = path.resolve(directory)
 
-    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.option)
+    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.result)
 
-    // A `prepare` script runs on every install, including where there is no repository to hook.
-    if (Option.isNone(repository)) {
+    if (Result.isFailure(repository)) {
+      const { failure } = repository
+
+      // git translates its messages, but never the name of a setting.
+      if (failure._tag === 'GitFailed' && failure.stderr.includes('safe.directory')) {
+        const reason = failure.stderr.split('\n')[0]!.replace(/^fatal: /, '')
+
+        return yield* Console.log(
+          `${red('✘')} ${bold('pre-commit')} ${dim(`not written, git refuses the repository: ${reason}`)}`,
+        )
+      }
+
+      // A `prepare` script runs on every install, including where there is no repository to hook.
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
     const {
       prefix,
       paths: [hooks],
-    } = repository.value
+    } = repository.success
     const inside = prefix.replace(/\/$/, '')
     const exec = yield* detectExec(cwd)
     const command = [
