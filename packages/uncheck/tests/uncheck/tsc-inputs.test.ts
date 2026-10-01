@@ -203,7 +203,9 @@ describe('tsc inputs across the packages of a monorepo', () => {
         version: '1.0.0',
         private: true,
       },
-      'packages/tsconfig/base.json': { compilerOptions: { strict: true } },
+      'packages/tsconfig/base.json': {
+        compilerOptions: { strict: true, outDir: `${CONFIG_DIR}/dist` },
+      },
       'packages/app/tsconfig.json': { extends: '@repo/tsconfig/base.json', include: ['src'] },
     }).link('packages/app/node_modules/@repo/tsconfig', '../../../tsconfig')
 
@@ -211,5 +213,37 @@ describe('tsc inputs across the packages of a monorepo', () => {
       '▶ tsc -b tsconfig.json',
     ])
     expect(await tscPlan(project, '', ['packages/tsconfig/package.json'])).toEqual([NOT_COVERED])
+  })
+
+  it('checks a shared base kept as a tsconfig.json with no sources only through the configs extending it', async () => {
+    const project = withFakeTsc(monorepo, {
+      'packages/tsconfig/package.json': {
+        name: '@repo/tsconfig',
+        version: '1.0.0',
+        private: true,
+      },
+      'packages/tsconfig/tsconfig.json': {
+        compilerOptions: { strict: true, outDir: `${CONFIG_DIR}/dist` },
+      },
+      'packages/app/tsconfig.json': {
+        extends: '@repo/tsconfig',
+        references: [{ path: '../core' }],
+        include: ['src'],
+      },
+      'packages/web/tsconfig.json': { include: ['src'] },
+      'packages/web/src/index.ts': '',
+      'packages/web/test/tsconfig.json': { extends: '../tsconfig.json', include: ['.'] },
+      'packages/docs/tsconfig.json': { include: ['scr'] },
+    }).link('packages/app/node_modules/@repo/tsconfig', '../../../tsconfig')
+
+    expect(await tscPlan(project, '')).toEqual([
+      '▶ tsc -b tsconfig.json',
+      '▶ tsc -p packages/docs/tsconfig.json --noEmit',
+      '▶ tsc -p packages/web/test/tsconfig.json --noEmit',
+      '▶ tsc -p packages/web/tsconfig.json --noEmit',
+    ])
+    expect(await tscPlan(project, '', ['packages/tsconfig/tsconfig.json'])).toEqual([
+      '▶ tsc -b tsconfig.json',
+    ])
   })
 })

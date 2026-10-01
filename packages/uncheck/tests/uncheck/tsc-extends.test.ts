@@ -1,5 +1,13 @@
-import { LAYOUTS, monorepo } from '../utils/project'
-import { ALLOW_JS, CONFIG_DIR, NOT_COVERED, tscPlan, withFakeTsc } from './utils'
+import { LAYOUTS, monorepo, report } from '../utils/project'
+import {
+  ALLOW_JS,
+  CONFIG_DIR,
+  NOT_COVERED,
+  OUT_DIR,
+  SKIPPED_BESIDE_TSC,
+  tscPlan,
+  withFakeTsc,
+} from './utils'
 
 const NO_JS = { compilerOptions: { allowJs: false } }
 
@@ -226,6 +234,27 @@ describe.each(LAYOUTS)('tsc extends in a $name', ({ create, app }) => {
     ])
     expect(await tscPlan(project, app, ['web/src/index.ts'])).toEqual([NOT_COVERED])
   })
+
+  it('typechecks the projects extending a deleted base', async () => {
+    const project = withFakeTsc(create, {
+      [`${app}tsconfig.base.json`]: NO_JS,
+      [`${app}web/tsconfig.json`]: { extends: '../tsconfig.base.json', include: ['src'] },
+      [`${app}server/tsconfig.json`]: { include: ['src'] },
+    })
+
+    project.git('rm', '--quiet', '--', `${app}tsconfig.base.json`)
+
+    const { exitCode, stdout } = await project.uncheck(['staged', '--only=tsc'], { cwd: app })
+
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(app, '.')}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -p web/tsconfig.json --noEmit',
+      '✔ tsc passed',
+      '✔ all checks passed (tsc)',
+    ])
+  })
 })
 
 describe('tsc extends across the packages of a monorepo', () => {
@@ -238,8 +267,8 @@ describe('tsc extends across the packages of a monorepo', () => {
         version: '2.0.0',
       },
       'packages/app/node_modules/@acme/tsconfig/tsconfig.json': NO_JS,
-      'packages/app/tsconfig.json': { extends: '@acme/tsconfig', include: ['src'] },
-      'packages/core/tsconfig.json': { extends: '@acme/tsconfig', include: ['src'] },
+      'packages/app/tsconfig.json': { extends: '@acme/tsconfig', ...OUT_DIR, include: ['src'] },
+      'packages/core/tsconfig.json': { extends: '@acme/tsconfig', ...OUT_DIR, include: ['src'] },
     })
 
     expect(await tscPlan(project, '', ['packages/core/src/a.js'])).toEqual([

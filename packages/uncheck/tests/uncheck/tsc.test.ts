@@ -1,8 +1,20 @@
 import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, report, run, singleRepo } from '../utils/project'
-import { ALLOW_JS, NOT_COVERED, SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
+import {
+  ALLOW_JS,
+  CLEAN_CODE,
+  CODE_WITH_TYPE_ERROR,
+  NOT_COVERED,
+  OUT_DIR,
+  SKIPPED_BESIDE_TSC,
+  tscPlan,
+  withFakeTsc,
+} from './utils'
 
 describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
-  it('skips the check when the project has no tsconfig.json', async () => {
+  const uncoveredFolder =
+    app === '' ? 'no tsconfig.json found' : 'no tsconfig.json covers this folder'
+
+  it('skips the check when no tsconfig.json covers the folder', async () => {
     const project = create({ [`${app}tsconfig.json`]: null })
 
     const { exitCode, stdout } = await project.uncheck(['--only=tsc'], { cwd: app })
@@ -11,8 +23,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.path(app, '.')}`,
       ...SKIPPED_BESIDE_TSC,
-      '○ tsc skipped, no tsconfig.json found',
-      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json found',
+      `○ tsc skipped, ${uncoveredFolder}`,
+      `✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${uncoveredFolder}`,
     ])
   })
 
@@ -20,7 +32,19 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
     const project = withFakeTsc(create).write({ [`${app}tsconfig.json`]: null })
 
     expect(project.git('ls-files', `${app}tsconfig.json`)).toBe(`${app}tsconfig.json\n`)
-    expect(await tscPlan(project, app)).toEqual(['○ tsc skipped, no tsconfig.json found'])
+    expect(await tscPlan(project, app)).toEqual([`○ tsc skipped, ${uncoveredFolder}`])
+  })
+
+  it('checks a folder below its tsconfig.json with that config, if it includes files of the folder', async () => {
+    const project = withFakeTsc(create, { [`${app}scripts/release.ts`]: '' })
+    const inherited = tsc.replace('tsconfig.json', '../tsconfig.json')
+
+    expect(await tscPlan(project, `${app}src`)).toEqual([inherited])
+    expect(await tscPlan(project, `${app}src`, ['index.ts'])).toEqual([inherited])
+    expect(await tscPlan(project, `${app}scripts`)).toEqual([
+      '○ tsc skipped, no tsconfig.json covers this folder',
+    ])
+    expect(await tscPlan(project, `${app}scripts`, ['release.ts'])).toEqual([NOT_COVERED])
   })
 
   it('checks a tsconfig.json with merge conflicts once', async () => {
@@ -114,7 +138,7 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       create,
       {
         [`${app}tsconfig.json`]: { files: [], references: [{ path: './web' }] },
-        [`${app}web/tsconfig.json`]: { include: ['src'] },
+        [`${app}web/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
         [`${app}scripts/tsconfig.json`]: { include: ['.'] },
         [`${app}node_modules/@tsconfig/node22/tsconfig.json`]: ALLOW_JS,
         [`${app}web/node_modules/lib/tsconfig.json`]: {},
@@ -131,6 +155,66 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
 })
 
 describe('tsc with the real compiler in a single repo', () => {
+  it('typechecks a folder below the tsconfig.json with it, as tsc does', async () => {
+    const project = singleRepo({
+      'src/index.ts': CODE_WITH_TYPE_ERROR,
+      'scripts/release.ts': CLEAN_CODE,
+    })
+    const failedIn = (folder: string) => [
+      `uncheck in ${project.path(folder)}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -p ../tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ]
+    const diagnostic =
+      "index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
+
+    const inside = await project.uncheck(['--only=tsc'], { cwd: 'src' })
+
+    expect(inside.exitCode).toBe(1)
+    expect(report(inside.stdout)).toEqual(failedIn('src'))
+    expect(inside.stdout).toContain(`\n${diagnostic}`)
+
+    const given = await project.uncheck(['--only=tsc', '--cwd', 'src', 'index.ts'])
+
+    expect(given.exitCode).toBe(1)
+    expect(report(given.stdout)).toEqual(failedIn('src'))
+    expect(given.stdout).toContain(`\n${diagnostic}`)
+
+    const outside = await project.uncheck(['--only=tsc'], { cwd: 'scripts' })
+
+    expect(outside.exitCode).toBe(1)
+    expect(report(outside.stdout)).toEqual([
+      `uncheck in ${project.path('scripts')}`,
+      ...SKIPPED_BESIDE_TSC,
+      '○ tsc skipped, no tsconfig.json covers this folder',
+      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers this folder',
+    ])
+  })
+
+  it.runIf(PERMISSIONS_ENFORCED)(
+    'hands a tsconfig.json in a folder it cannot open to tsc, which reports it',
+    async () => {
+      const project = singleRepo({ 'locked/tsconfig.json': { include: ['.'] } }).chmod('locked', 0)
+
+      const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
+
+      expect(exitCode).toBe(1)
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        ...SKIPPED_BESIDE_TSC,
+        '▶ tsc -p locked/tsconfig.json --noEmit',
+        '▶ tsc -p tsconfig.json --noEmit',
+        '✘ tsc failed',
+        '✘ 1 of 1 checks failed: tsc',
+      ])
+      expect(stdout).toContain(
+        `error TS5058: The specified path does not exist: '${project.path('locked/tsconfig.json')}'.`,
+      )
+    },
+  )
+
   it('typechecks a tsconfig.json with -p --noEmit, emitting nothing', async () => {
     const project = singleRepo({
       'tsconfig.json': {

@@ -1,5 +1,14 @@
-import { LAYOUTS, monorepo, report } from '../utils/project'
-import { CONFIG_DIR, NOT_COVERED, SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
+import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import {
+  CODE_WITH_TYPE_ERROR,
+  CONFIG_DIR,
+  NO_EMIT,
+  NOT_COVERED,
+  OUT_DIR,
+  SKIPPED_BESIDE_TSC,
+  tscPlan,
+  withFakeTsc,
+} from './utils'
 
 describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) => {
   it('builds a solution-style tsconfig.json whose references have other names', async () => {
@@ -8,13 +17,81 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
         files: [],
         references: [{ path: './tsconfig.app.json' }, { path: './tsconfig.node.json' }],
       },
-      [`${app}tsconfig.app.json`]: { include: ['src'] },
-      [`${app}tsconfig.node.json`]: { include: ['vite.config.ts'] },
+      [`${app}tsconfig.app.json`]: { ...NO_EMIT, include: ['src'] },
+      [`${app}tsconfig.node.json`]: { ...NO_EMIT, include: ['vite.config.ts'] },
     })
 
     expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
     expect(await tscPlan(project, app, ['vite.config.ts'])).toEqual(['▶ tsc -b tsconfig.json'])
     expect(await tscPlan(project, app, ['scripts/release.ts'])).toEqual([NOT_COVERED])
+  })
+
+  it('builds a references graph whose projects keep their output away from their sources, also through extends', async () => {
+    const project = withFakeTsc(create, {
+      [`${app}tsconfig.json`]: {
+        files: [],
+        references: ['no-emit', 'declarations', 'out-dir', 'out-file'].map((dir) => ({
+          path: `./${dir}`,
+        })),
+      },
+      [`${app}tsconfig.base.json`]: NO_EMIT,
+      [`${app}tsconfig.dist.json`]: { compilerOptions: { outDir: `${CONFIG_DIR}/dist` } },
+      [`${app}no-emit/tsconfig.json`]: { extends: '../tsconfig.base.json', include: ['src'] },
+      [`${app}declarations/tsconfig.json`]: {
+        extends: '../tsconfig.base.json',
+        compilerOptions: { noEmit: false, emitDeclarationOnly: true },
+        include: ['src'],
+      },
+      [`${app}out-dir/tsconfig.json`]: { extends: '../tsconfig.dist.json', include: ['src'] },
+      [`${app}out-file/tsconfig.json`]: {
+        compilerOptions: { outFile: 'index.js' },
+        include: ['src'],
+      },
+    })
+
+    expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
+  })
+
+  it('checks the projects of a references graph with -p when tsc -b would write JavaScript next to their sources', async () => {
+    const project = withFakeTsc(create, {
+      [`${app}tsconfig.json`]: { files: [], references: [{ path: './web' }, { path: './node' }] },
+      [`${app}tsconfig.base.json`]: NO_EMIT,
+      [`${app}web/tsconfig.json`]: {
+        ...NO_EMIT,
+        include: ['src'],
+        references: [{ path: '../shared' }],
+      },
+      [`${app}node/tsconfig.json`]: {
+        extends: '../tsconfig.base.json',
+        compilerOptions: { composite: true, noEmit: false },
+        include: ['vite.config.ts'],
+      },
+      [`${app}shared/tsconfig.json`]: {
+        compilerOptions: { composite: true, outDir: 'dist' },
+        include: ['src'],
+      },
+      [`${app}lib/tsconfig.json`]: {
+        ...OUT_DIR,
+        include: ['src'],
+        references: [{ path: '../shared' }],
+      },
+    })
+
+    expect(await tscPlan(project, app)).toEqual([
+      '▶ tsc -b lib/tsconfig.json',
+      '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p shared/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p web/tsconfig.json --noEmit',
+    ])
+    expect(await tscPlan(project, app, ['node/vite.config.ts'])).toEqual([
+      '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
+    ])
+    expect(await tscPlan(project, app, ['shared/src/index.ts'])).toEqual([
+      '▶ tsc -b lib/tsconfig.json',
+      '▶ tsc -p shared/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p web/tsconfig.json --noEmit',
+    ])
+    expect(await tscPlan(project, app, ['tsconfig.json'])).toEqual([NOT_COVERED])
   })
 
   it('follows references to a folder, to a .json file and with backslashes', async () => {
@@ -24,15 +101,17 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
         references: [{ path: 'web' }, { path: '.\\server\\tsconfig.build.json' }],
       },
       [`${app}web/tsconfig.json`]: {
+        ...OUT_DIR,
         include: ['src'],
         references: [{ path: '../ui/tsconfig.json' }],
       },
-      [`${app}ui/tsconfig.json`]: { include: ['src'] },
+      [`${app}ui/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
       [`${app}server/tsconfig.build.json`]: {
+        ...OUT_DIR,
         include: ['src'],
         references: [{ path: '..\\shared' }],
       },
-      [`${app}shared/tsconfig.json`]: { include: ['src'] },
+      [`${app}shared/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
     })
 
     expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
@@ -45,8 +124,8 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
   it(`follows a reference path with ${CONFIG_DIR} as written, like tsc`, async () => {
     const project = withFakeTsc(create, {
       [`${app}tsconfig.json`]: { include: ['src'] },
-      [`${app}web/tsconfig.json`]: { references: [{ path: `${CONFIG_DIR}/../lib` }] },
-      [`${app}web/lib/tsconfig.json`]: { include: ['src'] },
+      [`${app}web/tsconfig.json`]: { ...OUT_DIR, references: [{ path: `${CONFIG_DIR}/../lib` }] },
+      [`${app}web/lib/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
       [`${app}lib/tsconfig.json`]: { include: ['src'] },
     })
 
@@ -63,7 +142,7 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
         files: [],
         references: ['./scripts', { path: 42 }, null, { prepend: true }, { path: './lib' }],
       },
-      [`${app}lib/tsconfig.json`]: { include: ['src'], references: './scripts' },
+      [`${app}lib/tsconfig.json`]: { ...OUT_DIR, include: ['src'], references: './scripts' },
       [`${app}scripts/tsconfig.json`]: { include: ['.'] },
     })
 
@@ -76,11 +155,24 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
   it('builds the roots of the reference graph that depend on the given files', async () => {
     const project = withFakeTsc(create, {
       [`${app}tsconfig.json`]: { include: ['scripts'] },
-      [`${app}shared/tsconfig.json`]: { include: ['src'] },
-      [`${app}web/tsconfig.json`]: { include: ['src'], references: [{ path: '../shared' }] },
-      [`${app}server/tsconfig.json`]: { include: ['src'], references: [{ path: '../shared' }] },
-      [`${app}cli/tsconfig.json`]: { include: ['src'], references: [{ path: '../server' }] },
+      [`${app}shared/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
+      [`${app}web/tsconfig.json`]: {
+        ...OUT_DIR,
+        include: ['src'],
+        references: [{ path: '../shared' }],
+      },
+      [`${app}server/tsconfig.json`]: {
+        ...OUT_DIR,
+        include: ['src'],
+        references: [{ path: '../shared' }],
+      },
+      [`${app}cli/tsconfig.json`]: {
+        ...OUT_DIR,
+        include: ['src'],
+        references: [{ path: '../server' }],
+      },
       [`${app}e2e/tsconfig.json`]: {
+        ...OUT_DIR,
         include: ['src'],
         references: [{ path: '../web' }, { path: '../server' }],
       },
@@ -135,7 +227,7 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
 
   it('leaves a reference to a missing config to tsc -b', async () => {
     const project = withFakeTsc(create, {
-      [`${app}tsconfig.json`]: { include: ['src'], references: [{ path: './legacy' }] },
+      [`${app}tsconfig.json`]: { ...NO_EMIT, include: ['src'], references: [{ path: './legacy' }] },
     })
 
     expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
@@ -144,7 +236,11 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
 
   it('leaves a reference to a folder named like a config file to tsc -b', async () => {
     const project = withFakeTsc(create, {
-      [`${app}tsconfig.json`]: { include: ['src'], references: [{ path: './lib.json' }] },
+      [`${app}tsconfig.json`]: {
+        ...NO_EMIT,
+        include: ['src'],
+        references: [{ path: './lib.json' }],
+      },
       [`${app}lib.json/index.ts`]: '',
     })
 
@@ -157,7 +253,11 @@ describe('tsc project references across the packages of a monorepo', () => {
     const project = withFakeTsc(monorepo, {
       'tsconfig.json': { include: ['scripts'] },
       'packages/web/package.json': { name: '@repo/web', version: '1.0.0', private: true },
-      'packages/web/tsconfig.json': { include: ['src'], references: [{ path: '../core' }] },
+      'packages/web/tsconfig.json': {
+        ...OUT_DIR,
+        include: ['src'],
+        references: [{ path: '../core' }],
+      },
       'packages/cli/package.json': { name: '@repo/cli', version: '1.0.0', private: true },
       'packages/cli/tsconfig.json': { include: ['src'] },
     })
@@ -186,5 +286,133 @@ describe('tsc project references across the packages of a monorepo', () => {
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
     ])
+  })
+})
+
+describe('tsc project references with the real compiler in a single repo', () => {
+  const COMPOSITE = {
+    strict: true,
+    module: 'esnext',
+    moduleResolution: 'bundler',
+    types: [],
+    composite: true,
+    emitDeclarationOnly: true,
+    outDir: 'dist',
+    rootDir: 'src',
+  }
+
+  it('checks each project of a references graph holding a Vite 4 config with -p, writing no file', async () => {
+    const project = singleRepo({
+      'tsconfig.node.json': {
+        compilerOptions: {
+          composite: true,
+          skipLibCheck: true,
+          module: 'esnext',
+          moduleResolution: 'bundler',
+          types: [],
+        },
+        include: ['vite.config.ts'],
+      },
+      'vite.config.ts': 'export default { base: "/" };\n',
+      'lib/tsconfig.json': { compilerOptions: COMPOSITE, include: ['src'] },
+      'lib/src/index.ts': 'export const one = 1;\n',
+    })
+      .update('tsconfig.json', (config) => ({
+        ...config,
+        references: [{ path: './tsconfig.node.json' }, { path: './lib' }],
+      }))
+      .commit()
+    const plan = [
+      '▶ tsc -p lib/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p tsconfig.json --noEmit',
+      '▶ tsc -p tsconfig.node.json --noEmit --composite false --declaration',
+    ]
+
+    const passed = await project.uncheck(['--only=tsc'])
+
+    expect(passed.exitCode).toBe(0)
+    expect(report(passed.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      ...plan,
+      '✔ tsc passed',
+      '✔ all checks passed (tsc)',
+    ])
+    expect(project.git('status', '--porcelain', '--ignored')).toBe('!! node_modules/\n')
+
+    project.write({ 'vite.config.ts': CODE_WITH_TYPE_ERROR })
+
+    const failed = await project.uncheck(['--only=tsc'])
+
+    expect(failed.exitCode).toBe(1)
+    expect(report(failed.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      ...plan,
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(failed.stdout).toContain(
+      "vite.config.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+    )
+  })
+
+  it('builds roots in folders starting with - or @, which tsc would read as an option or a file of arguments', async () => {
+    const project = singleRepo({
+      'core/tsconfig.json': { compilerOptions: COMPOSITE, include: ['src'] },
+      'core/src/index.ts': 'export const one = 1;\n',
+      ...Object.fromEntries(
+        ['-pkg', '@app'].flatMap((folder) => [
+          [
+            `${folder}/tsconfig.json`,
+            { compilerOptions: COMPOSITE, include: ['src'], references: [{ path: '../core' }] },
+          ],
+          [`${folder}/src/index.ts`, CODE_WITH_TYPE_ERROR],
+        ]),
+      ),
+    })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
+
+    expect(exitCode).toBe(1)
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -b ./-pkg/tsconfig.json ./@app/tsconfig.json',
+      '▶ tsc -p tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+
+    for (const folder of ['-pkg', '@app']) {
+      expect(stdout).toContain(
+        `\n${folder}/src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.`,
+      )
+    }
+  })
+
+  it('runs the other checks when a reference names a file, and tsc reports it', async () => {
+    const project = singleRepo({ 'README.md': '# App\n' }).update('tsconfig.json', (config) => ({
+      ...config,
+      references: [{ path: './README.md' }],
+    }))
+
+    const { exitCode, stdout } = await project.uncheck()
+
+    expect(exitCode).toBe(1)
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      '○ sherif skipped, not a workspace root',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      '✔ oxlint passed',
+      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      '✔ oxfmt passed',
+      '▶ tsc -b tsconfig.json',
+      '✘ tsc failed',
+      '✘ 1 of 3 checks failed: tsc',
+    ])
+    expect(stdout).toContain(
+      `error TS6053: File '${project.path('README.md/tsconfig.json')}' not found.`,
+    )
   })
 })

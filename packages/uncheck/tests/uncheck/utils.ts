@@ -82,6 +82,11 @@ export const CONFIG_DIR = '${configDir}'
 
 export const ALLOW_JS = { compilerOptions: { allowJs: true } }
 
+/** Without it, the members of a references graph are checked with `-p` instead of built with `-b`. */
+export const OUT_DIR = { compilerOptions: { outDir: 'dist' } }
+
+export const NO_EMIT = { compilerOptions: { noEmit: true } }
+
 export function withFakeTsc(
   create: Layout['create'],
   files?: Files,
