@@ -145,6 +145,15 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
     expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
   })
 
+  it('keeps its line after a block that only runs the husky 4 runner when it exists', async () => {
+    const existing = `#!/bin/sh\nif [ -f "$(dirname "$0")/husky.sh" ]; then\n  ${HUSKY_4_RUNNER}\nfi\n${line}\n`
+
+    const { stdout, hook, project } = await prepareHook(existing)
+
+    expect(stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    expect(hook).toBe(existing)
+  })
+
   it.each([
     ['a trailing backslash', 'export PATH=/opt/bin:\\\n/usr/bin:$PATH\n'],
     ['an open double quote', 'MESSAGE="checks\n. before committing"\n'],

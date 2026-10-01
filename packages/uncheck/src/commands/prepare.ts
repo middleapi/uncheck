@@ -38,7 +38,7 @@ const SETUP =
   /^\s*(?:#|$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
 
 /** husky 4 sources this runner, which always exits, so nothing after it runs. */
-const HUSKY_4_RUNNER = /^\s*\.\s+"\$\(dirname "\$0"\)\/husky\.sh"\s*$/
+const HUSKY_4_RUNNER = /^\.\s+"\$\(dirname "\$0"\)\/husky\.sh"\s*$/
 
 const INNERMOST_SUBSTITUTION = /\$\([^()]*\)/g
 
