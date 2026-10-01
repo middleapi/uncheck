@@ -1,5 +1,4 @@
 import { posix } from 'node:path'
-import process from 'node:process'
 
 import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
@@ -240,7 +239,7 @@ const readReferences = Effect.fn(function* (configPath: string) {
 
 interface InputPattern {
   readonly spec: string
-  readonly regex: RegExp
+  readonly matches: (file: string) => boolean
 }
 
 interface TsconfigInputs {
@@ -326,10 +325,10 @@ const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
     configs: chain.map(({ file }) => file),
     files: resolve(files),
     include: includeSpecs.flatMap((spec) => {
-      const regex = compileGlob(spec, 'files')
-      return regex === undefined ? [] : [{ spec, regex }]
+      const matches = compileGlob(spec, 'files')
+      return matches === undefined ? [] : [{ spec, matches }]
     }),
-    exclude: excludeSpecs.map((spec) => ({ spec, regex: compileGlob(spec, 'exclude')! })),
+    exclude: excludeSpecs.map((spec) => ({ spec, matches: compileGlob(spec, 'exclude')! })),
     extensions: new Set(allowJs ? [...TS_EXTENSIONS, ...JS_EXTENSIONS] : TS_EXTENSIONS),
   }
 })
@@ -348,13 +347,13 @@ function includesFile(inputs: TsconfigInputs, file: string): boolean {
     return false
   }
 
-  if (inputs.exclude.some((pattern) => pattern.regex.test(target))) {
+  if (inputs.exclude.some((pattern) => pattern.matches(target))) {
     return false
   }
 
   // JSON files only come in through an `include` that names the extension explicitly.
   return inputs.include.some(
-    (pattern) => pattern.regex.test(target) && (!json || pattern.spec.endsWith('.json')),
+    (pattern) => pattern.matches(target) && (!json || pattern.spec.endsWith('.json')),
   )
 }
 
@@ -461,7 +460,6 @@ const IMPLICIT_EXCLUDE = '(?!(?:node_modules|bower_components|jspm_packages)(?:/
 const FILES_ASTERISK = '(?:[^./]|(?:\\.(?!min\\.js$))?)*'
 const FILES_DOUBLE_ASTERISK = `(?:/${IMPLICIT_EXCLUDE}[^/.][^/]*)*?`
 const EXCLUDE_DOUBLE_ASTERISK = '(?:/.+?)?'
-const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin'
 
 /**
  * Turns an absolute `include` or `exclude` pattern into the regular expression `tsc` uses for it:
@@ -470,7 +468,10 @@ const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'd
  * In `include`, `*` never matches a name ending in `.min.js`; `exclude` patterns also match every
  * path below them.
  */
-function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | undefined {
+function compileGlob(
+  pattern: string,
+  usage: 'files' | 'exclude',
+): ((file: string) => boolean) | undefined {
   const components = pattern.replace(/\/+$/, '').split('/')
   const last = components[components.length - 1]!
 
@@ -499,10 +500,15 @@ function compileGlob(pattern: string, usage: 'files' | 'exclude'): RegExp | unde
     written = true
   }
 
-  return new RegExp(
-    `^${source}${usage === 'exclude' ? '(?:$|/)' : '$'}`,
-    CASE_INSENSITIVE ? 'i' : '',
-  )
+  // tsc ignores case on file systems that do, even in the lookaheads that keep node_modules and .min.js
+  // out, so `include` matches the way tsc does on either kind and `exclude` keeps case: on any file
+  // system that selects every project tsc would check, and at worst one more.
+  const regexes =
+    usage === 'files'
+      ? [new RegExp(`^${source}$`), new RegExp(`^${source}$`, 'i')]
+      : [new RegExp(`^${source}(?:$|/)`)]
+
+  return (file) => regexes.some((regex) => regex.test(file))
 }
 
 function filesComponent(component: string): string {
@@ -546,9 +552,7 @@ const EXPORT_CONDITIONS = new Set(['node', 'require', 'types', 'default'])
  */
 function resolveExports(exports: unknown, subpath: string): string | undefined {
   const map: Record<string, unknown> =
-    Predicate.isObject(exports) &&
-    !Array.isArray(exports) &&
-    Object.keys(exports).some((key) => key.startsWith('.'))
+    Predicate.isObject(exports) && Object.keys(exports).some((key) => key.startsWith('.'))
       ? exports
       : { '.': exports }
 

@@ -146,7 +146,7 @@ export const prepare = Command.make(
 
     const {
       prefix,
-      paths: [hooks = ''],
+      paths: [hooks],
     } = repository.value
     const inside = prefix.replace(/\/$/, '')
     const exec = yield* detectExec(cwd)
@@ -161,7 +161,7 @@ export const prepare = Command.make(
 
     // husky 9 and Vite+ point core.hooksPath at a `_` folder of generated shims that source the `h`
     // dispatcher, which exits before any line appended to a shim and runs the hook in the folder above.
-    const configured = path.resolve(cwd, hooks)
+    const configured = path.resolve(cwd, hooks!)
     const dispatched =
       path.basename(configured) === '_' &&
       (yield* fs.exists(path.join(configured, 'h')).pipe(Effect.orElseSucceed(() => false)))

@@ -23,5 +23,5 @@ export function userError(userMessage: string): Effect.Effect<never, CliError.Us
 }
 
 export function platformMessage(error: PlatformError.PlatformError): string {
-  return error.cause instanceof Error ? error.cause.message : error.message
+  return (error.cause as Error).message
 }
