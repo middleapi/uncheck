@@ -102,6 +102,14 @@ describe.each(LAYOUTS)('uncheck with globs in a $name', ({ create, app }) => {
     expect(await check(project, routes('@(home|about).ts'))).toEqual(routes('about.ts', 'home.ts'))
   })
 
+  it('matches a character escaped with \\ literally', async () => {
+    const project = routesProject()
+
+    expect(await check(project, routes('\\[id\\].ts', '\\[slug\\]/*'))).toEqual(
+      routes('[id].ts', '[slug]/page.ts'),
+    )
+  })
+
   it('reads a glob starting with "#" as a glob rather than a comment', async () => {
     const project = routesProject()
 

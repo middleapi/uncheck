@@ -45,8 +45,19 @@ describe.each(LAYOUTS)('uncheck with exclusions in a $name', ({ create, app }) =
     )
   })
 
-  it('leaves out a file whose name looks like a glob along with every file that glob matches', async () => {
+  it('leaves out an existing file or folder whose name looks like a glob as that path alone', async () => {
     const project = routesProject()
+
+    expect(await check(project, '.', '![id].ts')).toEqual(without('[id].ts'))
+    expect(await check(project, '.', '!(group)')).toEqual(without('(group)/page.ts'))
+  })
+
+  it('reads an exclusion naming no existing path as a glob, with \\ escaping', async () => {
+    const project = routesProject()
+
+    expect(await check(project, '.', '!\\[id\\].ts')).toEqual(without('[id].ts'))
+
+    project.write({ [`${cwd}/[id].ts`]: null })
 
     expect(await check(project, '.', '![id].ts')).toEqual(without('[id].ts', 'd.ts', 'i.ts'))
   })

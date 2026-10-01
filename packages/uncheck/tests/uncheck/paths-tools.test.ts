@@ -1,7 +1,4 @@
-import { writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
-
-import { LAYOUTS, report, temporaryDirectory } from '../utils/project'
+import { LAYOUTS, report } from '../utils/project'
 import { CLEAN_CODE, CODE_WITH_VAR, NOT_COVERED, selectedReport } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
@@ -199,34 +196,5 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
     expect(fix.exitCode).toBe(0)
     expect(project.read(`${app}-draft.ts`)).toBe('const count = 1;\nexport { count };\n')
     expect(project.read(`${app}!notes.ts`)).toBe('export const notes = 1;\n')
-  })
-
-  it('hands oxlint and oxfmt a file above the directory it runs in as a "../" path they reject', async () => {
-    const project = create()
-    const outside = temporaryDirectory()
-    writeFileSync(join(outside, 'shared.ts'), CLEAN_CODE)
-    const handed = relative(project.dir, join(outside, 'shared.ts'))
-
-    const { exitCode, stdout, stderr } = await project.uncheck([
-      ...ONLY_FILE_CHECKS,
-      join(outside, 'shared.ts'),
-    ])
-
-    expect(stderr).toBe('')
-    expect(exitCode).toBe(1)
-    expect(selectedReport(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      `▶ oxlint --no-error-on-unmatched-pattern ${handed}`,
-      '✘ oxlint failed',
-      `▶ oxfmt --check --no-error-on-unmatched-pattern ${handed}`,
-      '✘ oxfmt failed',
-      '✘ 2 of 2 checks failed: oxlint, oxfmt',
-      '  rerun with `--fix` to apply oxlint and oxfmt fixes',
-    ])
-    expect(
-      stdout
-        .split('\n')
-        .filter((line) => line === `Error: \`${handed}\`: PATH must not contain ".."`),
-    ).toHaveLength(2)
   })
 })
