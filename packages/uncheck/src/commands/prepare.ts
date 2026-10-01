@@ -20,8 +20,12 @@ const EXIT = ' || exit 1'
  * A line that enters a directory first, since git runs hooks at the top of the working tree, in a
  * subshell so the `cd` does not carry over to the next line.
  */
+const ENTERS_WHEN_STAGED =
+  /^git --literal-pathspecs diff --cached --quiet -- "([^"]*)" \|\| \[ ! -d "\1" \] \|\| \(cd "\1" && (.*)\)$/
 const ENTERS = /^\(cd "([^"]*)" && (.*)\)$/
 const OLD_ENTERS = /^cd "([^"]*)" && (.*)$/
+
+const CWD_FLAG = / --cwd=/
 
 /** Git runs a hook through its shebang, where a line of `sh` would be a syntax error. */
 const OTHER_INTERPRETER = /^#!(?!.*\b(?:ba|da|k|z|a)?sh\b)/
@@ -33,9 +37,17 @@ const NOT_TEXT = /[\0\uFFFD]/
 const SETUP =
   /^\s*(?:#|$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
 
+/** husky 4 sources this runner, which always exits, so nothing after it runs. */
+const HUSKY_4_RUNNER = /^\s*\.\s+"\$\(dirname "\$0"\)\/husky\.sh"\s*$/
+
+const INNERMOST_SUBSTITUTION = /\$\([^()]*\)/g
+
+// A `\"` outside quotes opens nothing, and a `"` between single quotes opens nothing either.
+const QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g
+
 /** A setup line that runs on into the next, where the added line would join it. */
 const CONTINUES =
-  /^(?!\s*#)(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$)/
+  /^(?!\s*#)(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$|(?:[^`]*`[^`]*`)*[^`]*`[^`]*$|.*[({]\s*$|.*<<)/
 
 /**
  * `sh` still expands `$`, backticks and `\` between double quotes, `"` ends them, and a newline ends
@@ -43,23 +55,53 @@ const CONTINUES =
  */
 const UNQUOTABLE = /["$`\\\n]/
 
+// Without --literal-pathspecs, git reads a folder whose name starts with `:` as pathspec magic.
 function hookLine(inside: string, command: string): string {
-  return inside === '' ? `${command}${EXIT}` : `(cd "${inside}" && ${command})${EXIT}`
+  return inside === ''
+    ? `${command}${EXIT}`
+    : `git --literal-pathspecs diff --cached --quiet -- "${inside}" || [ ! -d "${inside}" ] || (cd "${inside}" && ${command})${EXIT}`
 }
 
 /**
  * The directory and command of a hook line that runs `uncheck staged`, or `undefined` when the line
  * is not one `prepare` writes. A line only counts as ours when it runs the command directly or
- * through a package manager, so a line that merely mentions it, or runs it some other way, is left
- * alone.
+ * through a package manager, so a line that merely mentions it, or runs it some other way, such as
+ * in another directory with `--cwd`, is left alone.
  */
 function ownLine(text: string): { readonly inside: string; readonly command: string } | undefined {
   const line = text.trim()
   const body = line.endsWith(EXIT) ? line.slice(0, -EXIT.length) : line
-  const enters = ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
+  const enters = ENTERS_WHEN_STAGED.exec(body) ?? ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
   const command = enters?.[2] ?? body
 
-  return invokes(command, HOOK_COMMAND) ? { inside: enters?.[1] ?? '', command } : undefined
+  return invokes(command, HOOK_COMMAND) && !CWD_FLAG.test(command)
+    ? { inside: enters?.[1] ?? '', command }
+    : undefined
+}
+
+/** A `;`, `&` or `|` between quotes or in a command substitution does not end the command. */
+function opaque(text: string): string {
+  const substituted = text.replace(INNERMOST_SUBSTITUTION, '_')
+
+  return substituted === text
+    ? text.replace(QUOTED, (token) => (token.startsWith('\\') ? token : '""'))
+    : opaque(substituted)
+}
+
+function beforeHusky4Runner(texts: ReadonlyArray<string>): ReadonlyArray<string> {
+  const runner = texts.findIndex((text) => HUSKY_4_RUNNER.test(text))
+
+  if (runner === -1) {
+    return texts
+  }
+
+  const rest = texts.slice(runner)
+
+  return [
+    ...texts.slice(0, runner),
+    ...rest.filter((text) => ownLine(text) !== undefined),
+    ...rest.filter((text) => ownLine(text) === undefined),
+  ]
 }
 
 // `sh` reads a script while running it, so a hook rewritten in place makes a commit already running
@@ -274,12 +316,13 @@ export const prepare = Command.make(
 
 /**
  * Puts `line` into a hook, so running `prepare` again is idempotent: the line for this directory is
- * updated wherever it sits, duplicates of it are dropped, and everything else is kept, including the
- * commands of other packages in the same repository and whatever the user added.
+ * updated where it sits, or moved up from after husky 4's runner, duplicates of it are dropped, and
+ * everything else is kept, including the commands of other packages in the same repository and
+ * whatever the user added.
  */
 function rewrite(hook: string, line: string, inside: string): string {
   let placed = false
-  const lines = hook.split('\n').flatMap((text) => {
+  const lines = beforeHusky4Runner(hook.split('\n')).flatMap((text) => {
     const own = ownLine(text)
 
     if (own === undefined) {
@@ -311,7 +354,11 @@ function rewrite(hook: string, line: string, inside: string): string {
     0,
   )
   const at =
-    after > 0 ? after : lines.findIndex((text) => !SETUP.test(text) || CONTINUES.test(text))
+    after > 0
+      ? after
+      : lines.findIndex(
+          (text) => !SETUP.test(opaque(text)) || HUSKY_4_RUNNER.test(text) || CONTINUES.test(text),
+        )
 
   if (at === -1) {
     const kept = lines.join('\n')

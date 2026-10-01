@@ -1,6 +1,6 @@
 import type { Project } from '../utils/project'
 import { LAYOUTS, monorepo, report, run } from '../utils/project'
-import { installHusky, prepare } from './utils'
+import { HUSKY_4_BANNER, HUSKY_4_RUNNER, installHusky, prepare } from './utils'
 
 const LINT_CONFIG = { rules: { 'no-var': 'error', 'no-empty-pattern': 'error' } }
 
@@ -8,17 +8,19 @@ const UNFIXABLE = 'export function ignore({}: object): void {}\n'
 
 const TSC_WITHOUT_REFERENCES = '▶ tsc -p tsconfig.json --noEmit'
 
+const TSC_WITH_REFERENCES = '▶ tsc -b tsconfig.json'
+
 function commit(project: Project, message: string) {
   return run(['git', 'commit', '--quiet', `--message=${message}`], { cwd: project.dir })
 }
 
-function blockedByLint(dir: string, tsc: string): string[] {
+function blockedByLint(dir: string, tsc: string, file = 'src/ignore.ts'): string[] {
   return [
     `uncheck staged in ${dir}`,
     '○ sherif skipped, no package.json among the given files',
-    '▶ oxlint --fix --no-error-on-unmatched-pattern src/ignore.ts',
+    `▶ oxlint --fix --no-error-on-unmatched-pattern ${file}`,
     '✘ oxlint failed',
-    '▶ oxfmt --no-error-on-unmatched-pattern src/ignore.ts',
+    `▶ oxfmt --no-error-on-unmatched-pattern ${file}`,
     '✔ oxfmt passed',
     tsc,
     '✔ tsc passed',
@@ -70,6 +72,23 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
     expect(project.git('status', '--porcelain')).toBe('')
   })
 
+  it('blocks a commit before the runner of husky 4, which always exits', async () => {
+    const project = create({ '.oxlintrc.json': LINT_CONFIG })
+    project.write({
+      '.git/hooks/pre-commit': `${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n`,
+      '.git/hooks/husky.sh': 'echo "husky 4 ran" >&2\nexit 0\n',
+    })
+    await prepare(project, [], { cwd: app })
+    project.stage({ [`${app}src/ignore.ts`]: UNFIXABLE })
+
+    const { exitCode, stderr } = await commit(project, 'ignore')
+
+    expect(exitCode).toBe(1)
+    expect(report(stderr)).toEqual(blockedByLint(project.path(app, '.'), tsc))
+    expect(stderr).not.toContain('husky 4 ran')
+    expect(project.git('log', '--format=%s')).toBe('init\n')
+  })
+
   it('runs through the husky 9 dispatcher before the commands of the hook', async () => {
     const project = installHusky(create(), 'echo "husky hook ran"\n')
     await prepare(project, [], { cwd: app })
@@ -102,6 +121,116 @@ describe('committing with the prepared hook of several packages in a monorepo', 
       blockedByLint(project.path('packages/core'), TSC_WITHOUT_REFERENCES),
     )
     expect(project.read('packages/app/src/spaced.ts')).toBe('export const spaced   =   1\n')
+    expect(project.git('log', '--format=%s')).toBe('init\n')
+  })
+
+  it('skips the line of a package the commit leaves alone', async () => {
+    const project = monorepo()
+    await prepare(project, [], { cwd: 'packages/core' })
+    await prepare(project, [], { cwd: 'packages/app' })
+    project.stage({ 'packages/app/src/spaced.ts': 'export var spaced   =   1\n' })
+
+    const { exitCode, stderr } = await commit(project, 'spaced')
+
+    expect(exitCode).toBe(0)
+    expect(report(stderr)).toEqual(
+      fixedAndStaged(project.path('packages/app'), TSC_WITH_REFERENCES),
+    )
+    expect(project.git('log', '--format=%s')).toBe('spaced\ninit\n')
+  })
+
+  it('checks the files of `git commit <paths>` in a package', async () => {
+    const project = monorepo({ '.oxlintrc.json': LINT_CONFIG })
+    await prepare(project, [], { cwd: 'packages/core' })
+    await prepare(project, [], { cwd: 'packages/app' })
+    project.write({ 'packages/app/src/index.ts': UNFIXABLE })
+
+    const { exitCode, stderr } = await run(
+      ['git', 'commit', '--quiet', '--message=ignore', '--', 'packages/app/src/index.ts'],
+      { cwd: project.dir },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(report(stderr)).toEqual(
+      blockedByLint(project.path('packages/app'), TSC_WITH_REFERENCES, 'src/index.ts'),
+    )
+    expect(project.git('log', '--format=%s')).toBe('init\n')
+  })
+
+  it('runs the line of a package the commit only deletes from', async () => {
+    const project = monorepo()
+    await prepare(project, [], { cwd: 'packages/core' })
+    await prepare(project, [], { cwd: 'packages/app' })
+    project.git('rm', '--quiet', 'packages/app/src/index.ts')
+
+    const { exitCode, stderr } = await commit(project, 'remove')
+
+    expect(exitCode).toBe(0)
+    expect(report(stderr)).toEqual([
+      `uncheck staged in ${project.path('packages/app')}`,
+      '○ nothing to check, no staged files',
+    ])
+    expect(project.git('log', '--format=%s')).toBe('remove\ninit\n')
+  })
+
+  it('skips the line of a package that was moved away', async () => {
+    const project = monorepo()
+    await prepare(project, [], { cwd: 'packages/core' })
+    await prepare(project, [], { cwd: 'packages/app' })
+    project.git('mv', 'packages/app', 'packages/web')
+    await prepare(project, [], { cwd: 'packages/web' })
+
+    const { exitCode, stderr } = await commit(project, 'rename')
+
+    expect(exitCode).toBe(0)
+    expect(report(stderr)).toEqual([
+      `uncheck staged in ${project.path('packages/web')}`,
+      '○ sherif skipped, not a workspace root',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern package.json src/index.ts tsconfig.json',
+      '✔ oxlint passed',
+      '▶ oxfmt --no-error-on-unmatched-pattern package.json src/index.ts tsconfig.json',
+      '✔ oxfmt passed',
+      TSC_WITH_REFERENCES,
+      '✔ tsc passed',
+      '✔ all checks passed (oxlint, oxfmt, tsc)',
+    ])
+    expect(project.git('log', '--format=%s')).toBe('rename\ninit\n')
+  })
+
+  it('skips the line of a package a sparse checkout leaves out', async () => {
+    const project = monorepo()
+    await prepare(project, [], { cwd: 'packages/core' })
+    await prepare(project, [], { cwd: 'packages/app' })
+    project.git('sparse-checkout', 'set', 'packages/core')
+    project.stage({ 'packages/core/src/spaced.ts': 'export var spaced   =   1\n' })
+
+    const { exitCode, stderr } = await commit(project, 'spaced')
+
+    expect(exitCode).toBe(0)
+    expect(report(stderr)).toEqual(
+      fixedAndStaged(project.path('packages/core'), TSC_WITHOUT_REFERENCES),
+    )
+    expect(project.git('log', '--format=%s')).toBe('spaced\ninit\n')
+  })
+
+  it('checks a package whose folder name git could read as pathspec magic', async () => {
+    const project = monorepo({ '.oxlintrc.json': LINT_CONFIG })
+    project.stage({ ':docs/src/ignore.ts': UNFIXABLE })
+    await prepare(project, [], { cwd: ':docs' })
+
+    const { exitCode, stderr } = await commit(project, 'ignore')
+
+    expect(exitCode).toBe(1)
+    expect(report(stderr)).toEqual([
+      `uncheck staged in ${project.path(':docs')}`,
+      '○ sherif skipped, no package.json among the given files',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern src/ignore.ts',
+      '✘ oxlint failed',
+      '▶ oxfmt --no-error-on-unmatched-pattern src/ignore.ts',
+      '✔ oxfmt passed',
+      '○ tsc skipped, no tsconfig.json found',
+      '✘ 1 of 2 checks failed: oxlint',
+    ])
     expect(project.git('log', '--format=%s')).toBe('init\n')
   })
 })

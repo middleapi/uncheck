@@ -157,14 +157,14 @@ Run uncheck from the workspace root, the folder whose `package.json` has `worksp
 - Every other project is checked with `tsc -p --noEmit`, a few at a time.
 - When only some files are checked, tsc runs just the projects that include them, and the projects that reference those. A changed tsconfig selects every project that extends it.
 
-**Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags:
+**Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags. A package's line runs only when the commit changes files in that package:
 
 ```sh
 #!/bin/sh
 # Written by `uncheck prepare`, run it again to change the command.
 pnpm exec uncheck staged --fix || exit 1
-(cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1
-(cd "packages/b" && pnpm exec uncheck staged --fix) || exit 1
+git --literal-pathspecs diff --cached --quiet -- "packages/a" || [ ! -d "packages/a" ] || (cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1
+git --literal-pathspecs diff --cached --quiet -- "packages/b" || [ ! -d "packages/b" ] || (cd "packages/b" && pnpm exec uncheck staged --fix) || exit 1
 ```
 
 An agent hook installed from a package folder checks only that package, wherever the agent moves to.

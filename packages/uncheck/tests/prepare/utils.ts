@@ -14,7 +14,11 @@ export function prepare(
 }
 
 export function hookLine(app: string, command = COMMAND): string {
-  return app === '' ? `${command} || exit 1` : `(cd "${app.slice(0, -1)}" && ${command}) || exit 1`
+  const folder = app.slice(0, -1)
+
+  return app === ''
+    ? `${command} || exit 1`
+    : `git --literal-pathspecs diff --cached --quiet -- "${folder}" || [ ! -d "${folder}" ] || (cd "${folder}" && ${command}) || exit 1`
 }
 
 export function shownHook(project: Project, app: string, hook = '.git/hooks/pre-commit'): string {
@@ -39,6 +43,19 @@ export const DISPATCHER = [
   'export PATH="node_modules/.bin:$PATH"',
   'sh -e "$s" "$@"',
   'exit $?',
+  '',
+].join('\n')
+
+export const HUSKY_4_RUNNER = '. "$(dirname "$0")/husky.sh"'
+
+export const HUSKY_4_BANNER = [
+  '#!/bin/sh',
+  '# husky',
+  '',
+  '# Created by Husky v4.3.8 (https://github.com/typicode/husky#readme)',
+  '#   At: 1/20/2021, 3:58:58 PM',
+  '#   From: /home/me/my-app (https://github.com/me/my-app#readme)',
+  '',
   '',
 ].join('\n')
 
