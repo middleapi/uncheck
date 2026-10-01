@@ -50,13 +50,29 @@ describe('tsc across the packages of a workspace', () => {
         peerDependencies: { react: '*' },
       },
       'packages/web/tsconfig.json': PACKAGE_CONFIG,
+      'packages/ui/package.json': {
+        name: '@repo/ui',
+        version: '1.0.0',
+        private: true,
+        peerDependencies: { '@repo/core': 'workspace:*' },
+      },
+      'packages/ui/tsconfig.json': PACKAGE_CONFIG,
+      'packages/cli/package.json': {
+        name: '@repo/cli',
+        version: '1.0.0',
+        private: true,
+        optionalDependencies: { '@repo/core': 'workspace:*' },
+      },
+      'packages/cli/tsconfig.json': PACKAGE_CONFIG,
       'packages/broken/package.json': 'oops\n',
     })
 
     expect(await tscPlan(project, '', ['packages/core/src/index.ts'])).toEqual([
       '▶ tsc -p packages/app/tsconfig.json --noEmit',
+      '▶ tsc -p packages/cli/tsconfig.json --noEmit',
       '▶ tsc -p packages/core/tsconfig.json --noEmit',
       '▶ tsc -p packages/e2e/tsconfig.json --noEmit',
+      '▶ tsc -p packages/ui/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, '', ['packages/app/src/index.ts'])).toEqual([
       '▶ tsc -p packages/app/tsconfig.json --noEmit',
@@ -64,6 +80,17 @@ describe('tsc across the packages of a workspace', () => {
     ])
     expect(await tscPlan(project, '', ['packages/web/src/index.ts'])).toEqual([
       '▶ tsc -p packages/web/tsconfig.json --noEmit',
+    ])
+  })
+
+  it('builds the configs that reference the config of a package depending on a changed one', async () => {
+    const project = withFakeTsc(linkedMonorepo, {
+      'tsconfig.json': { files: [], references: [{ path: 'packages/app' }] },
+    })
+
+    expect(await tscPlan(project, '', ['packages/core/src/index.ts'])).toEqual([
+      '▶ tsc -b tsconfig.json',
+      '▶ tsc -p packages/core/tsconfig.json --noEmit',
     ])
   })
 

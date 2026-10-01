@@ -70,13 +70,7 @@ export const tsc: Check = {
     )
 
     const inherited =
-      tracked.length > 0
-        ? undefined
-        : Option.getOrUndefined(
-            yield* firstFile(
-              ancestors(path, path.dirname(cwd)).map((dir) => path.join(dir, 'tsconfig.json')),
-            ),
-          )
+      tracked.length > 0 ? undefined : Option.getOrUndefined(yield* tsconfigAboveInRepository(cwd))
 
     if (inherited === undefined && tracked.length === 0) {
       return yield* Effect.fail(new NothingToCheck({ reason: 'no tsconfig.json found' }))
@@ -181,7 +175,29 @@ export const tsc: Check = {
       }
     }
 
-    const roots = members.filter((member) => !referenced.has(member) && affected.has(member))
+    const memberInputs = new Map(
+      yield* Effect.forEach(
+        members,
+        (configPath) =>
+          Effect.map(loadTsconfigInputs(configPath), (inputs) => [configPath, inputs] as const),
+        { concurrency: 'unbounded' },
+      ),
+    )
+    // `tsc -b` on these would write JavaScript next to the sources of a project, and Vite, for one,
+    // then loads a stale vite.config.js instead of vite.config.ts.
+    const buildsBesideSources = new Set(
+      members.filter((member) => {
+        const inputs = memberInputs.get(member)!
+        return hasInputs(inputs) && inputs.emitsBesideSources
+      }),
+    )
+
+    for (const configPath of buildsBesideSources) {
+      for (const dependent of dependents.get(configPath) ?? []) {
+        buildsBesideSources.add(dependent)
+      }
+    }
+
     const extended = yield* extendedConfigs([...references.keys()])
     const allFiles = yield* projectFiles
     const standalone = yield* Effect.filter(
@@ -190,48 +206,47 @@ export const tsc: Check = {
         Effect.map(isSharedBase(configPath, extended, cwd, allFiles), (shared) => !shared),
       { concurrency: 'unbounded' },
     )
-    const built: string[] = []
+    const built = new Set(
+      members.filter(
+        (member) =>
+          !referenced.has(member) && affected.has(member) && !buildsBesideSources.has(member),
+      ),
+    )
     const checkedAlone = new Map<string, ReadonlyArray<string>>(
       standalone.map((configPath) => [configPath, []]),
     )
 
-    for (const root of roots) {
-      const graph = new Set([root])
+    for (const member of members) {
+      if (affected.has(member) && buildsBesideSources.has(member)) {
+        const inputs = memberInputs.get(member)!
+        const checked = hasInputs(inputs)
 
-      for (const configPath of graph) {
-        for (const referencedConfig of references.get(configPath)!) {
-          if (references.has(referencedConfig)) {
-            graph.add(referencedConfig)
+        if (checked) {
+          checkedAlone.set(member, inputs.composite ? WITHOUT_BUILD_INFO : [])
+        }
+
+        // `-p` reads a referenced project through the declarations on disk, which a fresh checkout
+        // lacks and an earlier build left stale.
+        for (const referencedConfig of references.get(member)!) {
+          if (
+            memberInputs.has(referencedConfig) &&
+            !buildsBesideSources.has(referencedConfig) &&
+            (checked || affected.has(referencedConfig))
+          ) {
+            built.add(referencedConfig)
           }
         }
-      }
-
-      const graphInputs = yield* Effect.forEach(
-        graph,
-        (configPath) =>
-          Effect.map(loadTsconfigInputs(configPath), (inputs) => ({ configPath, inputs })),
-        { concurrency: 'unbounded' },
-      )
-
-      // `tsc -b` would write JavaScript next to the sources of such a project, and Vite, for one,
-      // then loads a stale vite.config.js instead of vite.config.ts.
-      if (graphInputs.some(({ inputs }) => hasInputs(inputs) && inputs.emitsBesideSources)) {
-        for (const { configPath, inputs } of graphInputs) {
-          if (affected.has(configPath) && hasInputs(inputs)) {
-            checkedAlone.set(configPath, inputs.composite ? WITHOUT_BUILD_INFO : [])
-          }
-        }
-      } else {
-        built.push(root)
       }
     }
 
-    if (built.length === 0 && checkedAlone.size === 0) {
+    if (built.size === 0 && checkedAlone.size === 0) {
       return yield* Effect.fail(notCovered(typescript, files))
     }
 
     return [
-      ...(built.length > 0 ? [{ bin: typescript, args: ['-b', ...built.map(shown)] }] : []),
+      ...(built.size > 0
+        ? [{ bin: typescript, args: ['-b', ...[...built].sort().map(shown)] }]
+        : []),
       // `-p` would emit JavaScript next to sources that set no `noEmit`.
       ...[...checkedAlone.keys()].sort().map((configPath) => ({
         bin: typescript,
@@ -241,6 +256,21 @@ export const tsc: Check = {
     ]
   }),
 }
+
+const tsconfigAboveInRepository = Effect.fn(function* (cwd: string) {
+  const path = yield* Path.Path
+  const dirs = ancestors(path, cwd)
+  // A tsconfig.json above the repository, say in the home folder, belongs to another project.
+  const top = yield* Effect.findFirst(dirs, (dir) =>
+    Effect.map(fileKind(path.join(dir, '.git')), (kind) => kind !== undefined),
+  )
+  const searched = Option.match(top, {
+    onNone: () => [],
+    onSome: (dir) => dirs.slice(1, dirs.indexOf(dir) + 1),
+  })
+
+  return yield* firstFile(searched.map((dir) => path.join(dir, 'tsconfig.json')))
+})
 
 /** The configs other configs extend, by their real path, as an extends through a workspace link names the link. */
 const extendedConfigs = Effect.fn(function* (configPaths: ReadonlyArray<string>) {

@@ -1,4 +1,12 @@
-import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, report, run, singleRepo } from '../utils/project'
+import {
+  git,
+  LAYOUTS,
+  monorepo,
+  PERMISSIONS_ENFORCED,
+  report,
+  run,
+  singleRepo,
+} from '../utils/project'
 import {
   ALLOW_JS,
   CLEAN_CODE,
@@ -151,6 +159,24 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       '▶ tsc -p scripts/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['web/src/index.ts'])).toEqual(['▶ tsc -b tsconfig.json'])
+  })
+})
+
+describe('tsc in a folder below a tsconfig.json of another project', () => {
+  it('never uses a tsconfig.json above the git repository, or above a folder outside one', async () => {
+    const project = withFakeTsc(
+      singleRepo,
+      { 'tsconfig.json': {}, 'repo/src/index.ts': '' },
+      { git: 'none' },
+    )
+    const notFound = ['○ tsc skipped, no tsconfig.json found']
+
+    expect(await tscPlan(project, 'repo/src')).toEqual(notFound)
+
+    git(project.path('repo'), ['init', '--quiet'])
+
+    expect(await tscPlan(project, 'repo')).toEqual(notFound)
+    expect(await tscPlan(project, 'repo/src', ['index.ts'])).toEqual(notFound)
   })
 })
 

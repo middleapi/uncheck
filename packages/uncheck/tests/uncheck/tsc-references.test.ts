@@ -52,25 +52,30 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
     expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
   })
 
-  it('checks the projects of a references graph with -p when tsc -b would write JavaScript next to their sources', async () => {
+  it('checks with -p the projects whose tsc -b would write JavaScript next to sources, after building the projects they reference', async () => {
     const project = withFakeTsc(create, {
-      [`${app}tsconfig.json`]: { files: [], references: [{ path: './web' }, { path: './node' }] },
+      [`${app}tsconfig.json`]: {
+        files: [],
+        references: [{ path: './web' }, { path: './node' }, { path: './shared' }],
+      },
       [`${app}tsconfig.base.json`]: NO_EMIT,
       [`${app}web/tsconfig.json`]: {
         ...NO_EMIT,
         include: ['src'],
-        references: [{ path: '../shared' }],
+        references: [{ path: '../node' }, { path: '../ui' }, { path: '../legacy' }],
       },
       [`${app}node/tsconfig.json`]: {
         extends: '../tsconfig.base.json',
         compilerOptions: { composite: true, noEmit: false },
         include: ['vite.config.ts'],
       },
-      [`${app}shared/tsconfig.json`]: {
+      [`${app}ui/tsconfig.json`]: {
         compilerOptions: { composite: true, outDir: 'dist' },
         include: ['src'],
+        references: [{ path: '../shared' }],
       },
-      [`${app}lib/tsconfig.json`]: {
+      [`${app}shared/tsconfig.json`]: { ...OUT_DIR, include: ['src'] },
+      [`${app}docs/tsconfig.json`]: {
         ...OUT_DIR,
         include: ['src'],
         references: [{ path: '../shared' }],
@@ -78,17 +83,17 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
     })
 
     expect(await tscPlan(project, app)).toEqual([
-      '▶ tsc -b lib/tsconfig.json',
+      '▶ tsc -b docs/tsconfig.json shared/tsconfig.json ui/tsconfig.json',
       '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
-      '▶ tsc -p shared/tsconfig.json --noEmit --composite false --declaration',
       '▶ tsc -p web/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['node/vite.config.ts'])).toEqual([
+      '▶ tsc -b ui/tsconfig.json',
       '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p web/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['shared/src/index.ts'])).toEqual([
-      '▶ tsc -b lib/tsconfig.json',
-      '▶ tsc -p shared/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -b docs/tsconfig.json shared/tsconfig.json ui/tsconfig.json',
       '▶ tsc -p web/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['tsconfig.json'])).toEqual([NOT_COVERED])
@@ -301,7 +306,7 @@ describe('tsc project references with the real compiler in a single repo', () =>
     rootDir: 'src',
   }
 
-  it('checks each project of a references graph holding a Vite 4 config with -p, writing no file', async () => {
+  it('builds the library a Vite 4 app imports before checking the app with -p, writing no JavaScript', async () => {
     const project = singleRepo({
       'tsconfig.node.json': {
         compilerOptions: {
@@ -316,6 +321,8 @@ describe('tsc project references with the real compiler in a single repo', () =>
       'vite.config.ts': 'export default { base: "/" };\n',
       'lib/tsconfig.json': { compilerOptions: COMPOSITE, include: ['src'] },
       'lib/src/index.ts': 'export const one = 1;\n',
+      'src/index.ts':
+        'import { one } from "../lib/src/index";\n\nexport const two: number = one + 1;\n',
     })
       .update('tsconfig.json', (config) => ({
         ...config,
@@ -323,7 +330,7 @@ describe('tsc project references with the real compiler in a single repo', () =>
       }))
       .commit()
     const plan = [
-      '▶ tsc -p lib/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -b lib/tsconfig.json',
       '▶ tsc -p tsconfig.json --noEmit',
       '▶ tsc -p tsconfig.node.json --noEmit --composite false --declaration',
     ]
@@ -338,9 +345,14 @@ describe('tsc project references with the real compiler in a single repo', () =>
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
     ])
-    expect(project.git('status', '--porcelain', '--ignored')).toBe('!! node_modules/\n')
+    expect(project.git('status', '--porcelain', '--ignored')).toBe(
+      '!! lib/dist/\n!! lib/tsconfig.tsbuildinfo\n!! node_modules/\n',
+    )
 
-    project.write({ 'vite.config.ts': CODE_WITH_TYPE_ERROR })
+    project.write({
+      'lib/src/index.ts': 'export const one = "1";\n',
+      'vite.config.ts': CODE_WITH_TYPE_ERROR,
+    })
 
     const failed = await project.uncheck(['--only=tsc'])
 
@@ -353,8 +365,12 @@ describe('tsc project references with the real compiler in a single repo', () =>
       '✘ 1 of 1 checks failed: tsc',
     ])
     expect(failed.stdout).toContain(
+      "src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+    )
+    expect(failed.stdout).toContain(
       "vite.config.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
     )
+    expect(project.exists('vite.config.js')).toBe(false)
   })
 
   it('builds roots in folders starting with - or @, which tsc would read as an option or a file of arguments', async () => {

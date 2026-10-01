@@ -153,10 +153,10 @@ Run uncheck from the workspace root, the folder whose `package.json` has `worksp
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`:
 
-- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations. If one of them sets none of `noEmit`, `emitDeclarationOnly`, `outDir` and `outFile`, `tsc -b` would write JavaScript next to its sources, so each project of that graph is checked with `tsc -p --noEmit` instead.
+- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations. A project that sets none of `noEmit`, `emitDeclarationOnly`, `outDir` and `outFile` would get JavaScript next to its sources, so it and the projects that reference it are checked with `tsc -p --noEmit` instead, after `tsc -b` builds the projects they reference. These cannot import each other: tsc reports TS6305 until you build them.
 - Every other project is checked with `tsc -p --noEmit`, a few at a time. A `tsconfig.json` that other configs extend and that includes no files is a shared base, not a project.
 - When only some files are checked, tsc runs just the projects that include them, the projects that reference those, and the projects of the packages that depend on theirs. A changed tsconfig selects every project that extends it, and a deleted or moved file the projects that included it.
-- In a folder with no `tsconfig.json`, such as a package that shares the root one, uncheck uses the nearest one above it, as tsc does, when it includes files of that folder.
+- In a folder with no `tsconfig.json`, such as a package that shares the root one, uncheck uses the nearest one above it in the same git repository, when it includes files of that folder.
 
 **Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags:
 
