@@ -203,7 +203,7 @@ export default defineConfig({ ...middleapi })
 }
 ```
 
-The presets need oxlint 1.70+, oxfmt 0.41+ and TypeScript 5.6+. The tsconfig presets load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
+The presets need oxlint 1.70+, oxfmt 0.43+ and TypeScript 5.6+. The tsconfig presets load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
 
 ## Troubleshooting
 
