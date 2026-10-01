@@ -102,8 +102,9 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint', routes])
 
     expect(exitCode).toBe(1)
-    expect(stdout).toContain(`,-[${routes}/linked/util.ts:1:1]`)
-    expect(stdout).toContain(`,-[${routes}/shared/util.ts:1:1]`)
+    expect(stdout).toContain(`${routes}/linked/util.ts:1:1`)
+    expect(stdout).toContain(`${routes}/shared/util.ts:1:1`)
+    expect(stdout).toContain('eslint(no-var)')
     expect(selectedReport(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       `▶ oxlint --no-error-on-unmatched-pattern ${routes}/linked ${routes}/shared/util.ts`,
