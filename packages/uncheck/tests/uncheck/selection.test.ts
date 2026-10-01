@@ -1,4 +1,11 @@
-import { cliError, LAYOUTS, project as bareProject, report, singleRepo } from '../utils/project'
+import {
+  cliError,
+  LAYOUTS,
+  project as bareProject,
+  report,
+  singleRepo,
+  TOOLS,
+} from '../utils/project'
 import { layoutChecks, NOT_COVERED, SKIPPED_BESIDE_TSC, UNFORMATTED_CODE } from './utils'
 
 describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc }) => {
@@ -143,6 +150,39 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     ])
     expect(exitCode).toBe(0)
   })
+
+  it.each([
+    { outcome: 'passes', typescript: 'installed', tools: TOOLS, mark: '○', expectedExitCode: 0 },
+    {
+      outcome: 'fails',
+      typescript: 'not installed',
+      tools: TOOLS.filter((tool) => tool !== 'typescript'),
+      mark: '✘',
+      expectedExitCode: 1,
+    },
+  ])(
+    '$outcome on a source file no tsconfig.json covers when typescript is $typescript and unmatched patterns are allowed',
+    async ({ tools, mark, expectedExitCode }) => {
+      const project = create(
+        { [`${app}scripts/release.ts`]: 'export const release = 1;\n' },
+        { tools },
+      )
+
+      const { exitCode, stdout } = await project.uncheck([
+        '--no-error-on-unmatched-pattern',
+        '--only=tsc',
+        `${app}scripts/release.ts`,
+      ])
+
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        ...SKIPPED_BESIDE_TSC,
+        NOT_COVERED,
+        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files`,
+      ])
+      expect(exitCode).toBe(expectedExitCode)
+    },
+  )
 })
 
 describe('uncheck check selection', () => {

@@ -183,10 +183,10 @@ export const checkPaths = Effect.fn(function* (
 
       return plan({ cwd, fix: fix && appliesFixes(fixes), files, deleted, projectFiles }).pipe(
         Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
-        Effect.catchTag('NothingToCheck', ({ reason, unrelated }) =>
+        Effect.catchTag('NothingToCheck', ({ reason, unrelated, evenIfRequired }) =>
           Effect.succeed<CheckPlan>({
             name,
-            status: required.includes(name) ? 'failed' : 'skipped',
+            status: required.includes(name) && evenIfRequired !== true ? 'failed' : 'skipped',
             reason,
             unrelated,
           }),

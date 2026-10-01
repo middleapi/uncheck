@@ -14,10 +14,11 @@ export const oxlint: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not installed' }))
     }
 
-    // An empty list makes no batch, so the check would pass without running.
+    // An empty list makes no batch, so the check would pass without running. Kept skipped when
+    // required, or `--require=oxlint` would block every commit that only deletes files.
     if (files?.length === 0) {
       return yield* Effect.fail(
-        new NothingToCheck({ reason: 'only deleted files', unrelated: true }),
+        new NothingToCheck({ reason: 'only deleted files', unrelated: true, evenIfRequired: true }),
       )
     }
 

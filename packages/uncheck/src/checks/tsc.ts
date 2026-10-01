@@ -77,8 +77,7 @@ export const tsc: Check = {
       }
     }
 
-    const selected =
-      targets === undefined ? tsconfigs : yield* selectTsconfigs([...references.keys()], targets)
+    const selected = targets === undefined ? tsconfigs : yield* selectTsconfigs(references, targets)
 
     if (selected.length === 0) {
       return yield* Effect.fail(notCovered(typescript))
@@ -172,7 +171,7 @@ function findCycle(
 }
 
 const selectTsconfigs = Effect.fn(function* (
-  candidates: ReadonlyArray<string>,
+  references: ReadonlyMap<string, ReadonlyArray<string>>,
   files: ReadonlyArray<string>,
 ) {
   const jsonFiles = yield* Effect.forEach(
@@ -182,18 +181,21 @@ const selectTsconfigs = Effect.fn(function* (
   )
 
   return yield* Effect.filter(
-    candidates,
+    [...references.keys()],
     (candidate) =>
-      Effect.flatMap(loadTsconfigInputs(candidate), (inputs) =>
-        files.some((file) => includesFile(inputs, file))
-          ? Effect.succeed(true)
-          : jsonFiles.length === 0
-            ? Effect.succeed(false)
-            : Effect.map(
-                Effect.forEach(inputs.configs, realPath, { concurrency: 'unbounded' }),
-                (configs) => configs.some((config) => jsonFiles.includes(config)),
-              ),
-      ),
+      // A deleted config is no candidate, so only the configs that reference it lead to its dependents.
+      references.get(candidate)!.some((config) => files.includes(config))
+        ? Effect.succeed(true)
+        : Effect.flatMap(loadTsconfigInputs(candidate), (inputs) =>
+            files.some((file) => includesFile(inputs, file))
+              ? Effect.succeed(true)
+              : jsonFiles.length === 0
+                ? Effect.succeed(false)
+                : Effect.map(
+                    Effect.forEach(inputs.configs, realPath, { concurrency: 'unbounded' }),
+                    (configs) => configs.some((config) => jsonFiles.includes(config)),
+                  ),
+          ),
     { concurrency: 'unbounded' },
   )
 })

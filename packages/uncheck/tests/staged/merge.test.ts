@@ -1,5 +1,5 @@
-import { cliError, LAYOUTS, report, run } from '../utils/project'
-import { commitOnSide, folderOf, inIndex, stagePartially, VERSIONS } from './utils'
+import { cliError, LAYOUTS, report, run, singleRepo } from '../utils/project'
+import { commitOnSide, folderOf, inIndex, stagePartially, UTILS_NOT_FOUND, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -111,5 +111,28 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(project.read(file)).toBe(VERSIONS.unstaged)
     expect(inIndex(project, file)).toBe(VERSIONS.staged)
+  })
+})
+
+describe('uncheck staged during a merge in a single repo', () => {
+  it('typechecks a deletion of its own that the branch being merged in keeps', async () => {
+    const project = commitOnSide(singleRepo(), { 'src/theirs.ts': 'export const theirs = 1;\n' })
+
+    project.git('merge', '--quiet', '--no-commit', '--no-ff', 'side')
+    project.git('rm', '--quiet', '--', 'src/utils.ts')
+
+    const { exitCode, stdout } = await project.uncheck(['staged'])
+
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      '○ sherif skipped, no package.json among the given files',
+      '○ oxlint skipped, only deleted files',
+      '○ oxfmt skipped, only deleted files',
+      '▶ tsc -p tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(stdout).toContain(UTILS_NOT_FOUND)
+    expect(exitCode).toBe(1)
   })
 })
