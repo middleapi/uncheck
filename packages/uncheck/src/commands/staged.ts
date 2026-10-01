@@ -274,7 +274,7 @@ interface SetAside {
   readonly base: string
 }
 
-/** Runs `git <args> -- <files>` in batches. Without files, `reset` would reset every path. */
+/** Runs `git <args> -- <files>` in batches, and nothing without files. */
 function gitEach(
   cwd: string,
   args: ReadonlyArray<string>,
