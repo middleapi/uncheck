@@ -2,7 +2,17 @@ import { Buffer } from 'node:buffer'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { LAYOUTS, monorepo } from '../utils/project'
-import { COMMAND, HEADER, hookLine, notWritten, prepare, shownHook, written } from './utils'
+import {
+  COMMAND,
+  HEADER,
+  hookLine,
+  HUSKY_4_BANNER,
+  HUSKY_4_RUNNER,
+  notWritten,
+  prepare,
+  shownHook,
+  written,
+} from './utils'
 
 const HOOK = '.git/hooks/pre-commit'
 
@@ -93,9 +103,67 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
   })
 
   it.each([
+    ['escaped double quotes', 'export A="\\"" && exec lint B="\\""'],
+    ['double quotes between single quotes', "export A='\"' && exec lint B='\"'"],
+  ])('runs before an export that goes on to run a command, with %s', async (_, command) => {
+    const { hook } = await prepareHook(`#!/bin/sh\n${command}\n`)
+
+    expect(hook).toBe(`#!/bin/sh\n${line}\n${command}\n`)
+  })
+
+  it('runs after the lines of nvm that set up its PATH, whose quotes hold commands', async () => {
+    const setup = [
+      '#!/bin/sh',
+      // oxlint-disable-next-line no-template-curly-in-string
+      'export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"',
+      '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"',
+    ].join('\n')
+
+    const { hook } = await prepareHook(`${setup}\nnpx lint-staged\n`)
+
+    expect(hook).toBe(`${setup}\n${line}\nnpx lint-staged\n`)
+  })
+
+  it('runs before the runner of husky 4, which always exits', async () => {
+    const { hook } = await prepareHook(`${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n`)
+
+    expect(hook).toBe(`${HUSKY_4_BANNER}${line}\n${HUSKY_4_RUNNER}\n`)
+  })
+
+  it('moves the line an older version wrote after the runner of husky 4 before it', async () => {
+    const old = app === '' ? line : `(cd "${folder}" && ${COMMAND}) || exit 1`
+
+    const { stdout, hook, project } = await prepareHook(
+      `${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n${old}\n`,
+    )
+
+    expect(stdout).toBe(written(shownHook(project, app), 'updated'))
+    expect(hook).toBe(`${HUSKY_4_BANNER}${line}\n${HUSKY_4_RUNNER}\n`)
+
+    const again = await prepare(project, [], { cwd: app })
+
+    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+  })
+
+  it('keeps its line after a block that only runs the husky 4 runner when it exists', async () => {
+    const existing = `#!/bin/sh\nif [ -f "$(dirname "$0")/husky.sh" ]; then\n  ${HUSKY_4_RUNNER}\nfi\n${line}\n`
+
+    const { stdout, hook, project } = await prepareHook(existing)
+
+    expect(stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    expect(hook).toBe(existing)
+  })
+
+  it.each([
     ['a trailing backslash', 'export PATH=/opt/bin:\\\n/usr/bin:$PATH\n'],
     ['an open double quote', 'MESSAGE="checks\n. before committing"\n'],
     ['an open single quote', "MESSAGE='checks\n. before committing'\n"],
+    ['an open command substitution', 'FILES=$(\n  git diff --cached --name-only\n)\n'],
+    [
+      'a here-document in a command substitution',
+      'export MESSAGE=$(cat <<EOF\nchecks before committing\nEOF\n)\n',
+    ],
+    ['an open backtick', 'FILES=`\n  git diff --cached --name-only\n`\n'],
   ])('runs before a setup line continued by %s', async (_, setup) => {
     const { hook } = await prepareHook(`#!/bin/sh\n${setup}npx lint-staged\n`)
 
@@ -187,6 +255,65 @@ describe('prepare with an existing hook in a monorepo', () => {
     )
   })
 
+  it('rewrites the lines the previous version wrote in place, then leaves them unchanged', async () => {
+    const project = monorepo().write({
+      [HOOK]: [
+        '#!/bin/sh',
+        '(cd "packages/core" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1',
+        '(cd "packages/app" && pnpm exec uncheck staged --fix) || exit 1',
+        'pnpm test',
+        '',
+      ].join('\n'),
+    })
+
+    const { stdout } = await prepare(project, [], { cwd: 'packages/app' })
+
+    expect(stdout).toBe(written(project.path(HOOK), 'updated'))
+    expect(project.read(HOOK)).toBe(
+      [
+        '#!/bin/sh',
+        hookLine('packages/core/', `${COMMAND} --only=oxlint`),
+        hookLine('packages/app/'),
+        'pnpm test',
+        '',
+      ].join('\n'),
+    )
+
+    const again = await prepare(project, [], { cwd: 'packages/app' })
+
+    expect(again.stdout).toBe(written(project.path(HOOK), 'unchanged'))
+  })
+
+  it('moves the lines of the other packages after the runner of husky 4 before it', async () => {
+    const core = hookLine('packages/core/')
+    const project = monorepo().write({
+      [HOOK]: `${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n${core}\n`,
+    })
+
+    await prepare(project)
+
+    expect(project.read(HOOK)).toBe(
+      `${HUSKY_4_BANNER}${core}\n${hookLine('')}\n${HUSKY_4_RUNNER}\n`,
+    )
+  })
+
+  it('leaves alone the lines that enter a package with --cwd and adds its own', async () => {
+    const lines = [
+      `${COMMAND} --cwd=packages/core || exit 1`,
+      `${COMMAND} --only=oxlint --cwd=packages/app || exit 1`,
+    ]
+    const project = monorepo().write({ [HOOK]: `#!/bin/sh\n${lines.join('\n')}\n` })
+
+    const { stdout } = await prepare(project)
+
+    expect(stdout).toBe(written(HOOK, 'updated'))
+    expect(project.read(HOOK)).toBe(`#!/bin/sh\n${hookLine('')}\n${lines.join('\n')}\n`)
+
+    const again = await prepare(project)
+
+    expect(again.stdout).toBe(written(HOOK, 'unchanged'))
+  })
+
   it('rewrites the lines older versions wrote for the other packages', async () => {
     const project = monorepo().write({
       [HOOK]: [
@@ -207,8 +334,8 @@ describe('prepare with an existing hook in a monorepo', () => {
         '#!/bin/sh',
         'pnpm exec uncheck staged --fix || exit 1',
         'pnpm test',
-        '(cd "packages/core" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1',
-        '(cd "packages/app" && pnpm exec uncheck staged) || exit 1',
+        'git --literal-pathspecs diff --cached --quiet -- "packages/core" || [ ! -d "packages/core" ] || (cd "packages/core" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1',
+        'git --literal-pathspecs diff --cached --quiet -- "packages/app" || [ ! -d "packages/app" ] || (cd "packages/app" && pnpm exec uncheck staged) || exit 1',
         '',
       ].join('\n'),
     )

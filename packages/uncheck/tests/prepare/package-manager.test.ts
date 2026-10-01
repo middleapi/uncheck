@@ -97,8 +97,8 @@ describe('prepare picking the package manager in the packages of a monorepo', ()
     expect(project.read('.git/hooks/pre-commit')).toBe(
       [
         HEADER,
-        '(cd "packages/app" && bunx --no-install uncheck staged --fix) || exit 1\n',
-        '(cd "packages/core" && pnpm exec uncheck staged --fix) || exit 1\n',
+        'git --literal-pathspecs diff --cached --quiet -- "packages/app" || [ ! -d "packages/app" ] || (cd "packages/app" && bunx --no-install uncheck staged --fix) || exit 1\n',
+        'git --literal-pathspecs diff --cached --quiet -- "packages/core" || [ ! -d "packages/core" ] || (cd "packages/core" && pnpm exec uncheck staged --fix) || exit 1\n',
       ].join(''),
     )
   })

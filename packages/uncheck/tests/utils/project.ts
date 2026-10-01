@@ -57,7 +57,7 @@ const PACKAGE = fileURLToPath(new URL('../..', import.meta.url))
 const REGISTER = fileURLToPath(new URL('register.ts', import.meta.url))
 export const CLI = [process.execPath, '--import', REGISTER, join(PACKAGE, 'src/bin.ts')] as const
 
-/** What the CLI looks for in every folder above a project, so one above the tests leaks into them all. */
+/** What the CLI and the tools it runs read above a project, so one above the tests leaks into them all. */
 const PROJECT_MARKERS = [
   'package.json',
   'node_modules',
@@ -68,6 +68,15 @@ const PROJECT_MARKERS = [
   'bun.lock',
   'bun.lockb',
   'package-lock.json',
+  '.editorconfig',
+  '.oxfmtrc.json',
+  '.oxfmtrc.jsonc',
+  'oxfmt.config.ts',
+  'oxfmt.config.mts',
+  '.oxlintrc.json',
+  '.oxlintrc.jsonc',
+  'oxlint.config.ts',
+  'oxlint.config.mts',
 ]
 
 for (let dir = realpathSync(tmpdir()); ; dir = dirname(dir)) {
@@ -134,6 +143,19 @@ function inside(path: string): string {
   return path
 }
 
+// Tools are linked from the shared pnpm store, which a change made through the link would corrupt.
+function landsInside(path: string): string {
+  let existing = path
+
+  while (!existsSync(existing)) {
+    existing = dirname(existing)
+  }
+
+  inside(realpathSync(existing))
+
+  return path
+}
+
 export function temporaryDirectory(): string {
   return mkdtempSync(join(ROOT, 'tmp-'))
 }
@@ -153,6 +175,8 @@ export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
     TERM: 'xterm-256color',
     GIT_CEILING_DIRECTORIES: ROOT,
     GIT_CONFIG_GLOBAL: GIT_CONFIG,
+    // git still reads ~/.config/git/ignore and attributes when GIT_CONFIG_GLOBAL points elsewhere.
+    XDG_CONFIG_HOME: join(ROOT, 'config'),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'uncheck',
     GIT_AUTHOR_EMAIL: 'uncheck@example.com',
@@ -226,10 +250,11 @@ export function runInTerminal(
   command: ReadonlyArray<string>,
   { cwd, env, keys = [], waitFor }: Omit<TerminalOptions, 'cwd'> & { readonly cwd: string },
 ): Promise<Run> {
+  // Without exec, the shell that script starts also gets Ctrl-C and exits 130 whatever the command does.
   const args =
     process.platform === 'darwin'
       ? ['-q', '/dev/null', ...command]
-      : ['-qfec', command.map(shellQuote).join(' '), '/dev/null']
+      : ['-qfec', `exec ${command.map(shellQuote).join(' ')}`, '/dev/null']
 
   return new Promise((resolve, reject) => {
     const child = spawn('script', args, { cwd: inside(cwd), env: environment(env) })
@@ -295,13 +320,13 @@ export class Project {
       const target = this.path(file)
 
       if (content === null) {
+        landsInside(dirname(target))
         rmSync(target, { recursive: true, force: true })
         continue
       }
 
+      landsInside(target)
       mkdirSync(dirname(target), { recursive: true })
-      // Tools are linked from the shared pnpm store, which a write through the link would corrupt.
-      inside(realpathSync(existsSync(target) ? target : dirname(target)))
       writeFileSync(target, typeof content === 'string' ? content : json(content, file))
     }
 
@@ -322,7 +347,7 @@ export class Project {
   }
 
   chmod(file: string, mode: number): this {
-    chmodSync(this.path(file), mode)
+    chmodSync(landsInside(this.path(file)), mode)
 
     return this
   }
@@ -337,7 +362,7 @@ export class Project {
   }
 
   link(file: string, target: string): this {
-    mkdirSync(dirname(this.path(file)), { recursive: true })
+    mkdirSync(landsInside(dirname(this.path(file))), { recursive: true })
     symlinkSync(target, this.path(file))
 
     return this
