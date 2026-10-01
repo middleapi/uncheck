@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { cliError, LAYOUTS, temporaryDirectory } from '../utils/project'
@@ -94,24 +94,38 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     }
   })
 
-  it('hands the tools a linked folder as the file git lists, so oxlint checks its files twice', async () => {
-    const project = create({ [`${routes}/shared/util.ts`]: CODE_WITH_VAR })
+  it('checks a linked file but never a linked folder or a broken link, as the walk outside git', async () => {
+    const store = temporaryDirectory()
+    writeFileSync(join(store, 'vendor.ts'), CODE_WITH_VAR)
+    const project = create({
+      [`${routes}/home.ts`]: CLEAN_CODE,
+      [`${routes}/shared/util.ts`]: CODE_WITH_VAR,
+    })
+      .link(`${routes}/alias.ts`, 'home.ts')
+      .link(`${routes}/broken.ts`, 'missing.ts')
       .link(`${routes}/linked`, 'shared')
+      .link(`${routes}/vendor`, store)
       .commit()
 
-    const { exitCode, stdout } = await project.uncheck(['--only=oxlint', routes])
+    const check = await project.uncheck(['--only=oxlint', routes])
 
-    expect(exitCode).toBe(1)
-    expect(stdout).toContain(`${routes}/linked/util.ts:1:1`)
-    expect(stdout).toContain(`${routes}/shared/util.ts:1:1`)
-    expect(stdout).toContain('eslint(no-var)')
-    expect(selectedReport(stdout)).toEqual([
+    expect(check.exitCode).toBe(1)
+    expect(check.stdout).toContain(`${routes}/shared/util.ts:1:1`)
+    expect(check.stdout).not.toContain(`${routes}/linked/`)
+    expect(check.stdout).not.toContain(`${routes}/vendor/`)
+    expect(selectedReport(check.stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      `▶ oxlint --no-error-on-unmatched-pattern ${routes}/linked ${routes}/shared/util.ts`,
+      `▶ oxlint --no-error-on-unmatched-pattern ${routes}/alias.ts ${routes}/home.ts ${routes}/shared/util.ts`,
       '✘ oxlint failed',
       '✘ 1 of 1 checks failed: oxlint',
       '  rerun with `--fix` to apply oxlint fixes',
     ])
+
+    const fix = await project.uncheck(['--only=oxlint', '--fix', routes])
+
+    expect(fix.exitCode).toBe(0)
+    expect(project.read(`${routes}/shared/util.ts`)).toBe('const count = 1;\nexport { count };\n')
+    expect(readFileSync(join(store, 'vendor.ts'), 'utf8')).toBe(CODE_WITH_VAR)
   })
 
   it('leaves out a linked node_modules that a folder-only ignore rule misses', async () => {

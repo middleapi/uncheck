@@ -101,26 +101,36 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
     ])
   })
 
-  it('matches nothing with a directory or glob above the directory it runs in', async () => {
+  it('fails naming a file, directory or glob above the directory it runs in', async () => {
     const project = create({
       [`${app}src/routes/home.ts`]: CLEAN_CODE,
       [`${app}src/legacy.ts`]: CODE_WITH_VAR,
     })
-    const outside = temporaryDirectory()
-    writeFileSync(join(outside, 'shared.ts'), CLEAN_CODE)
+    const outside = join(temporaryDirectory(), 'shared.ts')
+    writeFileSync(outside, CLEAN_CODE)
+    const routes = `${app}src/routes`
 
-    const { exitCode, stdout, stderr } = await project.uncheck(
-      ['--only=oxlint', '..', '../*.ts', outside],
-      { cwd: `${app}src/routes` },
-    )
+    for (const pattern of ['../legacy.ts', '..', '../*.ts', outside]) {
+      const fromInside = await project.uncheck(['--only=oxlint', 'home.ts', pattern], {
+        cwd: routes,
+      })
+      const withCwd = await project.uncheck([
+        '--only=oxlint',
+        '--no-error-on-unmatched-pattern',
+        `--cwd=${routes}`,
+        pattern,
+      ])
 
-    expect(exitCode).toBe(1)
-    expect(report(stdout)).toEqual([`uncheck in ${project.path(app, 'src/routes')}`])
-    expect(stderr).toBe(
-      cliError(
-        `No files match .., ../*.ts, ${outside}. Pass --no-error-on-unmatched-pattern to run with whatever matched.`,
-      ),
-    )
+      for (const { exitCode, stdout, stderr } of [fromInside, withCwd]) {
+        expect(exitCode).toBe(1)
+        expect(report(stdout)).toEqual([`uncheck in ${project.path(routes)}`])
+        expect(stderr).toBe(
+          cliError(
+            `${pattern} is outside ${project.path(routes)}, run from a folder that contains it or pass one with --cwd`,
+          ),
+        )
+      }
+    }
   })
 })
 

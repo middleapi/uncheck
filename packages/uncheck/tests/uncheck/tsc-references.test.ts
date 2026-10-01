@@ -173,14 +173,6 @@ describe('tsc project references across the packages of a monorepo', () => {
     )
   })
 
-  it('builds a package from its folder for a change in a package it references', async () => {
-    const project = withFakeTsc(monorepo)
-
-    expect(await tscPlan(project, 'packages/app', ['../core/src/index.ts'])).toEqual([
-      '▶ tsc -b tsconfig.json',
-    ])
-  })
-
   it('checks a package on its own from its folder', async () => {
     const project = withFakeTsc(monorepo)
 

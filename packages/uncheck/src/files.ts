@@ -1,9 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 
 import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
 import { Minimatch } from 'minimatch'
 
+import { userError } from './errors'
 import { gitPaths } from './git'
 
 export type ProjectFiles = Effect.Effect<
@@ -59,8 +60,9 @@ export const resolvePaths = Effect.fn(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  // A backslash is a glob escape on POSIX, never a separator.
   const relative = (pattern: string) =>
-    path.relative(cwd, path.resolve(cwd, pattern)).replaceAll('\\', '/')
+    path.relative(cwd, path.resolve(cwd, pattern)).split(path.sep).join('/')
 
   const includes = patterns.filter((pattern) => !pattern.startsWith('!'))
   const matched = new Set<string>()
@@ -69,6 +71,13 @@ export const resolvePaths = Effect.fn(function* (
 
   for (const pattern of includes.length > 0 ? includes : ['.']) {
     const target = relative(pattern)
+
+    // oxlint and oxfmt reject a path containing "..".
+    if (target === '..' || target.startsWith('../') || path.isAbsolute(target)) {
+      return yield* userError(
+        `${pattern} is outside ${cwd}, run from a folder that contains it or pass one with --cwd`,
+      )
+    }
 
     // An existing path is taken as it is, so `app/[id].ts` names that file rather than a glob.
     const kind = yield* fs.stat(path.resolve(cwd, pattern)).pipe(
@@ -111,15 +120,18 @@ export const resolvePaths = Effect.fn(function* (
         return () => true
       }
 
-      const matches = glob(target)
+      // As for an inclusion, so `![id].ts` leaves out that file and not `i.ts` too.
+      if (existsSync(path.resolve(cwd, pattern.slice(1)))) {
+        return (file: string) => file === target || file.startsWith(`${target}/`)
+      }
 
-      return (file: string) => file === target || file.startsWith(`${target}/`) || matches(file)
+      return glob(target)
     })
 
   // One fiber per file costs far more than the check itself on a large project.
   const files = yield* Effect.sync(() =>
     [...matched].filter(
-      (file) => !excludes.some((excluded) => excluded(file)) && existsSync(path.resolve(cwd, file)),
+      (file) => !excludes.some((excluded) => excluded(file)) && isFile(path.resolve(cwd, file)),
     ),
   )
 
@@ -127,6 +139,15 @@ export const resolvePaths = Effect.fn(function* (
 })
 
 const GLOB_CHARACTERS = /[*?[\]{}()]/
+
+// git lists a linked folder as one file, which the tools would check through the link.
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
 
 /** Dot files match too, as they do for oxfmt and for a directory given as it is. */
 function glob(pattern: string): (file: string) => boolean {
