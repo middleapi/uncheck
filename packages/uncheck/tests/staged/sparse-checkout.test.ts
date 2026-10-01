@@ -32,7 +32,10 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts')
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/extra.ts',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(project.exists(`${app}lib`)).toBe(false)
     expect(inIndex(project, outside)).toBe('export const lib = 2;\n')
     expect(inIndex(project, file)).toBe('export const extra = 43;\n')
@@ -58,7 +61,10 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
     })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to lib/lib.ts')
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to lib/lib.ts',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(inIndex(project, outside)).toBe('export const lib = 4;\n')
   })
 })

@@ -253,24 +253,6 @@ function glob(pattern: string): (file: string) => boolean {
   return (file) => matcher.match(file)
 }
 
-export const existingFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-
-  // A concurrent `Effect.filter` keeps files in the order their checks finish, not the given one.
-  const isFile = yield* Effect.forEach(
-    files,
-    (file) =>
-      fs.stat(path.resolve(cwd, file)).pipe(
-        Effect.map((info) => info.type === 'File'),
-        Effect.orElseSucceed(() => false),
-      ),
-    { concurrency: 64 },
-  )
-
-  return files.filter((_, index) => isFile[index])
-})
-
 export function ancestors(path: Path.Path, from: string): string[] {
   const dirs = [path.resolve(from)]
 

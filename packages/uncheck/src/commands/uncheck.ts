@@ -2,9 +2,11 @@ import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
+import type { PlatformError } from 'effect'
 import { Console, Duration, Effect, Fiber, Semaphore } from 'effect'
 import type { CliError } from 'effect/unstable/cli'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
+import type { ChildProcessSpawner } from 'effect/unstable/process'
 
 import { oxfmt } from '../checks/oxfmt'
 import { oxlint } from '../checks/oxlint'
@@ -12,11 +14,17 @@ import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, platformMessage, userError } from '../errors'
 import { checkableFiles, listProjectFiles, resolvePaths } from '../files'
+import type { GitFailed } from '../git'
 import { bold, dim, green, listFiles, red } from '../style'
 import { captureLines, execute } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 
 const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
+
+const FIXES_DONE_AFTER = CHECKS.reduce(
+  (count, check, index) => (check.fixes === false ? count : index + 1),
+  0,
+)
 
 export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
   Flag.withDefault(Effect.sync(() => process.cwd())),
@@ -69,6 +77,14 @@ export interface RunSettings extends CheckSelection {
   readonly fixesWithinFiles?: boolean
   /** Paths the change deletes. Only for `literal` runs: without paths, any other run checks everything. */
   readonly deleted?: ReadonlyArray<string>
+  /** Runs once the checks that can fix files are done, before the others start. */
+  readonly afterFixes?: Effect.Effect<
+    void,
+    GitFailed | PlatformError.PlatformError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >
+  /** Takes the closing summary instead of printing it, for a caller that prints it last. */
+  readonly holdSummary?: (lines: ReadonlyArray<string>) => Effect.Effect<void>
 }
 
 export function selectionArgs({ only, required, skipped }: CheckSelection): ReadonlyArray<string> {
@@ -146,6 +162,9 @@ export const checkPaths = Effect.fn(function* (
   const appliesFixes = (fixes: Check['fixes']) =>
     settings.fixesWithinFiles === true ? fixes === 'files' : fixes !== false
   const { cwd } = settings
+  const summarize = (lines: ReadonlyArray<string>) =>
+    settings.holdSummary?.(lines) ??
+    Effect.forEach(lines, (line) => Console.log(line), { discard: true })
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
@@ -162,7 +181,7 @@ export const checkPaths = Effect.fn(function* (
     }
 
     if (resolved.files.length === 0 && deleted.length === 0) {
-      yield* Console.log(`${dim('○')} nothing to check, no files match ${paths.join(' ')}`)
+      yield* summarize([`${dim('○')} nothing to check, no files match ${paths.join(' ')}`])
       return
     }
 
@@ -199,12 +218,16 @@ export const checkPaths = Effect.fn(function* (
     { concurrency: 'unbounded' },
   )
 
-  const outcomes = yield* Effect.forEach(plans, (plan) => runCheck(plan, cwd))
+  const runAll = (planned: ReadonlyArray<CheckPlan>) =>
+    Effect.forEach(planned, (plan) => runCheck(plan, cwd))
+  const fixing = yield* runAll(plans.slice(0, FIXES_DONE_AFTER))
+
+  yield* settings.afterFixes ?? Effect.void
+
+  const outcomes = [...fixing, ...(yield* runAll(plans.slice(FIXES_DONE_AFTER)))]
 
   const ran = outcomes.filter((outcome) => outcome.status !== 'skipped')
   const failed = outcomes.filter((outcome) => outcome.status === 'failed')
-
-  yield* Console.log('')
 
   if (ran.length === 0) {
     const reasons = outcomes.map((outcome) => `${outcome.name} ${outcome.reason}`).join(', ')
@@ -214,18 +237,15 @@ export const checkPaths = Effect.fn(function* (
       (allowUnmatched || literal) &&
       outcomes.some((outcome) => outcome.unrelated === true)
     ) {
-      return yield* Console.log(`${dim('○')} nothing to check: ${reasons}`)
+      yield* summarize(['', `${dim('○')} nothing to check: ${reasons}`])
+      return
     }
 
-    yield* Console.log(`${red('✘')} nothing to check: ${reasons}`)
+    yield* summarize(['', `${red('✘')} nothing to check: ${reasons}`])
     return yield* Effect.fail(new CheckFailed({ outcomes }))
   }
 
   if (failed.length > 0) {
-    yield* Console.log(
-      `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map((outcome) => outcome.name).join(', ')}`,
-    )
-
     const fixable = failed
       .filter(
         (outcome) =>
@@ -236,16 +256,19 @@ export const checkPaths = Effect.fn(function* (
       .join(', ')
       .replace(/, ([^,]+)$/, ' and $1')
 
-    if (!fix && fixable !== '') {
-      yield* Console.log(dim(`  rerun with \`--fix\` to apply ${fixable} fixes`))
-    }
+    yield* summarize([
+      '',
+      `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map((outcome) => outcome.name).join(', ')}`,
+      ...(!fix && fixable !== '' ? [dim(`  rerun with \`--fix\` to apply ${fixable} fixes`)] : []),
+    ])
 
     return yield* Effect.fail(new CheckFailed({ outcomes }))
   }
 
-  yield* Console.log(
+  yield* summarize([
+    '',
     `${green('✔')} all checks passed (${ran.map((outcome) => outcome.name).join(', ')})`,
-  )
+  ])
 })
 
 const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {

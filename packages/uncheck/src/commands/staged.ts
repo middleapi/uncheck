@@ -4,7 +4,7 @@ import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
-import { existingFiles, inNodeModules } from '../files'
+import { inNodeModules } from '../files'
 import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
@@ -85,6 +85,27 @@ export const staged = Command.make(
 
       const partial = yield* partiallyStaged(unstaged, files)
       const outcome = yield* Ref.make<Unstaged>('restored')
+      const fixed = yield* Ref.make<ReadonlyArray<string>>([])
+      const summary = yield* Ref.make<ReadonlyArray<string>>([])
+
+      // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
+      // behind (index.lock until then) needs the fixes too, or it would hold their revert.
+      const active = process.env.GIT_INDEX_FILE
+      const lock = path.resolve(cwd, indexLock!)
+      const lockToo = active?.endsWith('.lock') === true && path.resolve(cwd, active) !== lock
+
+      // Staging after every check would also stage what was saved to a file while tsc ran.
+      const stageFixes = Effect.gen(function* () {
+        const changed = yield* differFromIndex(cwd, files)
+
+        // `git add` refuses a path outside a sparse checkout even when it is on disk.
+        yield* gitEach(cwd, ['update-index'], changed)
+        yield* Ref.set(fixed, changed)
+
+        if (lockToo && (yield* fs.exists(lock))) {
+          yield* stageEntries(cwd, yield* indexEntries(cwd, changed), { GIT_INDEX_FILE: lock })
+        }
+      })
 
       const { failure, empty } = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -92,7 +113,7 @@ export const staged = Command.make(
             const before = yield* writeTree(cwd)
 
             yield* Effect.acquireRelease(setAside(aside, partial), (copies) =>
-              putBack(aside, files, copies, before).pipe(
+              putBack(aside, files, copies, before, fixed).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
             )
@@ -105,36 +126,14 @@ export const staged = Command.make(
             literal: true,
             fixesWithinFiles: true,
             deleted,
+            afterFixes: fix ? stageFixes : undefined,
+            holdSummary: (lines) => Ref.set(summary, lines),
           }).pipe(Effect.catchTag('CheckFailed', Effect.succeed))
 
-          if (!fix) {
-            return { failure, empty: false }
-          }
-
-          const changed = (yield* Effect.forEach(argvBatches(files), (batch) =>
-            gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', '--', ...batch]),
-          )).flat()
+          const changed = yield* Ref.get(fixed)
 
           if (changed.length === 0) {
             return { failure, empty: false }
-          }
-
-          // `git add` refuses a path outside a sparse checkout even when it is on disk.
-          const stage = (env?: Readonly<Record<string, string>>) =>
-            gitEach(cwd, ['update-index'], changed, env)
-
-          yield* stage()
-
-          // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
-          // behind (index.lock until then) needs the fixes too, or it would hold their revert.
-          const active = process.env.GIT_INDEX_FILE
-
-          if (active?.endsWith('.lock') === true) {
-            const lock = path.resolve(cwd, indexLock!)
-
-            if (path.resolve(cwd, active) !== lock && (yield* fs.exists(lock))) {
-              yield* stage({ GIT_INDEX_FILE: lock })
-            }
           }
 
           yield* Console.log(`${green('✔')} staged the fixes to ${listFiles(changed)}`)
@@ -150,6 +149,12 @@ export const staged = Command.make(
 
           return { failure, empty: after === head }
         }),
+      ).pipe(
+        Effect.ensuring(
+          Effect.flatMap(Ref.get(summary), (lines) =>
+            Effect.forEach(lines, (line) => Console.log(line), { discard: true }),
+          ),
+        ),
       )
 
       const unstagedOutcome = yield* Ref.get(outcome)
@@ -168,7 +173,7 @@ export const staged = Command.make(
 
       if (empty && !allowEmpty) {
         return yield* userError(
-          'The fixes undid every staged change, so the commit would be empty. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.',
+          'The fixes undid every staged change and are staged now, so nothing new is left to commit. Commit again: git amends only the message, or refuses an empty commit. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.',
         )
       }
 
@@ -262,14 +267,56 @@ interface SetAside {
   readonly base: string
 }
 
-/** Runs `git <args> -- <files>` in batches, and nothing without files. */
-function gitEach(
+/** Of `files`, those whose working tree differs from the index. */
+function differFromIndex(cwd: string, files: ReadonlyArray<string>) {
+  return Effect.map(
+    Effect.forEach(argvBatches(files), (batch) =>
+      gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', '--', ...batch]),
+    ),
+    (batches) => batches.flat(),
+  )
+}
+
+/** `<mode>,<id>,<path>` of each of `files` in the index, as `update-index --cacheinfo` takes it. */
+function indexEntries(cwd: string, files: ReadonlyArray<string>) {
+  return Effect.map(
+    Effect.forEach(argvBatches(files), (batch) =>
+      // `--cacheinfo` reads paths from the top of the repository, wherever git runs.
+      gitPaths(cwd, ['ls-files', '--stage', '--full-name', '-z', '--', ...batch]),
+    ),
+    (batches) =>
+      batches.flat().map((entry) => {
+        const [mode, id] = entry.split(' ')
+
+        return `${mode},${id},${entry.slice(entry.indexOf('\t') + 1)}`
+      }),
+  )
+}
+
+const CACHEINFO = '--cacheinfo'
+
+/** Stages the given index entries as they are, whatever the working tree holds now. */
+function stageEntries(
   cwd: string,
-  args: ReadonlyArray<string>,
-  files: ReadonlyArray<string>,
-  env?: Readonly<Record<string, string>>,
+  entries: ReadonlyArray<string>,
+  env: Readonly<Record<string, string>>,
 ) {
-  return Effect.forEach(argvBatches(files), (batch) => git(cwd, [...args, '--', ...batch], env), {
+  // Each entry needs a flag of its own, which the batches have to count.
+  return Effect.forEach(
+    argvBatches(entries.map((entry) => `${CACHEINFO} ${entry}`)),
+    (batch) =>
+      git(
+        cwd,
+        ['update-index', ...batch.flatMap((arg) => [CACHEINFO, arg.slice(CACHEINFO.length + 1)])],
+        env,
+      ),
+    { discard: true },
+  )
+}
+
+/** Runs `git <args> -- <files>` in batches, and nothing without files. */
+function gitEach(cwd: string, args: ReadonlyArray<string>, files: ReadonlyArray<string>) {
+  return Effect.forEach(argvBatches(files), (batch) => git(cwd, [...args, '--', ...batch]), {
     discard: true,
   })
 }
@@ -328,6 +375,7 @@ const putBack = Effect.fn(function* (
   files: ReadonlyArray<string>,
   copies: ReadonlyArray<SetAside>,
   before: string,
+  fixed: Ref.Ref<ReadonlyArray<string>>,
 ) {
   const fs = yield* FileSystem.FileSystem
   const { cwd, saved } = aside
@@ -344,9 +392,18 @@ const putBack = Effect.fn(function* (
       return 'restored' as const
     }
 
+    const isPartial = new Set(partial)
+    const fixedInFull = (yield* Ref.get(fixed)).filter((file) => !isPartial.has(file))
+    // A file saved since its fixes were staged holds an edit made during the run, which a
+    // checkout would throw away.
+    const editedSince = new Set(yield* differFromIndex(cwd, fixedInFull))
+
     yield* gitEach(cwd, ['reset', '-q', before], files)
-    // checkout-index fails on a file a sparse checkout leaves out, which no check could change.
-    yield* gitEach(cwd, ['checkout-index', '-f'], yield* existingFiles(files, cwd))
+    yield* gitEach(
+      cwd,
+      ['checkout-index', '-f'],
+      fixedInFull.filter((file) => !editedSince.has(file)),
+    )
     yield* Effect.forEach(copies, ({ target, copy }) => fs.copyFile(copy, target), {
       discard: true,
     })

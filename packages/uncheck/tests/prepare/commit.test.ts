@@ -36,8 +36,8 @@ function fixedAndStaged(dir: string, tsc: string): string[] {
     '✔ oxfmt passed',
     tsc,
     '✔ tsc passed',
-    '✔ all checks passed (oxlint, oxfmt, tsc)',
     '✔ staged the fixes to src/spaced.ts',
+    '✔ all checks passed (oxlint, oxfmt, tsc)',
   ]
 }
 

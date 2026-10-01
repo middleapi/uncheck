@@ -6,6 +6,8 @@ import {
   folderOf,
   inIndex,
   LEFTOVER_ERROR,
+  SAVED_LINE,
+  saveWhileTscRuns,
   stagePartially,
   stranded,
   STRANDED_HINT,
@@ -39,8 +41,8 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxlint, oxfmt)',
       '○ unstaged changes of src/extra.ts restored',
+      '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(project.read(file)).toBe(`${VERSIONS.fixed}var   unstaged = 1\n`)
     expect(project.git('status', '--porcelain')).toBe(`MM ${file}\n`)
@@ -69,9 +71,10 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout).slice(-2)).toEqual([
+    expect(report(stdout).slice(-3)).toEqual([
       '✔ staged the fixes to src/extra.ts',
       '○ unstaged changes of src/extra.ts restored',
+      '✔ all checks passed (oxfmt)',
     ])
     expect(inIndex(project, file)).toBe(joined + fixed)
     expect(project.read(file)).toBe(joined + edit(fixed))
@@ -115,7 +118,10 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
 
     expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
     expect(exitCode).toBe(1)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts src/far.ts src/other.ts')
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/extra.ts src/far.ts src/other.ts',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(inIndex(project, file)).toBe('export const   extra = 42\n')
     expect(inIndex(project, `${app}src/far.ts`)).toBe(stagedFar)
     expect(inIndex(project, `${app}src/other.ts`)).toBe('export const   other = 2\n')
@@ -127,6 +133,38 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     )
     expect(project.exists('.git/post-checkout-ran')).toBe(false)
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+  })
+
+  it('undoes the fixes but keeps what is saved to a fully staged file while tsc runs', async () => {
+    const other = `${app}src/other.ts`
+    const plain = `${app}src/plain.ts`
+    const project = create({ [file]: 'export const extra = 1;\n' })
+
+    project.stage({
+      [file]: 'export const   extra = 42\n',
+      [other]: 'export const   other = 2\n',
+      [plain]: 'export const   plain = 3\n',
+    })
+    project.write({ [file]: 'export const   extra = 43\n' })
+    saveWhileTscRuns(project, [other])
+
+    const { exitCode, stdout, stderr } = await project.uncheck(
+      ['staged', '--fix', '--only=oxfmt', '--only=tsc'],
+      { cwd: folder },
+    )
+
+    expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
+    expect(exitCode).toBe(1)
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/extra.ts src/other.ts src/plain.ts',
+      '✔ all checks passed (oxfmt, tsc)',
+    ])
+    expect(inIndex(project, other)).toBe('export const   other = 2\n')
+    expect(project.read(other)).toBe(`${SAVED_LINE}export const other = 2;\n`)
+    expect(inIndex(project, plain)).toBe('export const   plain = 3\n')
+    expect(project.read(plain)).toBe('export const   plain = 3\n')
+    expect(project.read(file)).toBe('export const   extra = 43\n')
+    expect(project.git('status', '--porcelain')).toBe(`MM ${file}\nAM ${other}\nA  ${plain}\n`)
   })
 
   it('refuses unstaged changes that are not edits to a file', async () => {
@@ -237,7 +275,10 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('○ unstaged changes of src/extra.ts restored')
+    expect(report(stdout).slice(-2)).toEqual([
+      '○ unstaged changes of src/extra.ts restored',
+      '✔ all checks passed (oxlint)',
+    ])
     expect(project.read(file)).toBe(VERSIONS.unstaged.replace('c = 1', 'c = 3'))
     expect(inIndex(project, file)).toBe(VERSIONS.staged)
   })
@@ -324,8 +365,8 @@ describe.each(LAYOUTS)(
           '✔ oxlint passed',
           '○ oxfmt skipped, not selected by --only',
           '○ tsc skipped, not selected by --only',
-          '✔ all checks passed (oxlint)',
           strandedLine,
+          '✔ all checks passed (oxlint)',
         ])
         expect(output).toContain(`\n${strandedLine}\n${STRANDED_HINT}`)
         expect(project.read(saved)).toBe(VERSIONS.unstaged)
@@ -381,12 +422,13 @@ describe.each(LAYOUTS)(
 
       expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
       expect(exitCode).toBe(1)
-      expect(report(stdout).slice(-2)).toEqual([
+      expect(report(stdout).slice(-3)).toEqual([
         '✔ staged the fixes to src/extra.ts',
         stranded(
           'src/extra.ts',
           `git cat-file --filters --path=${file} ${merged.stdout.trim()} failed: error: external filter 'if [ -e .git/smudged ]; then exit 1; fi; touch .git/smudged; cat' failed 1`,
         ),
+        '✔ all checks passed (oxfmt)',
       ])
       expect(inIndex(project, file)).toBe(VERSIONS.fixed)
       expect(project.read(file)).toBe(VERSIONS.fixed)
@@ -408,8 +450,9 @@ describe.each(LAYOUTS)(
 
       expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
       expect(exitCode).toBe(1)
-      expect(report(stdout).at(-2)).toBe('✔ staged the fixes to src/extra.ts')
-      expect(report(stdout).at(-1)).toMatch(
+      expect(report(stdout).at(-3)).toBe('✔ staged the fixes to src/extra.ts')
+      expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxfmt)')
+      expect(report(stdout).at(-2)).toMatch(
         /^✘ could not put back the unstaged changes of src\/extra\.ts: git merge-file --quiet \S+\/result \S+\/base \S+\/fixed failed: merge-file broke$/,
       )
       expect(inIndex(project, file)).toBe(VERSIONS.fixed)

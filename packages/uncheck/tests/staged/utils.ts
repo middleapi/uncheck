@@ -16,7 +16,7 @@ export const LEFTOVER_ERROR =
   'An earlier run left the unstaged versions of your files in <project>/.git/uncheck-unstaged, at their paths from the top of the repository. Unless another commit is running, copy back what your files are missing, delete the folder, then commit again.'
 
 export const EMPTY_COMMIT_ERROR =
-  'The fixes undid every staged change, so the commit would be empty. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.'
+  'The fixes undid every staged change and are staged now, so nothing new is left to commit. Commit again: git amends only the message, or refuses an empty commit. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.'
 
 export function conflictError(files: string): string {
   return `The fixes conflict with the unstaged changes of ${files} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`
@@ -51,6 +51,19 @@ export const VERSIONS = {
 /** Stages the `staged` version of `file`, then leaves its `unstaged` version in the working tree. */
 export function stagePartially(project: Project, file: string): Project {
   return project.stage({ [file]: VERSIONS.staged }).write({ [file]: VERSIONS.unstaged })
+}
+
+/** What `saveWhileTscRuns` adds to the top of a file. */
+export const SAVED_LINE = '// saved while tsc ran\n'
+
+/** Fakes a tsc that adds `SAVED_LINE` to `files` as it runs, as an editor saving them would. */
+export function saveWhileTscRuns(project: Project, files: ReadonlyArray<string>): Project {
+  const paths = JSON.stringify(files.map((file) => project.path(file)))
+
+  return project.fake(
+    'typescript',
+    `const fs = require('node:fs')\nfor (const file of ${paths}) fs.writeFileSync(file, ${JSON.stringify(SAVED_LINE)} + fs.readFileSync(file, 'utf8'))\n`,
+  )
 }
 
 /** Commits `files` on a new `side` branch, then goes back to `main`. */

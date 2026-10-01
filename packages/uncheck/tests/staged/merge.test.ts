@@ -29,7 +29,10 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/other.ts')
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/other.ts')
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/other.ts',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(inIndex(project, other)).toBe('export const other = 4;\n')
     expect(inIndex(project, `${app}src/theirs.ts`)).toBe('export const   theirs = 1\n')
   })
@@ -70,7 +73,10 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/other.ts')
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/other.ts',
+      '✔ all checks passed (oxfmt)',
+    ])
     expect(project.git('diff', '--cached', '--name-only')).toBe('')
 
     project.git('commit', '--quiet', '--no-edit', '--no-verify')
