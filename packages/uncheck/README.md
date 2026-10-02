@@ -83,7 +83,7 @@ npx uncheck src '!src/generated'      # a directory, minus a part of it
 npx uncheck '!**/*.gen.ts'            # everything except some files
 ```
 
-uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included, but never links that point outside the directory uncheck runs in. Without paths, each tool finds the files itself, and oxlint checks and fixes those links too: pass `.` to leave them out. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. An exclusion glob also leaves out the folders it matches, as in `.gitignore`: `'!**/generated'`. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
+uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included, but never links that point outside the directory uncheck runs in or into `node_modules`. Without paths, each tool finds the files itself, and oxlint checks and fixes those links too: pass `.` to leave them out. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. An exclusion glob also leaves out the folders it matches, as in `.gitignore`: `'!**/generated'`. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
 
 tsc then checks only the projects that include one of the files, and the projects that depend on those. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among the files.
 
@@ -142,7 +142,7 @@ npx uncheck hooks install                    # or pick them from a list
 | Cursor         | `cursor`    | `.cursor/hooks.json`         |
 | GitHub Copilot | `copilot`   | `.github/hooks/uncheck.json` |
 
-Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back again only once the checks have passed in between, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
+Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back again only after the checks have passed in between, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
 
 - **sherif only reports** here, since its fixes reach beyond the agent's change: they move versions in other packages and run your install. Run `npx uncheck --fix` for them.
 - **Too slow?** Leave the typecheck to CI: `npx uncheck hooks install claude --only=oxlint --only=oxfmt`. Install again to change the flags.
@@ -215,7 +215,7 @@ The presets need oxlint 1.70+, oxfmt 0.43+ and TypeScript 5.6+. The tsconfig pre
 
 **`uncheck dist` says "No files match".** git ignores that folder, so it holds no project files. You can still name an ignored file directly.
 
-**`uncheck prepare` says "git refuses the repository".** git does not trust a repository another user owns, such as a checkout mounted into a container. Run the `safe.directory` command `git status` prints there, then `prepare` again.
+**git refuses the repository ("detected dubious ownership").** git does not trust a repository another user owns, such as a checkout mounted into a container, so `prepare` writes no hook and `uncheck staged` and the agent hook check nothing. Run the `safe.directory` command `git status` prints there, then try again.
 
 **A commit stops with "An earlier run left the unstaged versions of your files in …".** A pre-commit run was killed before it could put your unstaged changes back. Copy what your files are missing from the folder the message names, delete the folder, and commit again.
 
