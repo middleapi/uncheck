@@ -167,6 +167,65 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
     expect(project.git('status', '--porcelain')).toBe(`MM ${file}\nAM ${other}\nA  ${plain}\n`)
   })
 
+  it('undoes the fixes but keeps the merge of what is saved to a partially staged file while tsc runs', async () => {
+    const conflicting = `${app}src/conflicting.ts`
+    const project = stagePartially(
+      create({ [file]: VERSIONS.committed, [conflicting]: 'export const c = 1;\n' }),
+      file,
+    )
+
+    project.stage({ [conflicting]: 'export const   c = 42\n' })
+    project.write({ [conflicting]: 'export const   c = 43\n' })
+    saveWhileTscRuns(project, [file])
+
+    const { exitCode, stdout, stderr } = await project.uncheck(
+      ['staged', '--fix', '--only=oxfmt', '--only=tsc'],
+      { cwd: folder },
+    )
+
+    expect(stderr).toBe(cliError(conflictError('src/conflicting.ts')))
+    expect(exitCode).toBe(1)
+    expect(report(stdout).slice(-2)).toEqual([
+      '✔ staged the fixes to src/conflicting.ts src/extra.ts',
+      '✔ all checks passed (oxfmt, tsc)',
+    ])
+    expect(project.read(file)).toBe(SAVED_LINE + VERSIONS.merged)
+    expect(inIndex(project, file)).toBe(VERSIONS.staged)
+    expect(project.read(conflicting)).toBe('export const   c = 43\n')
+    expect(inIndex(project, conflicting)).toBe('export const   c = 42\n')
+    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+  })
+
+  it('keeps an edit saved next to the unstaged changes while tsc runs, and their copy aside', async () => {
+    const other = `${app}src/other.ts`
+    const project = stagePartially(
+      stagePartially(create({ [file]: VERSIONS.committed, [other]: VERSIONS.committed }), file),
+      other,
+    )
+
+    saveWhileTscRuns(project, [file], { atEnd: true })
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged', '--only=tsc'], {
+      cwd: folder,
+    })
+
+    const strandedLine = stranded(
+      'src/extra.ts',
+      'they conflict with edits saved while the checks ran',
+    )
+
+    expect(stderr).toBe(cliError(strandedError('src/extra.ts')))
+    expect(exitCode).toBe(1)
+    expect(report(stdout).slice(-2)).toEqual([strandedLine, '✔ all checks passed (tsc)'])
+    expect(project.normalize(stdout)).toContain(`\n${strandedLine}\n${STRANDED_HINT}`)
+    expect(project.read(file)).toBe(VERSIONS.staged + SAVED_LINE)
+    expect(project.read(`.git/uncheck-unstaged/${file}`)).toBe(VERSIONS.unstaged)
+    expect(inIndex(project, file)).toBe(VERSIONS.staged)
+    expect(project.read(other)).toBe(VERSIONS.unstaged)
+    expect(project.exists(`.git/uncheck-unstaged/${other}`)).toBe(false)
+    expect(inIndex(project, other)).toBe(VERSIONS.staged)
+  })
+
   it('refuses unstaged changes that are not edits to a file', async () => {
     const project = create({
       [`${app}src/a.ts`]: 'export const a = 1;\n',

@@ -113,7 +113,7 @@ What the hook guarantees:
 
 - **Each staged file is checked as you staged it.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
 - **Nothing is lost.** If a fix clashes with your unstaged changes, every fix is undone and the commit stops. Stage the whole file, or stash the rest, and commit again.
-- **Only fixes to staged files are staged.** An edit you save while the checks run stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
+- **Only fixes to staged files are staged.** The fixes are staged once oxlint and oxfmt finish, so an edit you save while tsc runs stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
 - **No empty commits.** If the fixes undo every staged change, the commit fails, unless you pass `--allow-empty`.
 
 Good to know:
