@@ -5,7 +5,7 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { platformMessage, userError } from '../errors'
 import { readTextIfExists } from '../files'
-import { git, gitLocation } from '../git'
+import { git, gitLocation, refusesRepository } from '../git'
 import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
@@ -184,8 +184,7 @@ export const prepare = Command.make(
     if (Result.isFailure(repository)) {
       const { failure } = repository
 
-      // git translates its messages, but never the name of a setting.
-      if (failure._tag === 'GitFailed' && failure.stderr.includes('safe.directory')) {
+      if (failure._tag === 'GitFailed' && refusesRepository(failure)) {
         const reason = failure.stderr.split('\n')[0]!.replace(/^fatal: /, '')
 
         return yield* Console.log(

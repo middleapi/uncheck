@@ -5,7 +5,7 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { inNodeModules } from '../files'
-import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff } from '../git'
+import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff, refusesRepository } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
 import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
@@ -48,10 +48,9 @@ export const staged = Command.make(
         prefix,
         paths: [folder, indexLock],
       } = yield* gitLocation(cwd, ['uncheck-unstaged', 'index.lock']).pipe(
-        Effect.catchTag('GitFailed', ({ stderr }) =>
-          // The setting git names is never translated, unlike the rest of its message.
+        Effect.catchTag('GitFailed', (error) =>
           userError(
-            stderr.includes('safe.directory') ? stderr : '`uncheck staged` needs a git repository',
+            refusesRepository(error) ? error.stderr : '`uncheck staged` needs a git repository',
           ),
         ),
       )

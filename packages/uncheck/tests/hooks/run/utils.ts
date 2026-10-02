@@ -16,7 +16,11 @@ export const CURSOR_STOP = {
   loop_count: 0,
 }
 
-export const COPILOT_AGENT_STOP = { stopReason: 'end_turn' }
+export const COPILOT_AGENT_STOP = {
+  sessionId: 'session',
+  stopReason: 'end_turn',
+  stop_hook_active: false,
+}
 
 export const COPILOT_STOP_IN_CLAUDE_FORMAT = {
   hook_event_name: 'Stop',
