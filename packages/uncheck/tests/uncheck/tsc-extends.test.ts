@@ -235,14 +235,14 @@ describe.each(LAYOUTS)('tsc extends in a $name', ({ create, app }) => {
     expect(await tscPlan(project, app, ['web/src/index.ts'])).toEqual([NOT_COVERED])
   })
 
-  it('typechecks the projects extending a deleted base', async () => {
+  it('typechecks the projects extending a base deleted with its folder', async () => {
     const project = withFakeTsc(create, {
-      [`${app}tsconfig.base.json`]: NO_JS,
-      [`${app}web/tsconfig.json`]: { extends: '../tsconfig.base.json', include: ['src'] },
+      [`${app}config/tsconfig.base.json`]: NO_JS,
+      [`${app}web/tsconfig.json`]: { extends: '../config/tsconfig.base.json', include: ['src'] },
       [`${app}server/tsconfig.json`]: { include: ['src'] },
     })
 
-    project.git('rm', '--quiet', '--', `${app}tsconfig.base.json`)
+    project.git('rm', '--quiet', '-r', '--', `${app}config`)
 
     const { exitCode, stdout } = await project.uncheck(['staged', '--only=tsc'], { cwd: app })
 

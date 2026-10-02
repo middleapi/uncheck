@@ -85,18 +85,45 @@ describe.each(LAYOUTS)('tsc project references in a $name', ({ create, app }) =>
     expect(await tscPlan(project, app)).toEqual([
       '▶ tsc -b docs/tsconfig.json shared/tsconfig.json ui/tsconfig.json',
       '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p tsconfig.json --noEmit',
       '▶ tsc -p web/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['node/vite.config.ts'])).toEqual([
       '▶ tsc -b ui/tsconfig.json',
       '▶ tsc -p node/tsconfig.json --noEmit --composite false --declaration',
+      '▶ tsc -p tsconfig.json --noEmit',
       '▶ tsc -p web/tsconfig.json --noEmit',
     ])
     expect(await tscPlan(project, app, ['shared/src/index.ts'])).toEqual([
       '▶ tsc -b docs/tsconfig.json shared/tsconfig.json ui/tsconfig.json',
+      '▶ tsc -p tsconfig.json --noEmit',
       '▶ tsc -p web/tsconfig.json --noEmit',
     ])
-    expect(await tscPlan(project, app, ['tsconfig.json'])).toEqual([NOT_COVERED])
+    expect(await tscPlan(project, app, ['tsconfig.json'])).toEqual([
+      '▶ tsc -p tsconfig.json --noEmit',
+    ])
+  })
+
+  it('builds with tsc -b the projects whose JavaScript next to their sources git ignores, also from the folder of one', async () => {
+    const project = withFakeTsc(create, {
+      [`${app}tsconfig.json`]: { files: [], references: [{ path: './lib' }, { path: './web' }] },
+      [`${app}lib/.gitignore`]: '*.js\n',
+      [`${app}lib/tsconfig.json`]: { compilerOptions: { composite: true }, include: ['src'] },
+      [`${app}lib/src/index.ts`]: '',
+      [`${app}web/.gitignore`]: '*.js\n',
+      [`${app}web/tsconfig.json`]: {
+        compilerOptions: { composite: true },
+        include: ['src'],
+        references: [{ path: '../lib' }],
+      },
+      [`${app}web/src/index.ts`]: '',
+    })
+
+    expect(await tscPlan(project, app)).toEqual(['▶ tsc -b tsconfig.json'])
+    expect(await tscPlan(project, `${app}web`)).toEqual(['▶ tsc -b tsconfig.json'])
+    expect(await tscPlan(project, `${app}web`, ['src/index.ts'])).toEqual([
+      '▶ tsc -b tsconfig.json',
+    ])
   })
 
   it('follows references to a folder, to a .json file and with backslashes', async () => {
@@ -295,16 +322,14 @@ describe('tsc project references across the packages of a monorepo', () => {
 })
 
 describe('tsc project references with the real compiler in a single repo', () => {
-  const COMPOSITE = {
+  const IN_PLACE = {
     strict: true,
     module: 'esnext',
     moduleResolution: 'bundler',
     types: [],
     composite: true,
-    emitDeclarationOnly: true,
-    outDir: 'dist',
-    rootDir: 'src',
   }
+  const COMPOSITE = { ...IN_PLACE, emitDeclarationOnly: true, outDir: 'dist', rootDir: 'src' }
 
   it('builds the library a Vite 4 app imports before checking the app with -p, writing no JavaScript', async () => {
     const project = singleRepo({
@@ -370,6 +395,95 @@ describe('tsc project references with the real compiler in a single repo', () =>
     expect(failed.stdout).toContain(
       "vite.config.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
     )
+    expect(project.exists('vite.config.js')).toBe(false)
+  })
+
+  it('builds with tsc -b the projects whose JavaScript next to their sources git ignores, so a break across them fails after a build', async () => {
+    const project = singleRepo({
+      '.gitignore': 'node_modules\n*.js\n*.d.ts\n*.tsbuildinfo\n',
+      'tsconfig.json': { files: [], references: [{ path: './lib' }, { path: './app' }] },
+      'lib/tsconfig.json': { compilerOptions: IN_PLACE, include: ['src'] },
+      'lib/src/index.ts': 'export const one = 1;\n',
+      'app/tsconfig.json': {
+        compilerOptions: IN_PLACE,
+        include: ['src'],
+        references: [{ path: '../lib' }],
+      },
+      'app/src/index.ts':
+        'import { one } from "../../lib/src/index";\n\nexport const two: number = one + 1;\n',
+    })
+
+    const passed = await project.uncheck(['--only=tsc'])
+
+    expect(passed.exitCode).toBe(0)
+    expect(report(passed.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -b tsconfig.json',
+      '✔ tsc passed',
+      '✔ all checks passed (tsc)',
+    ])
+    expect(project.exists('lib/src/index.d.ts')).toBe(true)
+    expect(project.git('status', '--porcelain')).toBe('')
+
+    project.write({ 'lib/src/index.ts': 'export const one = "1";\n' })
+
+    const failed = await project.uncheck(['--only=tsc', 'lib/src/index.ts'])
+
+    expect(failed.exitCode).toBe(1)
+    expect(report(failed.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -b tsconfig.json',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(failed.stdout).toContain(
+      "app/src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+    )
+  })
+
+  it('checks with -p a solution that references a project writing JavaScript next to its sources, so a reference to a deleted config fails', async () => {
+    const project = singleRepo({
+      'tsconfig.json': {
+        files: [],
+        references: [{ path: './tsconfig.node.json' }, { path: './tsconfig.app.json' }],
+      },
+      'tsconfig.node.json': { compilerOptions: IN_PLACE, include: ['vite.config.ts'] },
+      'tsconfig.app.json': {
+        compilerOptions: { ...IN_PLACE, noEmit: true },
+        include: ['src'],
+      },
+      'vite.config.ts': 'export default { base: "/" };\n',
+    })
+
+    project.git('rm', '--quiet', '--', 'tsconfig.app.json')
+
+    const missing = `error TS6053: File '${project.path('tsconfig.app.json')}' not found.`
+    const full = await project.uncheck(['--only=tsc'])
+
+    expect(full.exitCode).toBe(1)
+    expect(report(full.stdout)).toEqual([
+      `uncheck in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -p tsconfig.json --noEmit',
+      '▶ tsc -p tsconfig.node.json --noEmit --composite false --declaration',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(full.stdout).toContain(missing)
+
+    const staged = await project.uncheck(['staged', '--only=tsc'])
+
+    expect(staged.exitCode).toBe(1)
+    expect(report(staged.stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      '▶ tsc -p tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(staged.stdout).toContain(missing)
     expect(project.exists('vite.config.js')).toBe(false)
   })
 

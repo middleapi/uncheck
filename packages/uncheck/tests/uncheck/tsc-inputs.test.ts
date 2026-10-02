@@ -215,6 +215,46 @@ describe('tsc inputs across the packages of a monorepo', () => {
     expect(await tscPlan(project, '', ['packages/tsconfig/package.json'])).toEqual([NOT_COVERED])
   })
 
+  it.each([
+    { spelling: 'a file of it', spec: '@repo/tsconfig/base.json', base: 'base.json' },
+    { spelling: 'a file of it without .json', spec: '@repo/tsconfig/base', base: 'base.json' },
+    { spelling: 'its tsconfig.json', spec: '@repo/tsconfig', base: 'tsconfig.json' },
+    {
+      spelling: 'an export of it',
+      spec: '@repo/tsconfig/strict',
+      base: 'strict.json',
+      exports: { './strict': './strict.json' },
+    },
+  ])(
+    'typechecks the projects extending a deleted base they name by its package and $spelling',
+    async ({ spec, base, exports }) => {
+      const project = withFakeTsc(monorepo, {
+        'tsconfig.json': null,
+        'packages/tsconfig/package.json': {
+          name: '@repo/tsconfig',
+          version: '1.0.0',
+          private: true,
+          exports,
+        },
+        [`packages/tsconfig/${base}`]: { compilerOptions: { strict: true } },
+        'packages/app/tsconfig.json': { extends: spec, include: ['src'] },
+      }).link('packages/app/node_modules/@repo/tsconfig', '../../../tsconfig')
+
+      project.git('rm', '--quiet', '--', `packages/tsconfig/${base}`)
+
+      const { exitCode, stdout } = await project.uncheck(['staged', '--only=tsc'])
+
+      expect(exitCode).toBe(0)
+      expect(report(stdout)).toEqual([
+        `uncheck staged in ${project.dir}`,
+        ...SKIPPED_BESIDE_TSC,
+        '▶ tsc -p packages/app/tsconfig.json --noEmit',
+        '✔ tsc passed',
+        '✔ all checks passed (tsc)',
+      ])
+    },
+  )
+
   it('checks a shared base kept as a tsconfig.json with no sources only through the configs extending it', async () => {
     const project = withFakeTsc(monorepo, {
       'packages/tsconfig/package.json': {
@@ -244,6 +284,19 @@ describe('tsc inputs across the packages of a monorepo', () => {
     ])
     expect(await tscPlan(project, '', ['packages/tsconfig/tsconfig.json'])).toEqual([
       '▶ tsc -b tsconfig.json',
+    ])
+
+    project.write({ 'packages/tsconfig/legacy.ts': '' }).commit()
+    project.git('rm', '--quiet', '--', 'packages/tsconfig/legacy.ts')
+
+    const deleted = await project.uncheck(['staged', '--only=tsc'])
+
+    expect(deleted.exitCode).toBe(0)
+    expect(report(deleted.stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      ...SKIPPED_BESIDE_TSC,
+      NOT_COVERED,
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
     ])
   })
 })

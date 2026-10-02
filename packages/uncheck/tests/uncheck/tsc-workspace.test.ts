@@ -94,25 +94,44 @@ describe('tsc across the packages of a workspace', () => {
     ])
   })
 
-  it('fails a change that breaks a package importing it through its workspace link', async () => {
-    const project = linkedMonorepo().write({
-      'packages/core/src/index.ts':
-        'export function double(value: number): string {\n  return String(value);\n}\n',
-    })
+  it.each([
+    {
+      core: 'its own tsconfig.json',
+      coreConfig: PACKAGE_CONFIG,
+      plan: [
+        '▶ tsc -p packages/app/tsconfig.json --noEmit',
+        '▶ tsc -p packages/core/tsconfig.json --noEmit',
+      ],
+    },
+    {
+      core: 'no tsconfig.json',
+      coreConfig: null,
+      plan: ['▶ tsc -p packages/app/tsconfig.json --noEmit'],
+    },
+  ])(
+    'fails a change that breaks a package importing it through its workspace link, with $core',
+    async ({ coreConfig, plan }) => {
+      const project = linkedMonorepo({ 'packages/core/tsconfig.json': coreConfig }).write({
+        'packages/core/src/index.ts':
+          'export function double(value: number): string {\n  return String(value);\n}\n',
+      })
 
-    const { exitCode, stdout } = await project.uncheck(['--only=tsc', 'packages/core/src/index.ts'])
+      const { exitCode, stdout } = await project.uncheck([
+        '--only=tsc',
+        'packages/core/src/index.ts',
+      ])
 
-    expect(exitCode).toBe(1)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p packages/app/tsconfig.json --noEmit',
-      '▶ tsc -p packages/core/tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
-    expect(stdout).toContain(
-      "packages/app/src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
-    )
-  })
+      expect(exitCode).toBe(1)
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        ...SKIPPED_BESIDE_TSC,
+        ...plan,
+        '✘ tsc failed',
+        '✘ 1 of 1 checks failed: tsc',
+      ])
+      expect(stdout).toContain(
+        "packages/app/src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+      )
+    },
+  )
 })

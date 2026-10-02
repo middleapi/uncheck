@@ -219,6 +219,40 @@ describe('tsc with the real compiler in a single repo', () => {
     ])
   })
 
+  it('typechecks a folder without its own tsconfig.json with the one above it, next to the ones inside it', async () => {
+    const project = singleRepo({
+      'web/src/index.ts': CODE_WITH_TYPE_ERROR,
+      'web/cypress/tsconfig.json': {
+        compilerOptions: { strict: true, noEmit: true, types: [] },
+        include: ['**/*.ts'],
+      },
+      'web/cypress/e2e.ts': CLEAN_CODE,
+    }).update('tsconfig.json', (config) => ({ ...config, include: ['web/src'] }))
+    const failed = (plan: ReadonlyArray<string>) => [
+      `uncheck in ${project.path('web')}`,
+      ...SKIPPED_BESIDE_TSC,
+      ...plan,
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ]
+    const diagnostic =
+      "src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
+
+    const full = await project.uncheck(['--only=tsc'], { cwd: 'web' })
+
+    expect(full.exitCode).toBe(1)
+    expect(report(full.stdout)).toEqual(
+      failed(['▶ tsc -p ../tsconfig.json --noEmit', '▶ tsc -p cypress/tsconfig.json --noEmit']),
+    )
+    expect(full.stdout).toContain(`\n${diagnostic}`)
+
+    const given = await project.uncheck(['--only=tsc', 'src/index.ts'], { cwd: 'web' })
+
+    expect(given.exitCode).toBe(1)
+    expect(report(given.stdout)).toEqual(failed(['▶ tsc -p ../tsconfig.json --noEmit']))
+    expect(given.stdout).toContain(`\n${diagnostic}`)
+  })
+
   it.runIf(PERMISSIONS_ENFORCED)(
     'hands a tsconfig.json in a folder it cannot open to tsc, which reports it',
     async () => {

@@ -85,7 +85,7 @@ npx uncheck '!**/*.gen.ts'            # everything except some files
 
 uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included, but never links that point outside the directory uncheck runs in. Without paths, each tool finds the files itself, and oxlint checks and fixes those links too: pass `.` to leave them out. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. An exclusion glob also leaves out the folders it matches, as in `.gitignore`: `'!**/generated'`. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
 
-tsc then checks only the projects that include one of the files, or included one that was deleted or moved, and the projects that depend on those. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among the files.
+tsc then checks only the projects that include one of the files, and the projects that depend on those. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among the files.
 
 ## Run it before every commit
 
@@ -160,10 +160,10 @@ Run uncheck from the workspace root, the folder whose `package.json` has `worksp
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`:
 
-- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations. A project that sets none of `noEmit`, `emitDeclarationOnly`, `outDir` and `outFile` would get JavaScript next to its sources, so it and the projects that reference it are checked with `tsc -p --noEmit` instead, after `tsc -b` builds the projects they reference. These cannot import each other: tsc reports TS6305 until you build them.
+- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations. A project that sets none of `noEmit`, `emitDeclarationOnly`, `outDir` and `outFile` gets JavaScript next to its sources. When git ignores that JavaScript, the project builds in place on purpose and stays in `tsc -b`. Otherwise, as with Vite's `tsconfig.node.json`, it and the projects that reference it are checked with `tsc -p --noEmit` instead, after `tsc -b` builds the projects they reference. These cannot import each other: tsc reports TS6305.
 - Every other project is checked with `tsc -p --noEmit`, a few at a time. A `tsconfig.json` that other configs extend and that includes no files is a shared base, not a project.
-- When only some files are checked, tsc runs just the projects that include them, the projects that reference those, and the projects of the packages that depend on theirs. A changed tsconfig selects every project that extends it, and a deleted or moved file the projects that included it.
-- In a folder with no `tsconfig.json`, such as a package that shares the root one, uncheck uses the nearest one above it in the same git repository, when it includes files of that folder.
+- When only some files are checked, tsc runs just the projects that include them, the projects that reference those, and the projects of the packages that depend on the files' packages. A changed tsconfig selects every project that extends it. In the hooks, a deleted or moved file also selects the projects that included or extended it.
+- In a folder without its own `tsconfig.json`, such as a package that shares the root one, uncheck also uses the nearest one above it in the same git repository, when it includes files of that folder.
 
 **Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags. A package's line runs only when the commit changes files in that package:
 
