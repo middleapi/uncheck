@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process'
+
 import type { Project, Run, RunOptions } from '../utils/project'
 
 export const HEADER =
@@ -31,6 +33,12 @@ export function written(
   command = COMMAND,
 ): string {
   return `✔ pre-commit ${shown} ${result}\n\nThe hook runs ${command} before every commit, \`git commit --no-verify\` skips it.\n`
+}
+
+export function syntaxCheck(file: string): { status: number | null; stderr: string } {
+  const { status, stderr } = spawnSync('sh', ['-n', file], { encoding: 'utf8' })
+
+  return { status, stderr }
 }
 
 export function notWritten(shown: string, reason: string): string {

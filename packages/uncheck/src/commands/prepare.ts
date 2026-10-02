@@ -47,9 +47,12 @@ const QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g
 
 const COMMENT = /(?:^|\s)#.*$/
 
-/** A setup line that runs on into the next, where the added line would join it. */
+/**
+ * A line that runs on into the next, so a line added after it would join its command or block, and
+ * one removed after it would leave them incomplete.
+ */
 const CONTINUES =
-  /^(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$|(?:[^`]*`[^`]*`)*[^`]*`[^`]*$|.*[({]\s*$|.*<<)/
+  /^(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$|(?:[^`]*`[^`]*`)*[^`]*`[^`]*$|.*[({]\s*$|.*<<|.*(?:&&|\||(?:^|[\s;])(?:if|then|elif|else|while|until|do))\s*$)/
 
 const INDENT = /^\s*/
 
@@ -99,6 +102,19 @@ function indentOf(text: string): string {
   return INDENT.exec(text)![0]
 }
 
+// prepare never indents its lines nor continues another line into them, so such a line is the
+// user's, and dropping or moving it would break the block or command it is in.
+function standalone(texts: ReadonlyArray<string>, index: number): boolean {
+  const previous = texts
+    .slice(0, index)
+    .filter((text) => codeOf(text).trim() !== '')
+    .at(-1)
+
+  return (
+    indentOf(texts[index]!) === '' && (previous === undefined || !CONTINUES.test(codeOf(previous)))
+  )
+}
+
 function writtenByV003(text: string): boolean {
   const own = ownLine(text)
 
@@ -139,7 +155,7 @@ function liftAppended(texts: ReadonlyArray<string>): ReadonlyArray<string> {
   )
   const from = runner === -1 ? tail : Math.min(tail, runner + 1)
   const appended = texts.map(
-    (text, index) => index >= from && indentOf(text) === '' && ownLine(text) !== undefined,
+    (text, index) => index >= from && ownLine(text) !== undefined && standalone(texts, index),
   )
 
   return appended.includes(true)
@@ -373,14 +389,15 @@ export const prepare = Command.make(
 
 /**
  * Puts `line` into a hook, so running `prepare` again is idempotent: the lines older versions
- * appended are moved up first, the line for this directory is updated where it sits, keeping its
- * indentation, its unindented copies are dropped, as an indented one is in a block of the user's,
- * and everything else is kept, including the commands of other packages in the same repository and
+ * appended are moved up first, every line for this directory is updated where it sits, keeping its
+ * indentation, except the standalone copies after the first standalone one, which are dropped, and
+ * everything else is kept, including the commands of other packages in the same repository and
  * whatever the user added.
  */
 function rewrite(hook: string, line: string, inside: string): string {
   let placed = false
-  const lines = liftAppended(hook.split('\n')).flatMap((text) => {
+  let placedStandalone = false
+  const lines = liftAppended(hook.split('\n')).flatMap((text, index, texts) => {
     const own = ownLine(text)
 
     if (own === undefined) {
@@ -393,11 +410,14 @@ function rewrite(hook: string, line: string, inside: string): string {
       return [`${indent}${hookLine(own.inside, own.command)}`]
     }
 
-    if (placed && indent === '') {
+    const isStandalone = standalone(texts, index)
+
+    if (isStandalone && placedStandalone) {
       return []
     }
 
     placed = true
+    placedStandalone ||= isStandalone
 
     return [`${indent}${line}`]
   })
@@ -408,7 +428,7 @@ function rewrite(hook: string, line: string, inside: string): string {
 
   const after = lines.reduce(
     (last, text, index) =>
-      indentOf(text) === '' && ownLine(text) !== undefined ? index + 1 : last,
+      ownLine(text) !== undefined && standalone(lines, index) ? index + 1 : last,
     0,
   )
 

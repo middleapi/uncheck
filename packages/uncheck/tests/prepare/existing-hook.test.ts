@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer'
-import { spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { LAYOUTS, monorepo } from '../utils/project'
@@ -12,6 +11,7 @@ import {
   notWritten,
   prepare,
   shownHook,
+  syntaxCheck,
   written,
 } from './utils'
 
@@ -124,10 +124,57 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
 
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(branches(line, line))
-    expect(spawnSync('sh', ['-n', project.path(HOOK)], { encoding: 'utf8' })).toMatchObject({
-      status: 0,
-      stderr: '',
-    })
+    expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+
+    const again = await prepare(project, [], { cwd: app })
+
+    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+  })
+
+  it.each([
+    ['&&', 'pnpm test &&'],
+    ['||', '[ -n "$SKIP_CHECKS" ] ||'],
+    ['a backslash', 'git diff --cached --quiet || \\'],
+  ])(
+    'keeps in place the line of v0.0.3 after a command that runs on into it with %s',
+    async (_, command) => {
+      const existing = (text: string) => `#!/bin/sh\n${command}\n${text}\n`
+
+      const { stdout, hook, project } = await prepareHook(existing(lineOfV003))
+
+      expect(stdout).toBe(written(shownHook(project, app), 'updated'))
+      expect(hook).toBe(existing(line))
+      expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+
+      const again = await prepare(project, [], { cwd: app })
+
+      expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    },
+  )
+
+  it.each([
+    ['after a command that runs on into it', 'pnpm test &&\n\n', ''],
+    ['that is all of an unindented block', 'if [ "$FULL" = 1 ]; then\n', 'fi\n'],
+  ])('keeps in place a copy of its line %s', async (_, before, after) => {
+    const existing = (text: string) => `${HEADER}${line}\n${before}${text}\n${after}`
+
+    const { hook, project } = await prepareHook(existing(lineOfV003))
+
+    expect(hook).toBe(existing(line))
+    expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+  })
+
+  it('keeps its line after a block that runs it too', async () => {
+    const runs = (command: string) => (app === '' ? command : `(cd "${folder}" && ${command})`)
+    const existing = (inBlock: string, after: string) =>
+      `#!/bin/sh\nif [ -n "$CI" ]; then\n  ${inBlock}\nfi\n${after}\n`
+
+    const { stdout, hook, project } = await prepareHook(
+      existing(runs('pnpm exec uncheck staged --only=oxlint'), `${runs(COMMAND)} || exit 1`),
+    )
+
+    expect(stdout).toBe(written(shownHook(project, app), 'updated'))
+    expect(hook).toBe(existing(line, line))
 
     const again = await prepare(project, [], { cwd: app })
 
