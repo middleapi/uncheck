@@ -5,13 +5,18 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { userError } from '../errors'
 import { inNodeModules } from '../files'
-import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff } from '../git'
+import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff, refusesRepository } from '../git'
 import { dim, green, listFiles, red } from '../style'
 import { argvBatches } from '../tool'
 import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
-type Unstaged = 'restored' | 'stranded' | { readonly conflicted: ReadonlyArray<string> }
+interface Unstaged {
+  readonly conflicted: ReadonlyArray<string>
+  readonly stranded: ReadonlyArray<string>
+}
+
+const RESTORED: Unstaged = { conflicted: [], stranded: [] }
 
 export const staged = Command.make(
   'staged',
@@ -43,10 +48,9 @@ export const staged = Command.make(
         prefix,
         paths: [folder, indexLock],
       } = yield* gitLocation(cwd, ['uncheck-unstaged', 'index.lock']).pipe(
-        Effect.catchTag('GitFailed', ({ stderr }) =>
-          // The setting git names is never translated, unlike the rest of its message.
+        Effect.catchTag('GitFailed', (error) =>
           userError(
-            stderr.includes('safe.directory') ? stderr : '`uncheck staged` needs a git repository',
+            refusesRepository(error) ? error.stderr : '`uncheck staged` needs a git repository',
           ),
         ),
       )
@@ -70,7 +74,9 @@ export const staged = Command.make(
         const reason =
           listed.files.length > 0 || listed.deleted.length > 0
             ? 'every staged file comes from the branch being merged in'
-            : 'no staged files'
+            : listed.anyStaged
+              ? 'only links and node_modules files are staged'
+              : 'no staged files'
 
         return yield* Console.log(`${dim('○')} nothing to check, ${reason}`)
       }
@@ -84,8 +90,8 @@ export const staged = Command.make(
       }
 
       const partial = yield* partiallyStaged(unstaged, files)
-      const outcome = yield* Ref.make<Unstaged>('restored')
-      const fixed = yield* Ref.make<ReadonlyArray<string>>([])
+      const outcome = yield* Ref.make(RESTORED)
+      const fixed = yield* Ref.make<ReadonlyArray<string> | undefined>(fix ? undefined : [])
       const summary = yield* Ref.make<ReadonlyArray<string>>([])
 
       // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
@@ -113,7 +119,7 @@ export const staged = Command.make(
             const before = yield* writeTree(cwd)
 
             yield* Effect.acquireRelease(setAside(aside, partial), (copies) =>
-              putBack(aside, files, copies, before, fixed).pipe(
+              putBack(aside, files, copies, before, fixed, active).pipe(
                 Effect.flatMap((result) => Ref.set(outcome, result)),
               ),
             )
@@ -132,7 +138,7 @@ export const staged = Command.make(
 
           const changed = yield* Ref.get(fixed)
 
-          if (changed.length === 0) {
+          if (changed === undefined || changed.length === 0) {
             return { failure, empty: false }
           }
 
@@ -157,17 +163,18 @@ export const staged = Command.make(
         ),
       )
 
-      const unstagedOutcome = yield* Ref.get(outcome)
+      const { conflicted, stranded } = yield* Ref.get(outcome)
 
-      if (typeof unstagedOutcome === 'object') {
+      if (stranded.length > 0 || conflicted.length > 0) {
         return yield* userError(
-          `The fixes conflict with the unstaged changes of ${listFiles(unstagedOutcome.conflicted)} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`,
-        )
-      }
-
-      if (unstagedOutcome === 'stranded') {
-        return yield* userError(
-          `The unstaged changes of ${listFiles(partial)} could not be put back, see above.`,
+          [
+            stranded.length > 0 &&
+              `The unstaged changes of ${listFiles(stranded)} could not be put back, see above.`,
+            conflicted.length > 0 &&
+              `The fixes conflict with the unstaged changes of ${listFiles(conflicted)} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`,
+          ]
+            .filter(Boolean)
+            .join(' '),
         )
       }
 
@@ -214,6 +221,7 @@ const stagedFiles = (cwd: string, ...against: ReadonlyArray<string>) =>
     const kept = entries.filter((entry) => !inNodeModules(entry.file))
 
     return {
+      anyStaged: entries.length > 0,
       files: kept
         .filter((entry) => entry.status !== 'D' && REGULAR_FILE_MODE.test(entry.toMode))
         .map((entry) => entry.file),
@@ -375,27 +383,50 @@ const putBack = Effect.fn(function* (
   files: ReadonlyArray<string>,
   copies: ReadonlyArray<SetAside>,
   before: string,
-  fixed: Ref.Ref<ReadonlyArray<string>>,
+  fixed: Ref.Ref<ReadonlyArray<string> | undefined>,
+  index: string | undefined,
 ) {
   const fs = yield* FileSystem.FileSystem
   const { cwd, saved } = aside
   const partial = copies.map(({ file }) => file)
+  const copyBack = (entries: ReadonlyArray<SetAside>) =>
+    Effect.forEach(entries, ({ target, copy }) => fs.copyFile(copy, target), { discard: true })
+  const restored = Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`)).pipe(
+    Effect.as(RESTORED),
+  )
+  const strand = (stranded: ReadonlyArray<string>, reason: string) =>
+    Console.log(
+      `${red('✘')} could not put back the unstaged changes of ${listFiles(stranded)}: ${reason}\n  their unstaged versions are in ${saved}, at their paths from the top of the repository: copy back what your files are missing and delete the folder`,
+    )
 
   const result = yield* Effect.gen(function* () {
-    const merged = yield* Effect.forEach(copies, (entry) => merge(aside, entry, before), {
-      concurrency: 4,
-    })
-    const conflicted = partial.filter((_, index) => !merged[index])
+    // Killed by Ctrl-C, git deletes the lock index it ran the hook on, as with `git commit -i`: no staged
+    // version is left to merge with, and writing that index would leave a stale lock behind.
+    if (index?.endsWith('.lock') === true && !(yield* fs.exists(index))) {
+      yield* copyBack(copies)
+      return yield* restored
+    }
+
+    const stagedFixes = yield* Ref.get(fixed)
+    const merged = yield* Effect.forEach(
+      copies,
+      (entry) =>
+        Effect.map(merge(aside, entry, before, stagedFixes !== undefined), (outcome) => ({
+          ...entry,
+          ...outcome,
+        })),
+      { concurrency: 4 },
+    )
+    const conflicted = merged.filter(({ clean }) => !clean)
 
     if (conflicted.length === 0) {
-      yield* Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`))
-      return 'restored' as const
+      return yield* restored
     }
 
     const isPartial = new Set(partial)
-    const fixedInFull = (yield* Ref.get(fixed)).filter((file) => !isPartial.has(file))
+    const fixedInFull = (stagedFixes ?? []).filter((file) => !isPartial.has(file))
     // A file saved since its fixes were staged holds an edit made during the run, which a
-    // checkout would throw away.
+    // checkout or its unstaged copy would throw away.
     const editedSince = new Set(yield* differFromIndex(cwd, fixedInFull))
 
     yield* gitEach(cwd, ['reset', '-q', before], files)
@@ -404,22 +435,36 @@ const putBack = Effect.fn(function* (
       ['checkout-index', '-f'],
       fixedInFull.filter((file) => !editedSince.has(file)),
     )
-    yield* Effect.forEach(copies, ({ target, copy }) => fs.copyFile(copy, target), {
-      discard: true,
-    })
+    yield* copyBack(merged.filter(({ edited }) => !edited))
 
-    return { conflicted }
+    const stranded = conflicted.filter(({ edited }) => edited)
+
+    if (stranded.length > 0) {
+      // A copy left beside the stranded ones would invite copying it over a newer file.
+      yield* Effect.forEach(
+        merged.filter((entry) => !stranded.includes(entry)),
+        ({ copy }) => fs.remove(copy),
+        { discard: true },
+      )
+      yield* strand(
+        stranded.map(({ file }) => file),
+        'they conflict with edits saved while the checks ran',
+      )
+    }
+
+    return {
+      conflicted: conflicted.filter(({ edited }) => !edited).map(({ file }) => file),
+      stranded: stranded.map(({ file }) => file),
+    }
   }).pipe(
-    Effect.catch((error) => {
-      const reason = error instanceof GitFailed ? error.summary : String(error)
-
-      return Console.log(
-        `${red('✘')} could not put back the unstaged changes of ${listFiles(partial)}: ${reason}\n  their unstaged versions are in ${saved}, at their paths from the top of the repository: copy back what your files are missing and delete the folder`,
-      ).pipe(Effect.as('stranded' as const))
-    }),
+    Effect.catch((error) =>
+      strand(partial, error instanceof GitFailed ? error.summary : String(error)).pipe(
+        Effect.as({ conflicted: [], stranded: partial }),
+      ),
+    ),
   )
 
-  if (result !== 'stranded') {
+  if (result.stranded.length === 0) {
     yield* Effect.ignore(fs.remove(saved, { recursive: true }))
   }
 
@@ -432,6 +477,7 @@ const merge = Effect.fn(function* (
   { cwd, prefix }: Aside,
   { file, target, copy, base }: SetAside,
   before: string,
+  fixesStaged: boolean,
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -440,19 +486,24 @@ const merge = Effect.fn(function* (
 
   if (checked === base) {
     yield* fs.copyFile(copy, target)
-    return true
+    return { clean: true, edited: false }
   }
 
-  // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
-  // back through the filters would turn every line ending of the file to LF.
   const [staged, stored] = (yield* git(cwd, [
     'rev-parse',
     `:0:${prefix}${file}`,
     `${before}:${prefix}${file}`,
   ])).split('\n')
+  // Until the fixes are staged, a fixed file differs from the index just as an edited one does.
+  // hash-object turns the CRLF of a blob git keeps that way to LF, so only git can tell whether the
+  // file still holds what is staged.
+  const edited =
+    fixesStaged && staged !== checked && (yield* differFromIndex(cwd, [file])).length > 0
 
+  // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
+  // back through the filters would turn every line ending of the file to LF.
   if (stored !== base && staged !== checked) {
-    return false
+    return { clean: false, edited }
   }
 
   const temp = yield* fs.makeTempDirectory()
@@ -494,6 +545,6 @@ const merge = Effect.fn(function* (
       yield* fs.chmod(target, (yield* fs.stat(copy)).mode)
     }
 
-    return clean
+    return { clean, edited }
   }).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp, { recursive: true }))))
 })

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import process from 'node:process'
 
 import { CLI, environment } from '../utils/project'
 import type { Env, Files, Project, Run } from '../utils/project'
@@ -53,16 +54,22 @@ export function stagePartially(project: Project, file: string): Project {
   return project.stage({ [file]: VERSIONS.staged }).write({ [file]: VERSIONS.unstaged })
 }
 
-/** What `saveWhileTscRuns` adds to the top of a file. */
+/** What `saveWhileTscRuns` adds to a file. */
 export const SAVED_LINE = '// saved while tsc ran\n'
 
-/** Fakes a tsc that adds `SAVED_LINE` to `files` as it runs, as an editor saving them would. */
-export function saveWhileTscRuns(project: Project, files: ReadonlyArray<string>): Project {
+/** Fakes a tsc that adds `SAVED_LINE` to the top of `files`, or to their end, as an editor would. */
+export function saveWhileTscRuns(
+  project: Project,
+  files: ReadonlyArray<string>,
+  { atEnd = false }: { readonly atEnd?: boolean } = {},
+): Project {
   const paths = JSON.stringify(files.map((file) => project.path(file)))
+  const line = JSON.stringify(SAVED_LINE)
+  const content = "fs.readFileSync(file, 'utf8')"
 
   return project.fake(
     'typescript',
-    `const fs = require('node:fs')\nfor (const file of ${paths}) fs.writeFileSync(file, ${JSON.stringify(SAVED_LINE)} + fs.readFileSync(file, 'utf8'))\n`,
+    `const fs = require('node:fs')\nfor (const file of ${paths}) fs.writeFileSync(file, ${atEnd ? `${content} + ${line}` : `${line} + ${content}`})\n`,
   )
 }
 
@@ -81,9 +88,68 @@ export function inIndex(project: Project, file: string): string {
 
 export interface Started {
   readonly child: ChildProcessWithoutNullStreams
-  /** Resolves once stdout has shown `marker`. */
+  /** Resolves once stdout or stderr has shown `marker`. */
   readonly printed: (marker: string) => Promise<void>
   readonly exited: Promise<Run>
+}
+
+interface StartOptions {
+  readonly cwd: string
+  readonly env?: Env
+  readonly ownProcessGroup?: boolean
+}
+
+function start(
+  command: ReadonlyArray<string>,
+  { cwd, env, ownProcessGroup = false }: StartOptions,
+): Started {
+  const child = spawn(command[0]!, command.slice(1), {
+    cwd,
+    env: environment(env),
+    detached: ownProcessGroup,
+  })
+  const waiters: Array<{ readonly marker: string; readonly resolve: () => void }> = []
+  const output = { stdout: '', stderr: '' }
+  const shown = (marker: string) => output.stdout.includes(marker) || output.stderr.includes(marker)
+  const collect = (stream: keyof typeof output) => (chunk: string) => {
+    output[stream] += chunk
+
+    for (const waiter of waiters.filter(({ marker }) => shown(marker))) {
+      waiters.splice(waiters.indexOf(waiter), 1)
+      waiter.resolve()
+    }
+  }
+
+  onTestFinished(() => {
+    if (!ownProcessGroup) {
+      child.kill('SIGKILL')
+      return
+    }
+
+    // Throws once every process of the group has exited.
+    try {
+      process.kill(-child.pid!, 'SIGKILL')
+    } catch {}
+  })
+
+  child.stdout.setEncoding('utf8').on('data', collect('stdout'))
+  child.stderr.setEncoding('utf8').on('data', collect('stderr'))
+
+  return {
+    child,
+    printed: (marker) =>
+      new Promise((resolve) => {
+        if (shown(marker)) {
+          resolve()
+        } else {
+          waiters.push({ marker, resolve })
+        }
+      }),
+    exited: new Promise((resolve, reject) => {
+      child.on('error', reject)
+      child.on('close', (exitCode, signal) => resolve({ exitCode, signal, ...output }))
+    }),
+  }
 }
 
 /** Starts the CLI without waiting for it, for tests that act on the process while it runs. */
@@ -92,43 +158,18 @@ export function startUncheck(
   args: ReadonlyArray<string>,
   { cwd = '.', env }: { readonly cwd?: string; readonly env?: Env } = {},
 ): Started {
-  const child = spawn(CLI[0], [...CLI.slice(1), ...args], {
-    cwd: project.path(cwd),
-    env: environment(env),
-  })
-  const waiters: Array<{ readonly marker: string; readonly resolve: () => void }> = []
-  let stdout = ''
-  let stderr = ''
+  return start([...CLI, ...args], { cwd: project.path(cwd), env })
+}
 
-  onTestFinished(() => {
-    child.kill('SIGKILL')
-  })
+/**
+ * Starts `git <args>` in a process group of its own, which `interrupt` sends Ctrl-C to as a terminal
+ * would. `exited` waits for the hooks git started too, since they hold its output.
+ */
+export function startGit(
+  project: Project,
+  args: ReadonlyArray<string>,
+): Started & { readonly interrupt: () => void } {
+  const started = start(['git', ...args], { cwd: project.dir, ownProcessGroup: true })
 
-  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-    stdout += chunk
-
-    for (const waiter of waiters.filter(({ marker }) => stdout.includes(marker))) {
-      waiters.splice(waiters.indexOf(waiter), 1)
-      waiter.resolve()
-    }
-  })
-  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-    stderr += chunk
-  })
-
-  return {
-    child,
-    printed: (marker) =>
-      new Promise((resolve) => {
-        if (stdout.includes(marker)) {
-          resolve()
-        } else {
-          waiters.push({ marker, resolve })
-        }
-      }),
-    exited: new Promise((resolve, reject) => {
-      child.on('error', reject)
-      child.on('close', (exitCode, signal) => resolve({ exitCode, signal, stdout, stderr }))
-    }),
-  }
+  return { ...started, interrupt: () => process.kill(-started.child.pid!, 'SIGINT') }
 }

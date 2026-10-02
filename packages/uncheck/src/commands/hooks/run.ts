@@ -8,14 +8,15 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { StopBlocked, userError } from '../../errors'
 import { listChangedFiles } from '../../files'
-import { git } from '../../git'
+import { git, refusesRepository } from '../../git'
 import { captureLines } from '../../tool'
-import { fixFlag, runChecks, selectionFlags } from '../uncheck'
+import { fixFlag, followLinks, runChecks, selectionFlags } from '../uncheck'
 
 export const run = Command.make(
   'run',
   {
     cwd: Flag.Directory('cwd', { mustExist: true }).pipe(
+      followLinks,
       Flag.optional,
       Flag.withDescription(
         "Directory to check. Defaults to the top of the git repository around the current directory, or around the agent's project (CLAUDE_PROJECT_DIR or CODEBUDDY_PROJECT_DIR) when the current directory is outside git or in a repository nested in the project's, and to the project itself outside git",
@@ -81,7 +82,7 @@ export const run = Command.make(
     const continuing =
       payload.stop_hook_active === true ||
       (typeof payload.loop_count === 'number' && payload.loop_count > 0)
-    const sessionId = payload.session_id ?? payload.conversation_id
+    const sessionId = payload.session_id ?? payload.sessionId ?? payload.conversation_id
     const marker =
       typeof sessionId === 'string'
         ? path.join(
@@ -92,14 +93,17 @@ export const run = Command.make(
           )
         : undefined
 
-    if (marker !== undefined && !continuing) {
-      yield* Effect.ignore(fs.remove(marker, { force: true }))
+    const forgetBlock =
+      marker === undefined ? Effect.void : Effect.ignore(fs.remove(marker, { force: true }))
+
+    if (!continuing) {
+      yield* forgetBlock
     }
 
     const changed = yield* listChangedFiles(cwd)
 
     if (changed !== undefined && changed.files.length === 0 && changed.deleted.length === 0) {
-      return
+      return yield* forgetBlock
     }
 
     const [failed, lines] = yield* runChecks(changed?.files ?? [], {
@@ -119,14 +123,15 @@ export const run = Command.make(
     yield* Console.error(report)
 
     if (!failed) {
-      return
+      return yield* forgetBlock
     }
 
-    // Send the agent back at most once per turn, in the way its family understands. Claude Code and
-    // CodeBuddy block on exit code 2 with stderr as the message, set `stop_hook_active` once they are
-    // already continuing, and show the user nothing but a `systemMessage` from a hook that exits 0;
-    // Cursor continues on a follow-up message and counts them in `loop_count`; Copilot continues on a
-    // block decision, also in the Claude format, where it takes exit code 2 for a mere warning.
+    // Send the agent back once until the checks pass again, in the way its family understands. Claude
+    // Code and CodeBuddy block on exit code 2 with stderr as the message, set `stop_hook_active` once
+    // they are already continuing, and show the user nothing but a `systemMessage` from a hook that
+    // exits 0; Cursor continues on a follow-up message and counts them in `loop_count`; Copilot
+    // continues on a block decision, also in the Claude format, where it takes exit code 2 for a mere
+    // warning.
     const reason = `uncheck found problems, fix them before finishing:\n\n${report}`
     const sendBack =
       typeof (payload.stopReason ?? payload.stop_reason) === 'string'
@@ -178,37 +183,46 @@ interface Repository {
   readonly commonDir: string
 }
 
-const repositoryAround = Effect.fn(
-  function* (folder: string) {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
+const repositoryAround = Effect.fn(function* (folder: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
 
-    const [top, commonDir] = yield* Effect.all(
-      [
-        git(folder, ['rev-parse', '--show-toplevel']),
-        git(folder, ['rev-parse', '--git-common-dir']),
-      ],
-      { concurrency: 'unbounded' },
-    )
+  const [physicalFolder, top, commonDir] = yield* Effect.all(
+    [
+      fs.realPath(folder),
+      git(folder, ['rev-parse', '--show-toplevel']),
+      git(folder, ['rev-parse', '--git-common-dir']),
+    ],
+    { concurrency: 'unbounded' },
+  )
 
-    // git prints the common dir relative to `folder`, which may run through a link.
-    const repository: Repository = {
-      top,
-      commonDir: yield* fs.realPath(path.resolve(folder, commonDir)),
-    }
+  // git prints the common dir relative to the real path of `folder`, and a linked worktree may name
+  // it through a link.
+  const repository: Repository = {
+    top,
+    commonDir: yield* fs.realPath(path.resolve(physicalFolder, commonDir)),
+  }
 
-    return repository
-  },
-  Effect.orElseSucceed(() => undefined),
-)
+  return repository
+})
+
+// Checking a repository git refuses as if it were outside git would fix every file in the folder.
+const repositoryUnlessRefused = (folder: string) =>
+  repositoryAround(folder).pipe(
+    Effect.catch((error) =>
+      error._tag === 'GitFailed' && refusesRepository(error)
+        ? userError(error.stderr)
+        : Effect.succeed(undefined),
+    ),
+  )
 
 const topToCheck = Effect.fn(function* (start: string, projectDir: string | undefined) {
   const path = yield* Path.Path
 
   const [here, project] = yield* Effect.all(
     [
-      repositoryAround(start),
-      projectDir === undefined ? Effect.succeed(undefined) : repositoryAround(projectDir),
+      repositoryUnlessRefused(start),
+      projectDir === undefined ? Effect.succeed(undefined) : repositoryUnlessRefused(projectDir),
     ],
     { concurrency: 'unbounded' },
   )
@@ -235,7 +249,7 @@ const topToCheck = Effect.fn(function* (start: string, projectDir: string | unde
     // A repository whose core.worktree is a subfolder names that subfolder as its top from above it
     // too, so climbing from its top alone would ask about the same folder forever.
     folder = path.dirname(path.relative(outer.top, folder).startsWith('..') ? folder : outer.top)
-    outer = yield* repositoryAround(folder)
+    outer = yield* repositoryAround(folder).pipe(Effect.orElseSucceed(() => undefined))
   }
 
   return outer?.commonDir === project.commonDir ? outer.top : here.top

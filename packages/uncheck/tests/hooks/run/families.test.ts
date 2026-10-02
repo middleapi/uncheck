@@ -102,7 +102,7 @@ describe.each(LAYOUTS)(
       expect(project.read(`${app}src/index.ts`)).toBe('export const answer: string = "42";\n')
     })
 
-    it('blocks Claude Code once per turn, even after another hook continued it', async () => {
+    it('blocks Claude Code again only after its checks passed, even when another hook continued the turn', async () => {
       const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
       const continued = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
@@ -127,21 +127,45 @@ describe.each(LAYOUTS)(
 
       project.write({ [`${app}src/index.ts`]: 'export const answer: string = "42";\n' })
 
-      const passingTurn = await stopHook(project, app, CLAUDE_CODE_STOP)
+      const passing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(passingTurn.exitCode).toBe(0)
-      expect(passingTurn.stdout).toBe('')
-      expect(report(passingTurn.stderr)).toEqual(
+      expect(passing.exitCode).toBe(0)
+      expect(passing.stdout).toBe('')
+      expect(report(passing.stderr)).toEqual(
         checks(project, '✔ tsc passed', '✔ all checks passed (oxlint, oxfmt, tsc)'),
       )
 
       project.write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
-      const continuedAfterPassing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+      const failingAfterPassing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(continuedAfterPassing.exitCode).toBe(2)
-      expect(continuedAfterPassing.stdout).toBe('')
-      expect(report(continuedAfterPassing.stderr)).toEqual(failure(project))
+      expect(failingAfterPassing.exitCode).toBe(2)
+      expect(failingAfterPassing.stdout).toBe('')
+      expect(report(failingAfterPassing.stderr)).toEqual(failure(project))
+
+      const stillFailing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(stillFailing.exitCode).toBe(0)
+      expect(JSON.parse(stillFailing.stdout)).toEqual({
+        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+      })
+      expect(report(stillFailing.stderr)).toEqual(failure(project))
+
+      project.git('checkout', '--', '.')
+
+      const reverted = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(reverted.exitCode).toBe(0)
+      expect(reverted.stdout).toBe('')
+      expect(reverted.stderr).toBe('')
+
+      project.write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const failingAfterReverting = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(failingAfterReverting.exitCode).toBe(2)
+      expect(failingAfterReverting.stdout).toBe('')
+      expect(report(failingAfterReverting.stderr)).toEqual(failure(project))
     })
 
     it('takes a continued turn without a session id as one uncheck already blocked', async () => {
@@ -189,6 +213,35 @@ describe.each(LAYOUTS)(
       expect(report(anotherConversation.stderr)).toEqual(failure(project))
       expect(JSON.parse(anotherConversation.stdout)).toEqual({
         followup_message: sendBackReason(anotherConversation.stderr),
+      })
+    })
+
+    it('blocks Copilot once per turn, even after another hook continued it', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+      const continuedStop = { ...COPILOT_AGENT_STOP, stop_hook_active: true }
+
+      const continued = await stopHook(project, app, continuedStop)
+
+      expect(continued.exitCode).toBe(0)
+      expect(report(continued.stderr)).toEqual(failure(project))
+      expect(JSON.parse(continued.stdout)).toEqual({
+        decision: 'block',
+        reason: sendBackReason(continued.stderr),
+      })
+
+      const again = await stopHook(project, app, continuedStop)
+
+      expect(again.exitCode).toBe(0)
+      expect(again.stdout).toBe('')
+      expect(report(again.stderr)).toEqual(failure(project))
+
+      const nextTurn = await stopHook(project, app, COPILOT_AGENT_STOP)
+
+      expect(nextTurn.exitCode).toBe(0)
+      expect(report(nextTurn.stderr)).toEqual(failure(project))
+      expect(JSON.parse(nextTurn.stdout)).toEqual({
+        decision: 'block',
+        reason: sendBackReason(nextTurn.stderr),
       })
     })
 

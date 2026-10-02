@@ -6,6 +6,7 @@ import {
   Project,
   cliError,
   git,
+  gitConfig,
   linkedWorktree,
   monorepo,
   report,
@@ -77,6 +78,33 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
       expect(project.read(`${app}src/extra.ts`)).toBe(UNFORMATTED)
     },
   )
+
+  it('reports a repository git refuses instead of checking the whole folder', async () => {
+    const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
+    const refused = { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' }
+
+    const fromInside = await stopHook(project, app, CLAUDE_CODE_STOP, {
+      cwd: `${app}src`,
+      env: refused,
+    })
+    const fromOutside = await run([...CLI, 'hooks', 'run', '--fix', ...dirFlags(app)], {
+      cwd: temporaryDirectory(),
+      env: hookEnv({ ...refused, CLAUDE_PROJECT_DIR: project.path(app) }),
+      input: JSON.stringify(CLAUDE_CODE_STOP),
+    })
+
+    for (const { exitCode, stdout, stderr } of [fromInside, fromOutside]) {
+      expect(exitCode).toBe(1)
+      expect(stdout).toBe('')
+      expect(project.normalize(stderr)).toContain(
+        cliError("fatal: detected dubious ownership in repository at '<project>'").trimEnd(),
+      )
+      expect(stderr).toContain('safe.directory')
+      expect(report(stderr)).toEqual([])
+    }
+
+    expect(project.read(`${app}src/extra.ts`)).toBe(UNFORMATTED)
+  })
 
   it.each(['CLAUDE_PROJECT_DIR', 'CODEBUDDY_PROJECT_DIR'])(
     'checks the project in %s outside git, from the folder the agent moved to',
@@ -258,6 +286,77 @@ describe('hooks run in a monorepo', () => {
     ])
     expect(project.read('packages/app/src/extra.ts')).toBe(FORMATTED)
     expect(project.read('packages/core/src/extra.ts')).toBe(UNFORMATTED)
+  })
+})
+
+describe('hooks run through links into a package', () => {
+  it('checks the package a --cwd link points to, with and without --dir', async () => {
+    const project = monorepo().write({ 'packages/app/src/extra.ts': UNFORMATTED })
+    const outside = new Project(temporaryDirectory()).link('app', project.path('packages/app'))
+
+    for (const dir of [['--dir=packages/app'], []]) {
+      const { exitCode, stdout, stderr } = await run(
+        [...CLI, 'hooks', 'run', '--only=oxfmt', `--cwd=${outside.path('app')}`, ...dir],
+        { cwd: outside.dir, env: hookEnv(), input: JSON.stringify(CLAUDE_CODE_STOP) },
+      )
+
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual(oxfmtFailed(project.path('packages/app')))
+    }
+  })
+
+  it("checks the agent's project named through a link from a repository nested in it", async () => {
+    const project = monorepo().write({ 'vendor/nested/README.md': '# Nested\n' })
+    const outside = new Project(temporaryDirectory()).link('app', project.path('packages/app'))
+
+    git(project.path('vendor/nested'), ['init', '--quiet'])
+    project.write({ 'packages/app/src/extra.ts': UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(
+      project,
+      'packages/app/',
+      CLAUDE_CODE_STOP,
+      {
+        args: ['--only=oxfmt'],
+        cwd: 'vendor/nested',
+        env: { CLAUDE_PROJECT_DIR: outside.path('app') },
+      },
+    )
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(project.path('packages/app')))
+  })
+})
+
+describe('hooks run in a repository nested in one git refuses', () => {
+  it('checks the repository the agent moved to when the project is another one', async () => {
+    const project = singleRepo()
+    const outer = temporaryDirectory()
+    const nested = new Project(join(outer, 'nested'))
+      .write({ '.gitignore': 'node_modules\n' })
+      .link('node_modules', project.path('node_modules'))
+
+    git(outer, ['init', '--quiet'])
+    git(nested.dir, ['init', '--quiet'])
+    nested.commit('init').write({ 'src/extra.ts': UNFORMATTED })
+
+    const { exitCode, stdout, stderr } = await stopHook(nested, '', CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: 'src',
+      env: {
+        CLAUDE_PROJECT_DIR: project.dir,
+        GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
+        GIT_CONFIG_GLOBAL: gitConfig(
+          `[safe]\n\tdirectory = ${nested.dir}\n\tdirectory = ${project.dir}\n`,
+        ),
+      },
+    })
+
+    expect(exitCode).toBe(2)
+    expect(stdout).toBe('')
+    expect(report(stderr)).toEqual(oxfmtFailed(nested.dir))
   })
 })
 

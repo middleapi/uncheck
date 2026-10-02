@@ -113,7 +113,7 @@ What the hook guarantees:
 
 - **Each staged file is checked as you staged it.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
 - **Nothing is lost.** If a fix clashes with your unstaged changes, every fix is undone and the commit stops. Stage the whole file, or stash the rest, and commit again.
-- **Only fixes to staged files are staged.** An edit you save while the checks run stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
+- **Only fixes to staged files are staged.** The fixes are staged once oxlint and oxfmt finish, so an edit you save while tsc runs stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
 - **No empty commits.** If the fixes undo every staged change, the commit fails, unless you pass `--allow-empty`.
 
 Good to know:
@@ -142,11 +142,11 @@ npx uncheck hooks install                    # or pick them from a list
 | Cursor         | `cursor`    | `.cursor/hooks.json`         |
 | GitHub Copilot | `copilot`   | `.github/hooks/uncheck.json` |
 
-Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back at most once per turn, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
+Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back again only once the checks have passed in between, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
 
 - **sherif only reports** here, since its fixes reach beyond the agent's change: they move versions in other packages and run your install. Run `npx uncheck --fix` for them.
 - **Too slow?** Leave the typecheck to CI: `npx uncheck hooks install claude --only=oxlint --only=oxfmt`. Install again to change the flags.
-- **Outside git** and before the first commit, the hook checks the whole folder, and oxlint also fixes the files that links in it point to.
+- **Outside git** and before the first commit, the hook checks the whole folder, and oxlint also fixes the files that links in it point to. In a repository git refuses, such as one another user owns, the hook checks nothing and shows git's message.
 - **Installed from a package?** The hook finds uncheck only where your package manager can run it, so add uncheck to the workspace root too when the agent may work outside that package.
 - **Your config is kept.** Other hooks and settings stay, and installing again only updates uncheck's entry. Comments in the file are lost when it is rewritten.
 - **Avoid double runs.** Cursor and Copilot CLI also run the hooks in `.claude/settings.json`, so add `cursor` or `copilot` next to `claude` only where they do not read that file.

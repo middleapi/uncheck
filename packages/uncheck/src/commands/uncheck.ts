@@ -26,11 +26,13 @@ const FIXES_DONE_AFTER = CHECKS.reduce(
   0,
 )
 
+// git runs in the folder a symlink points to and prints its paths relative to that folder.
+export const followLinks = Flag.mapEffect((directory: string) =>
+  FileSystem.FileSystem.use((fs) => fs.realPath(directory)).pipe(Effect.orDie),
+)
+
 export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
-  // git runs in the folder a symlink points to and prints its paths relative to that folder.
-  Flag.mapEffect((directory) =>
-    FileSystem.FileSystem.use((fs) => fs.realPath(directory)).pipe(Effect.orDie),
-  ),
+  followLinks,
   Flag.withDefault(Effect.sync(() => process.cwd())),
   Flag.withDescription('Directory to run in. Defaults to the current one'),
 )

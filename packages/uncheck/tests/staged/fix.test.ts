@@ -215,7 +215,20 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       [`${app}src/extra.ts`]: 'export const   extra = 1\n',
     })
 
-    project.git('add', '--force', '--', dependency, `${app}src/extra.ts`)
+    project.git('add', '--force', '--', dependency)
+
+    const alone = await project.uncheck(['staged', '--fix', '--only=oxlint', '--only=oxfmt'], {
+      cwd: folder,
+    })
+
+    expect(alone.stderr).toBe('')
+    expect(alone.exitCode).toBe(0)
+    expect(report(alone.stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ nothing to check, only links and node_modules files are staged',
+    ])
+
+    project.git('add', '--', `${app}src/extra.ts`)
 
     const { exitCode, stdout, stderr } = await project.uncheck(
       ['staged', '--fix', '--only=oxlint', '--only=oxfmt'],
