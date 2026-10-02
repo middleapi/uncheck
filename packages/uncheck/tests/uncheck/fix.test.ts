@@ -1,5 +1,5 @@
 import type { Project } from '../utils/project'
-import { LAYOUTS, report } from '../utils/project'
+import { FULL_OXFMT_FIX, FULL_OXLINT, FULL_OXLINT_FIX, LAYOUTS, report } from '../utils/project'
 import {
   CODE_WITH_TYPE_ERROR,
   CODE_WITH_VAR,
@@ -23,9 +23,9 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...layoutChecks(app, { fix: true }).sherif,
-      '▶ oxlint --fix --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT_FIX,
       '✔ oxlint passed',
-      '▶ oxfmt --no-error-on-unmatched-pattern',
+      FULL_OXFMT_FIX,
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
@@ -77,7 +77,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✘ oxlint failed',
       '✘ oxfmt not installed',
       '○ tsc skipped, disabled with --skip=tsc',
@@ -99,7 +99,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --fix --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT_FIX,
       '✘ oxlint failed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
@@ -121,7 +121,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
     expect(check.stdout).not.toContain(dependency)
     expect(selectedReport(check.stdout)).toEqual([
       `uncheck in ${project.dir}`,
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '✔ all checks passed (oxlint)',
     ])
@@ -185,9 +185,9 @@ describe('uncheck --fix in a monorepo', () => {
       `uncheck in ${project.dir}`,
       '▶ sherif',
       '✘ sherif failed',
-      '▶ oxlint --fix --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT_FIX,
       '✔ oxlint passed',
-      '▶ oxfmt --no-error-on-unmatched-pattern',
+      FULL_OXFMT_FIX,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✘ 1 of 3 checks failed: sherif',

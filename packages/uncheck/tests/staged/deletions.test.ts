@@ -1,13 +1,12 @@
 import { mkdirSync } from 'node:fs'
 
-import { monorepo, report, singleRepo } from '../utils/project'
-import { UTILS_NOT_FOUND } from './utils'
-
-const SKIPPED_FOR_DELETIONS = [
-  '○ sherif skipped, no package.json among the given files',
-  '○ oxlint skipped, only deleted files',
-  '○ oxfmt skipped, only deleted files',
-]
+import {
+  monorepo,
+  report,
+  singleRepo,
+  SKIPPED_FOR_DELETIONS,
+  UTILS_NOT_FOUND,
+} from '../utils/project'
 
 describe('uncheck staged with deleted files in a single repo', () => {
   it('typechecks the project a staged deletion breaks', async () => {

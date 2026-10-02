@@ -1,7 +1,15 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { LAYOUTS, report, wrappedGit } from '../utils/project'
-import { folderOf, inIndex, stagePartially, startGit, startUncheck, VERSIONS } from './utils'
+import {
+  expectRestored,
+  folderOf,
+  inIndex,
+  stagePartially,
+  startGit,
+  startUncheck,
+  VERSIONS,
+} from './utils'
 
 const SLOW_CHECK = "console.log('waiting')\nsetTimeout(() => process.exit(1), 60_000)\n"
 
@@ -38,9 +46,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
       '▶ oxlint --no-error-on-unmatched-pattern src/extra.ts',
       '○ unstaged changes of src/extra.ts restored',
     ])
-    expect(project.read(file)).toBe(VERSIONS.unstaged)
-    expect(inIndex(project, file)).toBe(VERSIONS.staged)
-    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+    expectRestored(project, file)
   })
 
   it('puts the unstaged changes back after Ctrl-C during a slow check', async () => {
@@ -55,9 +61,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
     })
 
     expect(exitCode).toBe(130)
-    expect(project.read(file)).toBe(VERSIONS.unstaged)
-    expect(inIndex(project, file)).toBe(VERSIONS.staged)
-    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+    expectRestored(project, file)
   })
 
   it('puts the unstaged changes back over a clashing fix after Ctrl-C before the fixes are staged', async () => {
@@ -82,9 +86,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
       '○ oxlint skipped, not selected by --only',
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
     ])
-    expect(project.read(file)).toBe(VERSIONS.unstaged)
-    expect(inIndex(project, file)).toBe(VERSIONS.staged)
-    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+    expectRestored(project, file)
   })
 
   it('puts the unstaged changes back as they were after Ctrl-C kills `git commit --include` and its index', async () => {

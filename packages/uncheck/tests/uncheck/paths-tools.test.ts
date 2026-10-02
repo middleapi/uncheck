@@ -1,4 +1,4 @@
-import { LAYOUTS, report } from '../utils/project'
+import { FULL_OXFMT, FULL_OXLINT, LAYOUTS, report } from '../utils/project'
 import { CLEAN_CODE, CODE_WITH_VAR, NOT_COVERED, selectedReport } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
@@ -52,9 +52,9 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
     expect(everything.exitCode).toBe(1)
     expect(selectedReport(everything.stdout)).toEqual([
       `uncheck in ${project.path(app, 'src/routes')}`,
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '✘ 1 of 2 checks failed: oxlint',
       '  rerun with `--fix` to apply oxlint fixes',
@@ -74,9 +74,9 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
 
       expect(selectedReport(stdout)).toEqual([
         `uncheck in ${project.path(app, folder)}`,
-        '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+        FULL_OXLINT,
         '✔ oxlint passed',
-        '▶ oxfmt --check --no-error-on-unmatched-pattern',
+        FULL_OXFMT,
         '✔ oxfmt passed',
         '✔ all checks passed (oxlint, oxfmt)',
       ])

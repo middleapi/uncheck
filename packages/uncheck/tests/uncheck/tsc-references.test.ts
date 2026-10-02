@@ -1,11 +1,19 @@
-import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import {
+  compilerOptions,
+  FULL_OXFMT,
+  FULL_OXLINT,
+  LAYOUTS,
+  monorepo,
+  report,
+  singleRepo,
+} from '../utils/project'
 import {
   CODE_WITH_TYPE_ERROR,
   CONFIG_DIR,
   NO_EMIT,
   NOT_COVERED,
   OUT_DIR,
-  SKIPPED_BESIDE_TSC,
+  tscOnlyReport,
   tscPlan,
   withFakeTsc,
 } from './utils'
@@ -311,24 +319,18 @@ describe('tsc project references across the packages of a monorepo', () => {
     const { exitCode, stdout } = await project.uncheck(['--only=tsc'], { cwd: 'packages/core' })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.path('packages/core')}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck in ${project.path('packages/core')}`,
+        ['▶ tsc -p tsconfig.json --noEmit'],
+        'passed',
+      ),
+    )
   })
 })
 
 describe('tsc project references with the real compiler in a single repo', () => {
-  const IN_PLACE = {
-    strict: true,
-    module: 'esnext',
-    moduleResolution: 'bundler',
-    types: [],
-    composite: true,
-  }
+  const IN_PLACE = compilerOptions({ composite: true })
   const COMPOSITE = { ...IN_PLACE, emitDeclarationOnly: true, outDir: 'dist', rootDir: 'src' }
 
   it('builds the library a Vite 4 app imports before checking the app with -p, writing no JavaScript', async () => {
@@ -363,13 +365,9 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const passed = await project.uncheck(['--only=tsc'])
 
     expect(passed.exitCode).toBe(0)
-    expect(report(passed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      ...plan,
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(passed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, plan, 'passed'),
+    )
     expect(project.git('status', '--porcelain', '--ignored')).toBe(
       '!! lib/dist/\n!! lib/tsconfig.tsbuildinfo\n!! node_modules/\n',
     )
@@ -382,13 +380,9 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const failed = await project.uncheck(['--only=tsc'])
 
     expect(failed.exitCode).toBe(1)
-    expect(report(failed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      ...plan,
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(failed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, plan, 'failed'),
+    )
     expect(failed.stdout).toContain(
       "src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
     )
@@ -416,13 +410,9 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const passed = await project.uncheck(['--only=tsc'])
 
     expect(passed.exitCode).toBe(0)
-    expect(report(passed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -b tsconfig.json',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(passed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, ['▶ tsc -b tsconfig.json'], 'passed'),
+    )
     expect(project.exists('lib/src/index.d.ts')).toBe(true)
     expect(project.git('status', '--porcelain')).toBe('')
 
@@ -431,13 +421,9 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const failed = await project.uncheck(['--only=tsc', 'lib/src/index.ts'])
 
     expect(failed.exitCode).toBe(1)
-    expect(report(failed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -b tsconfig.json',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(failed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, ['▶ tsc -b tsconfig.json'], 'failed'),
+    )
     expect(failed.stdout).toContain(
       "app/src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
     )
@@ -463,26 +449,28 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const full = await project.uncheck(['--only=tsc'])
 
     expect(full.exitCode).toBe(1)
-    expect(report(full.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '▶ tsc -p tsconfig.node.json --noEmit --composite false --declaration',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(full.stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck in ${project.dir}`,
+        [
+          '▶ tsc -p tsconfig.json --noEmit',
+          '▶ tsc -p tsconfig.node.json --noEmit --composite false --declaration',
+        ],
+        'failed',
+      ),
+    )
     expect(full.stdout).toContain(missing)
 
     const staged = await project.uncheck(['staged', '--only=tsc'])
 
     expect(staged.exitCode).toBe(1)
-    expect(report(staged.stdout)).toEqual([
-      `uncheck staged in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(staged.stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck staged in ${project.dir}`,
+        ['▶ tsc -p tsconfig.json --noEmit'],
+        'failed',
+      ),
+    )
     expect(staged.stdout).toContain(missing)
     expect(project.exists('vite.config.js')).toBe(false)
   })
@@ -505,14 +493,13 @@ describe('tsc project references with the real compiler in a single repo', () =>
     const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
 
     expect(exitCode).toBe(1)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -b ./-pkg/tsconfig.json ./@app/tsconfig.json',
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck in ${project.dir}`,
+        ['▶ tsc -b ./-pkg/tsconfig.json ./@app/tsconfig.json', '▶ tsc -p tsconfig.json --noEmit'],
+        'failed',
+      ),
+    )
 
     for (const folder of ['-pkg', '@app']) {
       expect(stdout).toContain(
@@ -533,9 +520,9 @@ describe('tsc project references with the real compiler in a single repo', () =>
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not a workspace root',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',

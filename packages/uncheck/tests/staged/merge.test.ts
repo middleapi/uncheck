@@ -1,5 +1,14 @@
-import { cliError, LAYOUTS, report, run, singleRepo } from '../utils/project'
-import { commitOnSide, folderOf, inIndex, stagePartially, UTILS_NOT_FOUND, VERSIONS } from './utils'
+import {
+  cliError,
+  commitOnSide,
+  LAYOUTS,
+  report,
+  run,
+  singleRepo,
+  SKIPPED_FOR_DELETIONS,
+  UTILS_NOT_FOUND,
+} from '../utils/project'
+import { expectFixesStaged, folderOf, inIndex, stagePartially, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -29,10 +38,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/other.ts')
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/other.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(stdout, 'src/other.ts', 'oxfmt')
     expect(inIndex(project, other)).toBe('export const other = 4;\n')
     expect(inIndex(project, `${app}src/theirs.ts`)).toBe('export const   theirs = 1\n')
   })
@@ -73,10 +79,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/other.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(stdout, 'src/other.ts', 'oxfmt')
     expect(project.git('diff', '--cached', '--name-only')).toBe('')
 
     project.git('commit', '--quiet', '--no-edit', '--no-verify')
@@ -131,9 +134,7 @@ describe('uncheck staged during a merge in a single repo', () => {
 
     expect(report(stdout)).toEqual([
       `uncheck staged in ${project.dir}`,
-      '○ sherif skipped, no package.json among the given files',
-      '○ oxlint skipped, only deleted files',
-      '○ oxfmt skipped, only deleted files',
+      ...SKIPPED_FOR_DELETIONS,
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',

@@ -1,12 +1,13 @@
 import {
   cliError,
+  DUBIOUS_OWNERSHIP,
   LAYOUTS,
   monorepo,
   project as bareProject,
   report,
   singleRepo,
 } from '../utils/project'
-import { folderOf, inIndex } from './utils'
+import { expectFixesStaged, folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
   const folder = folderOf(app)
@@ -26,7 +27,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
 
     const { exitCode, stdout, stderr } = await project.uncheck(['staged'], {
       cwd: folder,
-      env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+      env: DUBIOUS_OWNERSHIP,
     })
 
     expect(project.normalize(stderr)).toContain(
@@ -253,10 +254,7 @@ describe('uncheck staged in a package of a monorepo', () => {
     })
 
     expect(fixed.exitCode).toBe(0)
-    expect(report(fixed.stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/index.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(fixed.stdout, 'src/index.ts', 'oxfmt')
     expect(inIndex(project, 'packages/app/src/index.ts')).toBe('export const app = 1;\n')
     expect(inIndex(project, 'packages/core/src/index.ts')).toBe(edits['packages/core/src/index.ts'])
   })

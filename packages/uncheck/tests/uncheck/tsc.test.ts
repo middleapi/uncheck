@@ -1,4 +1,6 @@
 import {
+  commitOnSide,
+  compilerOptions,
   git,
   LAYOUTS,
   monorepo,
@@ -14,6 +16,7 @@ import {
   NOT_COVERED,
   OUT_DIR,
   SKIPPED_BESIDE_TSC,
+  tscOnlyReport,
   tscPlan,
   withFakeTsc,
 } from './utils'
@@ -58,15 +61,13 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
   it('checks a tsconfig.json with merge conflicts once', async () => {
     const project = withFakeTsc(create)
     const config = `${app}tsconfig.json`
-    const include = (folder: string) => (value: Record<string, unknown>) => ({
-      ...value,
+    const including = (folder: string) => ({
+      ...(JSON.parse(project.read(config)) as object),
       include: ['src', folder],
     })
 
-    project.git('checkout', '--quiet', '-b', 'side')
-    project.update(config, include('side')).commit('side')
-    project.git('checkout', '--quiet', 'main')
-    project.update(config, include('main')).commit('main')
+    commitOnSide(project, { [config]: including('side') })
+    project.write({ [config]: including('main') }).commit('main')
 
     expect((await run(['git', 'merge', 'side'], { cwd: project.dir })).exitCode).toBe(1)
 
@@ -108,13 +109,13 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
     })
 
     expect(exitCode).toBe(1)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.path(app, '.')}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck in ${project.path(app, '.')}`,
+        ['▶ tsc -p tsconfig.json --noEmit'],
+        'failed',
+      ),
+    )
     expect(stdout).toContain("tsconfig.json(1,1): error TS1005: '{' expected.")
   })
 
@@ -128,13 +129,13 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       })
 
       expect(exitCode).toBe(1)
-      expect(report(stdout)).toEqual([
-        `uncheck in ${project.path(app, '.')}`,
-        ...SKIPPED_BESIDE_TSC,
-        '▶ tsc -p tsconfig.json --noEmit',
-        '✘ tsc failed',
-        '✘ 1 of 1 checks failed: tsc',
-      ])
+      expect(report(stdout)).toEqual(
+        tscOnlyReport(
+          `uncheck in ${project.path(app, '.')}`,
+          ['▶ tsc -p tsconfig.json --noEmit'],
+          'failed',
+        ),
+      )
       expect(stdout).toContain(
         `error TS5083: Cannot read file '${project.path(app, 'tsconfig.json')}'.`,
       )
@@ -186,26 +187,24 @@ describe('tsc with the real compiler in a single repo', () => {
       'src/index.ts': CODE_WITH_TYPE_ERROR,
       'scripts/release.ts': CLEAN_CODE,
     })
-    const failedIn = (folder: string) => [
-      `uncheck in ${project.path(folder)}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p ../tsconfig.json --noEmit',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ]
+    const failedInSrc = tscOnlyReport(
+      `uncheck in ${project.path('src')}`,
+      ['▶ tsc -p ../tsconfig.json --noEmit'],
+      'failed',
+    )
     const diagnostic =
       "index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
 
     const inside = await project.uncheck(['--only=tsc'], { cwd: 'src' })
 
     expect(inside.exitCode).toBe(1)
-    expect(report(inside.stdout)).toEqual(failedIn('src'))
+    expect(report(inside.stdout)).toEqual(failedInSrc)
     expect(inside.stdout).toContain(`\n${diagnostic}`)
 
     const given = await project.uncheck(['--only=tsc', '--cwd', 'src', 'index.ts'])
 
     expect(given.exitCode).toBe(1)
-    expect(report(given.stdout)).toEqual(failedIn('src'))
+    expect(report(given.stdout)).toEqual(failedInSrc)
     expect(given.stdout).toContain(`\n${diagnostic}`)
 
     const outside = await project.uncheck(['--only=tsc'], { cwd: 'scripts' })
@@ -228,13 +227,8 @@ describe('tsc with the real compiler in a single repo', () => {
       },
       'web/cypress/e2e.ts': CLEAN_CODE,
     }).update('tsconfig.json', (config) => ({ ...config, include: ['web/src'] }))
-    const failed = (plan: ReadonlyArray<string>) => [
-      `uncheck in ${project.path('web')}`,
-      ...SKIPPED_BESIDE_TSC,
-      ...plan,
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ]
+    const failed = (plan: ReadonlyArray<string>) =>
+      tscOnlyReport(`uncheck in ${project.path('web')}`, plan, 'failed')
     const diagnostic =
       "src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
 
@@ -261,14 +255,13 @@ describe('tsc with the real compiler in a single repo', () => {
       const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
 
       expect(exitCode).toBe(1)
-      expect(report(stdout)).toEqual([
-        `uncheck in ${project.dir}`,
-        ...SKIPPED_BESIDE_TSC,
-        '▶ tsc -p locked/tsconfig.json --noEmit',
-        '▶ tsc -p tsconfig.json --noEmit',
-        '✘ tsc failed',
-        '✘ 1 of 1 checks failed: tsc',
-      ])
+      expect(report(stdout)).toEqual(
+        tscOnlyReport(
+          `uncheck in ${project.dir}`,
+          ['▶ tsc -p locked/tsconfig.json --noEmit', '▶ tsc -p tsconfig.json --noEmit'],
+          'failed',
+        ),
+      )
       expect(stdout).toContain(
         `error TS5058: The specified path does not exist: '${project.path('locked/tsconfig.json')}'.`,
       )
@@ -278,7 +271,7 @@ describe('tsc with the real compiler in a single repo', () => {
   it('typechecks a tsconfig.json with -p --noEmit, emitting nothing', async () => {
     const project = singleRepo({
       'tsconfig.json': {
-        compilerOptions: { strict: true, module: 'esnext', moduleResolution: 'bundler', types: [] },
+        compilerOptions: compilerOptions(),
         include: ['src'],
       },
     })
@@ -286,13 +279,9 @@ describe('tsc with the real compiler in a single repo', () => {
     const { exitCode, stdout } = await project.uncheck(['--only=tsc'])
 
     expect(exitCode).toBe(0)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p tsconfig.json --noEmit',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, ['▶ tsc -p tsconfig.json --noEmit'], 'passed'),
+    )
     expect(project.exists('src/index.js')).toBe(false)
   })
 })
@@ -304,13 +293,9 @@ describe('tsc with the real compiler in a monorepo', () => {
     const passed = await project.uncheck(['--only=tsc'])
 
     expect(passed.exitCode).toBe(0)
-    expect(report(passed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -b tsconfig.json',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(passed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, ['▶ tsc -b tsconfig.json'], 'passed'),
+    )
     expect(project.exists('packages/core/dist/index.d.ts')).toBe(true)
 
     project.write({
@@ -321,13 +306,9 @@ describe('tsc with the real compiler in a monorepo', () => {
     const failed = await project.uncheck(['--only=tsc', 'packages/core/src/index.ts'])
 
     expect(failed.exitCode).toBe(1)
-    expect(report(failed.stdout)).toEqual([
-      `uncheck in ${project.dir}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -b tsconfig.json',
-      '✘ tsc failed',
-      '✘ 1 of 1 checks failed: tsc',
-    ])
+    expect(report(failed.stdout)).toEqual(
+      tscOnlyReport(`uncheck in ${project.dir}`, ['▶ tsc -b tsconfig.json'], 'failed'),
+    )
     expect(failed.stdout).toContain(
       "packages/core/src/index.ts(2,3): error TS2322: Type 'string' is not assignable to type 'number'.",
     )

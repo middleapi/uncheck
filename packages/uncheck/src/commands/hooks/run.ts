@@ -7,7 +7,7 @@ import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio, Stream } f
 import { Command, Flag } from 'effect/unstable/cli'
 
 import { StopBlocked, userError } from '../../errors'
-import { listChangedFiles } from '../../files'
+import { fileKind, isOutside, listChangedFiles, slashedRelative } from '../../files'
 import { git, refusesRepository } from '../../git'
 import { captureLines } from '../../tool'
 import { fixFlag, followLinks, runChecks, selectionFlags } from '../uncheck'
@@ -64,17 +64,10 @@ export const run = Command.make(
     const cwd = Option.isSome(dir) ? path.join(top, dir.value) : Option.getOrElse(given, () => top)
 
     // Checking a folder that is gone would send the agent back to fix a configuration it cannot see.
-    if (Option.isSome(dir)) {
-      const isFolder = yield* fs.stat(cwd).pipe(
-        Effect.map((info) => info.type === 'Directory'),
-        Effect.orElseSucceed(() => false),
+    if (Option.isSome(dir) && (yield* fileKind(cwd)) !== 'Directory') {
+      return yield* userError(
+        `--dir=${dir.value} names no folder in ${top}, run \`uncheck hooks install\` again from the project`,
       )
-
-      if (!isFolder) {
-        return yield* userError(
-          `--dir=${dir.value} names no folder in ${top}, run \`uncheck hooks install\` again from the project`,
-        )
-      }
     }
 
     // Agents also set these when another Stop hook (Claude Code's /goal is one) continued the turn, so
@@ -82,19 +75,12 @@ export const run = Command.make(
     const continuing =
       payload.stop_hook_active === true ||
       (typeof payload.loop_count === 'number' && payload.loop_count > 0)
-    const sessionId = payload.session_id ?? payload.sessionId ?? payload.conversation_id
-    const marker =
-      typeof sessionId === 'string'
-        ? path.join(
-            tmpdir(),
-            `uncheck-stop-${createHash('sha256')
-              .update(JSON.stringify([sessionId, path.resolve(cwd)]))
-              .digest('hex')}`,
-          )
-        : undefined
-
-    const forgetBlock =
-      marker === undefined ? Effect.void : Effect.ignore(fs.remove(marker, { force: true }))
+    const { forgetBlock, claimBlock } = stopMarker(
+      fs,
+      path,
+      payload.session_id ?? payload.sessionId ?? payload.conversation_id,
+      cwd,
+    )
 
     if (!continuing) {
       yield* forgetBlock
@@ -110,7 +96,6 @@ export const run = Command.make(
       ...settings,
       cwd,
       literal: true,
-      fixesWithinFiles: true,
       deleted: changed?.deleted,
     }).pipe(
       Effect.map(() => false),
@@ -146,14 +131,7 @@ export const run = Command.make(
       return
     }
 
-    // A marker that cannot be written counts as one that exists, so a broken temporary folder never
-    // sends the agent back on every stop.
-    const firstBlock =
-      marker !== undefined &&
-      (yield* fs.writeFileString(marker, '', { flag: 'wx' }).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      ))
+    const firstBlock = yield* claimBlock
 
     if (continuing && !firstBlock) {
       if (payload.hook_event_name === 'Stop') {
@@ -178,6 +156,34 @@ export const run = Command.make(
   ),
 )
 
+function stopMarker(
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  sessionId: unknown,
+  cwd: string,
+): { readonly forgetBlock: Effect.Effect<void>; readonly claimBlock: Effect.Effect<boolean> } {
+  if (typeof sessionId !== 'string') {
+    return { forgetBlock: Effect.void, claimBlock: Effect.succeed(false) }
+  }
+
+  const marker = path.join(
+    tmpdir(),
+    `uncheck-stop-${createHash('sha256')
+      .update(JSON.stringify([sessionId, path.resolve(cwd)]))
+      .digest('hex')}`,
+  )
+
+  return {
+    forgetBlock: Effect.ignore(fs.remove(marker, { force: true })),
+    // A marker that cannot be written counts as one that exists, so a broken temporary folder never
+    // sends the agent back on every stop.
+    claimBlock: fs.writeFileString(marker, '', { flag: 'wx' }).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    ),
+  }
+}
+
 interface Repository {
   readonly top: string
   readonly commonDir: string
@@ -187,14 +193,14 @@ const repositoryAround = Effect.fn(function* (folder: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
 
-  const [physicalFolder, top, commonDir] = yield* Effect.all(
-    [
-      fs.realPath(folder),
-      git(folder, ['rev-parse', '--show-toplevel']),
-      git(folder, ['rev-parse', '--git-common-dir']),
-    ],
+  const [physicalFolder, output] = yield* Effect.all(
+    [fs.realPath(folder), git(folder, ['rev-parse', '--show-toplevel', '--git-common-dir'])],
     { concurrency: 'unbounded' },
   )
+  // A newline in the top shifts the lines git prints, so the common dir is counted from the end.
+  const lines = output.split('\n')
+  const commonDir = lines.pop()!
+  const top = lines.join('\n')
 
   // git prints the common dir relative to the real path of `folder`, and a linked worktree may name
   // it through a link.
@@ -219,13 +225,18 @@ const repositoryUnlessRefused = (folder: string) =>
 const topToCheck = Effect.fn(function* (start: string, projectDir: string | undefined) {
   const path = yield* Path.Path
 
-  const [here, project] = yield* Effect.all(
+  const startsInProject =
+    projectDir !== undefined && path.resolve(projectDir) === path.resolve(start)
+  const [here, elsewhere] = yield* Effect.all(
     [
       repositoryUnlessRefused(start),
-      projectDir === undefined ? Effect.succeed(undefined) : repositoryUnlessRefused(projectDir),
+      projectDir === undefined || startsInProject
+        ? Effect.succeed(undefined)
+        : repositoryUnlessRefused(projectDir),
     ],
     { concurrency: 'unbounded' },
   )
+  const project = startsInProject ? here : elsewhere
 
   if (project === undefined) {
     return here?.top ?? projectDir ?? start
@@ -248,7 +259,9 @@ const topToCheck = Effect.fn(function* (start: string, projectDir: string | unde
   ) {
     // A repository whose core.worktree is a subfolder names that subfolder as its top from above it
     // too, so climbing from its top alone would ask about the same folder forever.
-    folder = path.dirname(path.relative(outer.top, folder).startsWith('..') ? folder : outer.top)
+    folder = path.dirname(
+      isOutside(path, slashedRelative(path, outer.top, folder)) ? folder : outer.top,
+    )
     outer = yield* repositoryAround(folder).pipe(Effect.orElseSucceed(() => undefined))
   }
 

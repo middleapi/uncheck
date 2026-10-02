@@ -1,18 +1,17 @@
 import { availableParallelism } from 'node:os'
 import { styleText } from 'node:util'
 
-import { LAYOUTS, report, singleRepo } from '../utils/project'
+import {
+  compilerOptions,
+  FULL_OXFMT,
+  FULL_OXLINT,
+  LAYOUTS,
+  report,
+  singleRepo,
+} from '../utils/project'
 import { CODE_WITH_VAR, layoutChecks } from './utils'
 
-const STANDALONE_TSCONFIG = {
-  compilerOptions: {
-    strict: true,
-    module: 'esnext',
-    moduleResolution: 'bundler',
-    types: [],
-    noEmit: true,
-  },
-}
+const STANDALONE_TSCONFIG = { compilerOptions: compilerOptions({ noEmit: true }) }
 
 const PRINT_FORCE_COLOR = "console.log('the tool sees FORCE_COLOR=' + process.env.FORCE_COLOR);\n"
 
@@ -75,9 +74,9 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
@@ -171,7 +170,7 @@ describe('uncheck output', () => {
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',

@@ -1,4 +1,4 @@
-import { LAYOUTS, monorepo, report } from '../utils/project'
+import { FULL_OXFMT, FULL_OXLINT, LAYOUTS, monorepo, report } from '../utils/project'
 import { layoutChecks } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
@@ -56,7 +56,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
@@ -96,9 +96,9 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
     expect(report(stdout)).toEqual([
       `uncheck in ${project.path(app, 'src')}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
@@ -127,9 +127,9 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not installed',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',

@@ -15,6 +15,14 @@ export function prepare(
   return project.uncheck(['prepare', '--pre-commit', ...args], options)
 }
 
+export function runsIn(app: string, command: string): string {
+  return app === '' ? command : `(cd "${app.slice(0, -1)}" && ${command})`
+}
+
+export function previousHookLine(app: string, command = COMMAND): string {
+  return `${runsIn(app, command)} || exit 1`
+}
+
 export function hookLine(app: string, command = COMMAND): string {
   const folder = app.slice(0, -1)
 

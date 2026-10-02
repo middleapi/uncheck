@@ -69,6 +69,20 @@ describe.each(LAYOUTS)(
     const failure = (project: Project) =>
       checks(project, '✘ tsc failed', '✘ 1 of 3 checks failed: tsc')
 
+    function expectBlocked(project: Project, { exitCode, stdout, stderr }: Run): void {
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual(failure(project))
+    }
+
+    function expectStillFails(project: Project, { exitCode, stdout, stderr }: Run): void {
+      expect(exitCode).toBe(0)
+      expect(JSON.parse(stdout)).toEqual({
+        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+      })
+      expect(report(stderr)).toEqual(failure(project))
+    }
+
     it('blocks Claude Code with exit code 2 until its change passes, through its hook run from outside the change', async () => {
       const project = create(DOCS)
       const stop = await installHook(project, app, 'claude')
@@ -77,18 +91,12 @@ describe.each(LAYOUTS)(
 
       const blocked = await stop(CLAUDE_CODE_STOP)
 
-      expect(blocked.exitCode).toBe(2)
-      expect(blocked.stdout).toBe('')
-      expect(report(blocked.stderr)).toEqual(failure(project))
+      expectBlocked(project, blocked)
       expect(blocked.stderr).toContain(`\n${DIAGNOSTIC}\n`)
 
       const again = await stop(CLAUDE_CODE_STOP_AGAIN)
 
-      expect(again.exitCode).toBe(0)
-      expect(JSON.parse(again.stdout)).toEqual({
-        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
-      })
-      expect(report(again.stderr)).toEqual(failure(project))
+      expectStillFails(project, again)
 
       project.write({ [`${app}src/index.ts`]: 'export const   answer: string = "42"\n' })
 
@@ -107,23 +115,15 @@ describe.each(LAYOUTS)(
 
       const continued = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(continued.exitCode).toBe(2)
-      expect(continued.stdout).toBe('')
-      expect(report(continued.stderr)).toEqual(failure(project))
+      expectBlocked(project, continued)
 
       const again = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(again.exitCode).toBe(0)
-      expect(JSON.parse(again.stdout)).toEqual({
-        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
-      })
-      expect(report(again.stderr)).toEqual(failure(project))
+      expectStillFails(project, again)
 
       const nextTurn = await stopHook(project, app, CLAUDE_CODE_STOP)
 
-      expect(nextTurn.exitCode).toBe(2)
-      expect(nextTurn.stdout).toBe('')
-      expect(report(nextTurn.stderr)).toEqual(failure(project))
+      expectBlocked(project, nextTurn)
 
       project.write({ [`${app}src/index.ts`]: 'export const answer: string = "42";\n' })
 
@@ -139,17 +139,11 @@ describe.each(LAYOUTS)(
 
       const failingAfterPassing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(failingAfterPassing.exitCode).toBe(2)
-      expect(failingAfterPassing.stdout).toBe('')
-      expect(report(failingAfterPassing.stderr)).toEqual(failure(project))
+      expectBlocked(project, failingAfterPassing)
 
       const stillFailing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(stillFailing.exitCode).toBe(0)
-      expect(JSON.parse(stillFailing.stdout)).toEqual({
-        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
-      })
-      expect(report(stillFailing.stderr)).toEqual(failure(project))
+      expectStillFails(project, stillFailing)
 
       project.git('checkout', '--', '.')
 
@@ -163,24 +157,18 @@ describe.each(LAYOUTS)(
 
       const failingAfterReverting = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
 
-      expect(failingAfterReverting.exitCode).toBe(2)
-      expect(failingAfterReverting.stdout).toBe('')
-      expect(report(failingAfterReverting.stderr)).toEqual(failure(project))
+      expectBlocked(project, failingAfterReverting)
     })
 
     it('takes a continued turn without a session id as one uncheck already blocked', async () => {
       const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
 
-      const { exitCode, stdout, stderr } = await stopHook(project, app, {
+      const continued = await stopHook(project, app, {
         hook_event_name: 'Stop',
         stop_hook_active: true,
       })
 
-      expect(exitCode).toBe(0)
-      expect(JSON.parse(stdout)).toEqual({
-        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
-      })
-      expect(report(stderr)).toEqual(failure(project))
+      expectStillFails(project, continued)
     })
 
     it('sends Cursor back once with a follow-up message, through its hook run from outside the change', async () => {

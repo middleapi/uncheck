@@ -1,5 +1,7 @@
 import {
   cliError,
+  FULL_OXFMT,
+  FULL_OXLINT,
   LAYOUTS,
   project as bareProject,
   report,
@@ -19,7 +21,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       tsc,
@@ -37,7 +39,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
       '○ tsc skipped, disabled with --skip=tsc',
@@ -54,7 +56,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(skipped.stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, not selected by --only',
@@ -67,7 +69,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(required.stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '✘ oxfmt not installed',
       '○ tsc skipped, not selected by --only',
@@ -88,9 +90,9 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',

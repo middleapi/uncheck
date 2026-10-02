@@ -1,5 +1,5 @@
 import type { Env, Project, Run } from '../../utils/project'
-import { temporaryDirectory } from '../../utils/project'
+import { CLI, run, temporaryDirectory } from '../../utils/project'
 
 export const CLAUDE_CODE_STOP = {
   session_id: 'session',
@@ -30,9 +30,6 @@ export const COPILOT_STOP_IN_CLAUDE_FORMAT = {
 
 export const TYPE_ERROR = 'export const answer: string = 1;\n'
 
-export const UTILS_NOT_FOUND =
-  "src/index.ts(1,24): error TS2307: Cannot find module './utils' or its corresponding type declarations."
-
 // uncheck remembers the turns it blocked in the temporary folder, which would keep a file of every test run.
 const MARKERS = temporaryDirectory()
 
@@ -46,19 +43,27 @@ export function dirFlags(app: string): string[] {
 
 interface HookOptions {
   readonly args?: ReadonlyArray<string>
-  readonly cwd?: string
   readonly env?: Env
+}
+
+export function stopHookIn(
+  dir: string,
+  app: string,
+  payload: object | string,
+  { args = ['--fix'], env }: HookOptions = {},
+): Promise<Run> {
+  return run([...CLI, 'hooks', 'run', ...dirFlags(app), ...args], {
+    cwd: dir,
+    env: hookEnv(env),
+    input: typeof payload === 'string' ? payload : JSON.stringify(payload),
+  })
 }
 
 export function stopHook(
   project: Project,
   app: string,
   payload: object | string,
-  { args = ['--fix'], cwd, env }: HookOptions = {},
+  { cwd = '.', ...options }: HookOptions & { readonly cwd?: string } = {},
 ): Promise<Run> {
-  return project.uncheck(['hooks', 'run', ...dirFlags(app), ...args], {
-    cwd,
-    env: hookEnv(env),
-    input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-  })
+  return stopHookIn(project.path(cwd), app, payload, options)
 }

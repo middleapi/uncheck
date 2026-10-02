@@ -1,19 +1,9 @@
 import type { Files, ProjectOptions } from '../utils/project'
-import { monorepo, report } from '../utils/project'
-import { SKIPPED_BESIDE_TSC, tscPlan, withFakeTsc } from './utils'
+import { compilerOptions, monorepo, report } from '../utils/project'
+import { tscOnlyReport, tscPlan, withFakeTsc } from './utils'
 
-const PACKAGE_CONFIG = {
-  compilerOptions: {
-    strict: true,
-    module: 'esnext',
-    moduleResolution: 'bundler',
-    types: [],
-    noEmit: true,
-  },
-  include: ['src'],
-}
+const PACKAGE_CONFIG = { compilerOptions: compilerOptions({ noEmit: true }), include: ['src'] }
 
-/** A workspace whose `app` imports the sources of `core` through its link alone, without project references. */
 function linkedMonorepo(files: Files = {}, options?: ProjectOptions) {
   return monorepo(
     {
@@ -122,13 +112,7 @@ describe('tsc across the packages of a workspace', () => {
       ])
 
       expect(exitCode).toBe(1)
-      expect(report(stdout)).toEqual([
-        `uncheck in ${project.dir}`,
-        ...SKIPPED_BESIDE_TSC,
-        ...plan,
-        '✘ tsc failed',
-        '✘ 1 of 1 checks failed: tsc',
-      ])
+      expect(report(stdout)).toEqual(tscOnlyReport(`uncheck in ${project.dir}`, plan, 'failed'))
       expect(stdout).toContain(
         "packages/app/src/index.ts(3,14): error TS2322: Type 'string' is not assignable to type 'number'.",
       )

@@ -1,5 +1,5 @@
-import { cliError, LAYOUTS, report, run } from '../utils/project'
-import { commitOnSide, conflictError, folderOf, inIndex } from './utils'
+import { cliError, commitOnSide, LAYOUTS, report, run } from '../utils/project'
+import { conflictError, expectFixesStaged, folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -32,10 +32,7 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts')
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/extra.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(stdout, 'src/extra.ts', 'oxfmt')
     expect(project.exists(`${app}lib`)).toBe(false)
     expect(inIndex(project, outside)).toBe('export const lib = 2;\n')
     expect(inIndex(project, file)).toBe('export const extra = 43;\n')
@@ -61,10 +58,7 @@ describe.each(LAYOUTS)('uncheck staged in a sparse checkout of a $name', ({ crea
     })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to lib/lib.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(stdout, 'lib/lib.ts', 'oxfmt')
     expect(inIndex(project, outside)).toBe('export const lib = 4;\n')
   })
 })

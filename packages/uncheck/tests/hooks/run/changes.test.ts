@@ -2,8 +2,18 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
-import { LAYOUTS, monorepo, report, singleRepo, temporaryDirectory } from '../../utils/project'
-import { CLAUDE_CODE_STOP, stopHook, UTILS_NOT_FOUND } from './utils'
+import {
+  FULL_OXFMT,
+  FULL_OXLINT,
+  LAYOUTS,
+  monorepo,
+  report,
+  singleRepo,
+  SKIPPED_FOR_DELETIONS,
+  temporaryDirectory,
+  UTILS_NOT_FOUND,
+} from '../../utils/project'
+import { CLAUDE_CODE_STOP, stopHook } from './utils'
 
 const UNFORMATTED = 'export const   legacy = 1\n'
 
@@ -100,9 +110,7 @@ describe.each(LAYOUTS)(
       expect(deleted.stdout).toBe('')
       expect(report(deleted.stderr)).toEqual([
         `uncheck in ${project.path(app, '.')}`,
-        '○ sherif skipped, no package.json among the given files',
-        '○ oxlint skipped, only deleted files',
-        '○ oxfmt skipped, only deleted files',
+        ...SKIPPED_FOR_DELETIONS,
         tsc,
         '✔ tsc passed',
         '✔ all checks passed (tsc)',
@@ -165,9 +173,9 @@ describe.each(LAYOUTS)(
       expect(report(stderr)).toEqual([
         `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not a workspace root',
-        '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+        FULL_OXLINT,
         '✔ oxlint passed',
-        '▶ oxfmt --check --no-error-on-unmatched-pattern',
+        FULL_OXFMT,
         '✘ oxfmt failed',
         tsc,
         '✔ tsc passed',
@@ -190,7 +198,7 @@ describe.each(LAYOUTS)(
         `uncheck in ${project.path(app, '.')}`,
         '○ sherif skipped, not selected by --only',
         '○ oxlint skipped, not selected by --only',
-        '▶ oxfmt --check --no-error-on-unmatched-pattern',
+        FULL_OXFMT,
         '✘ oxfmt failed',
         '○ tsc skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
@@ -215,9 +223,7 @@ describe('hooks run with deleted files in a single repo', () => {
       expect(stdout).toBe('')
       expect(report(stderr)).toEqual([
         `uncheck in ${project.dir}`,
-        '○ sherif skipped, no package.json among the given files',
-        '○ oxlint skipped, only deleted files',
-        '○ oxfmt skipped, only deleted files',
+        ...SKIPPED_FOR_DELETIONS,
         '▶ tsc -p tsconfig.json --noEmit',
         '✘ tsc failed',
         '✘ 1 of 1 checks failed: tsc',

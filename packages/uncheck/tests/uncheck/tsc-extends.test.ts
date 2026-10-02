@@ -4,7 +4,7 @@ import {
   CONFIG_DIR,
   NOT_COVERED,
   OUT_DIR,
-  SKIPPED_BESIDE_TSC,
+  tscOnlyReport,
   tscPlan,
   withFakeTsc,
 } from './utils'
@@ -247,13 +247,13 @@ describe.each(LAYOUTS)('tsc extends in a $name', ({ create, app }) => {
     const { exitCode, stdout } = await project.uncheck(['staged', '--only=tsc'], { cwd: app })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout)).toEqual([
-      `uncheck staged in ${project.path(app, '.')}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p web/tsconfig.json --noEmit',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck staged in ${project.path(app, '.')}`,
+        ['▶ tsc -p web/tsconfig.json --noEmit'],
+        'passed',
+      ),
+    )
   })
 })
 

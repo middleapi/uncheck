@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import type { Project } from '../utils/project'
 import {
+  DUBIOUS_OWNERSHIP,
   LAYOUTS,
   monorepo,
   PERMISSIONS_ENFORCED,
@@ -24,7 +25,7 @@ describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create
 
     const { exitCode, stdout, stderr } = await prepare(project, [], {
       cwd: app,
-      env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+      env: DUBIOUS_OWNERSHIP,
     })
 
     expect(stderr).toBe('')

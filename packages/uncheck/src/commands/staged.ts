@@ -7,7 +7,7 @@ import { userError } from '../errors'
 import { inNodeModules } from '../files'
 import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff, refusesRepository } from '../git'
 import { dim, green, listFiles, red } from '../style'
-import { argvBatches } from '../tool'
+import { argvBatches, logLines } from '../tool'
 import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
@@ -61,7 +61,7 @@ export const staged = Command.make(
         { concurrency: 'unbounded' },
       )
       // Fixing what a merge takes from the other side would commit changes neither side made.
-      const theirs = merging ? yield* stagedFiles(cwd, 'MERGE_HEAD', '--') : undefined
+      const theirs = merging ? yield* stagedFiles(cwd, 'MERGE_HEAD') : undefined
       const notTheirs = theirs && new Set([...theirs.files, ...theirs.deleted])
       const ours = (paths: ReadonlyArray<string>) =>
         notTheirs === undefined ? paths : paths.filter((file) => notTheirs.has(file))
@@ -130,7 +130,6 @@ export const staged = Command.make(
             cwd,
             fix,
             literal: true,
-            fixesWithinFiles: true,
             deleted,
             afterFixes: fix ? stageFixes : undefined,
             holdSummary: (lines) => Ref.set(summary, lines),
@@ -155,13 +154,7 @@ export const staged = Command.make(
 
           return { failure, empty: after === head }
         }),
-      ).pipe(
-        Effect.ensuring(
-          Effect.flatMap(Ref.get(summary), (lines) =>
-            Effect.forEach(lines, (line) => Console.log(line), { discard: true }),
-          ),
-        ),
-      )
+      ).pipe(Effect.ensuring(Effect.flatMap(Ref.get(summary), logLines)))
 
       const { conflicted, stranded } = yield* Ref.get(outcome)
 
@@ -275,25 +268,24 @@ interface SetAside {
   readonly base: string
 }
 
-/** Of `files`, those whose working tree differs from the index. */
-function differFromIndex(cwd: string, files: ReadonlyArray<string>) {
+function gitPathsEach(cwd: string, args: ReadonlyArray<string>, files: ReadonlyArray<string>) {
   return Effect.map(
-    Effect.forEach(argvBatches(files), (batch) =>
-      gitPaths(cwd, ['diff', '--name-only', '--relative', '-z', '--', ...batch]),
-    ),
+    Effect.forEach(argvBatches(files), (batch) => gitPaths(cwd, [...args, '--', ...batch])),
     (batches) => batches.flat(),
   )
 }
 
+function differFromIndex(cwd: string, files: ReadonlyArray<string>) {
+  return gitPathsEach(cwd, ['diff', '--name-only', '--relative', '-z'], files)
+}
+
 /** `<mode>,<id>,<path>` of each of `files` in the index, as `update-index --cacheinfo` takes it. */
 function indexEntries(cwd: string, files: ReadonlyArray<string>) {
+  // `--cacheinfo` reads paths from the top of the repository, wherever git runs.
   return Effect.map(
-    Effect.forEach(argvBatches(files), (batch) =>
-      // `--cacheinfo` reads paths from the top of the repository, wherever git runs.
-      gitPaths(cwd, ['ls-files', '--stage', '--full-name', '-z', '--', ...batch]),
-    ),
-    (batches) =>
-      batches.flat().map((entry) => {
+    gitPathsEach(cwd, ['ls-files', '--stage', '--full-name', '-z'], files),
+    (entries) =>
+      entries.map((entry) => {
         const [mode, id] = entry.split(' ')
 
         return `${mode},${id},${entry.slice(entry.indexOf('\t') + 1)}`
@@ -303,7 +295,6 @@ function indexEntries(cwd: string, files: ReadonlyArray<string>) {
 
 const CACHEINFO = '--cacheinfo'
 
-/** Stages the given index entries as they are, whatever the working tree holds now. */
 function stageEntries(
   cwd: string,
   entries: ReadonlyArray<string>,
@@ -329,6 +320,12 @@ function gitEach(cwd: string, args: ReadonlyArray<string>, files: ReadonlyArray<
   })
 }
 
+function copyBack(entries: ReadonlyArray<{ readonly target: string; readonly copy: string }>) {
+  return FileSystem.FileSystem.use((fs) =>
+    Effect.forEach(entries, ({ target, copy }) => fs.copyFile(copy, target), { discard: true }),
+  )
+}
+
 const setAside = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -337,9 +334,6 @@ const setAside = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: Read
     target: path.join(cwd, file),
     copy: path.join(saved, prefix, file),
   }))
-  const restore = Effect.forEach(copies, ({ target, copy }) => fs.copyFile(copy, target), {
-    discard: true,
-  })
 
   // Creating the folder, not only finding it missing, is what claims it from a parallel run.
   yield* fs.makeDirectory(saved).pipe(
@@ -365,7 +359,7 @@ const setAside = Effect.fn(function* ({ cwd, saved, prefix }: Aside, files: Read
     ),
   ).pipe(
     Effect.tapError(() =>
-      restore.pipe(Effect.andThen(fs.remove(saved, { recursive: true })), Effect.ignore),
+      copyBack(copies).pipe(Effect.andThen(fs.remove(saved, { recursive: true })), Effect.ignore),
     ),
   )
   yield* Console.log(
@@ -389,8 +383,6 @@ const putBack = Effect.fn(function* (
   const fs = yield* FileSystem.FileSystem
   const { cwd, saved } = aside
   const partial = copies.map(({ file }) => file)
-  const copyBack = (entries: ReadonlyArray<SetAside>) =>
-    Effect.forEach(entries, ({ target, copy }) => fs.copyFile(copy, target), { discard: true })
   const restored = Console.log(dim(`○ unstaged changes of ${listFiles(partial)} restored`)).pipe(
     Effect.as(RESTORED),
   )

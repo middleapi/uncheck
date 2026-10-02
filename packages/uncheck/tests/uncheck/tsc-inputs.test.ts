@@ -4,6 +4,7 @@ import {
   CONFIG_DIR,
   NOT_COVERED,
   SKIPPED_BESIDE_TSC,
+  tscOnlyReport,
   tscPlan,
   withFakeTsc,
 } from './utils'
@@ -185,13 +186,13 @@ describe.each(LAYOUTS)('tsc inputs in a $name', ({ create, app }) => {
 
     expect(project.exists(`${app}web/data.json`)).toBe(false)
     expect(exitCode).toBe(0)
-    expect(report(stdout)).toEqual([
-      `uncheck in ${project.path(app, '.')}`,
-      ...SKIPPED_BESIDE_TSC,
-      '▶ tsc -p web/tsconfig.json --noEmit',
-      '✔ tsc passed',
-      '✔ all checks passed (tsc)',
-    ])
+    expect(report(stdout)).toEqual(
+      tscOnlyReport(
+        `uncheck in ${project.path(app, '.')}`,
+        ['▶ tsc -p web/tsconfig.json --noEmit'],
+        'passed',
+      ),
+    )
   })
 })
 
@@ -245,13 +246,13 @@ describe('tsc inputs across the packages of a monorepo', () => {
       const { exitCode, stdout } = await project.uncheck(['staged', '--only=tsc'])
 
       expect(exitCode).toBe(0)
-      expect(report(stdout)).toEqual([
-        `uncheck staged in ${project.dir}`,
-        ...SKIPPED_BESIDE_TSC,
-        '▶ tsc -p packages/app/tsconfig.json --noEmit',
-        '✔ tsc passed',
-        '✔ all checks passed (tsc)',
-      ])
+      expect(report(stdout)).toEqual(
+        tscOnlyReport(
+          `uncheck staged in ${project.dir}`,
+          ['▶ tsc -p packages/app/tsconfig.json --noEmit'],
+          'passed',
+        ),
+      )
     },
   )
 

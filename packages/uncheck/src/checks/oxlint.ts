@@ -14,14 +14,6 @@ export const oxlint: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not installed' }))
     }
 
-    // An empty list makes no batch, so the check would pass without running. Kept skipped when
-    // required, or `--require=oxlint` would block every commit that only deletes files.
-    if (files?.length === 0) {
-      return yield* Effect.fail(
-        new NothingToCheck({ reason: 'only deleted files', unrelated: true, evenIfRequired: true }),
-      )
-    }
-
     const args = [
       ...(fix ? ['--fix'] : []),
       // oxlint walks into node_modules unless an ignore file says not to, and a fix there rewrites

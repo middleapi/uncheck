@@ -1,7 +1,9 @@
 import { join } from 'node:path'
 
+import type { Run } from '../../utils/project'
 import {
   CLI,
+  DUBIOUS_OWNERSHIP,
   LAYOUTS,
   Project,
   cliError,
@@ -14,7 +16,7 @@ import {
   singleRepo,
   temporaryDirectory,
 } from '../../utils/project'
-import { CLAUDE_CODE_STOP, TYPE_ERROR, dirFlags, hookEnv, stopHook } from './utils'
+import { CLAUDE_CODE_STOP, TYPE_ERROR, stopHook, stopHookIn } from './utils'
 
 const UNFORMATTED = 'export const   extra = 1\n'
 const FORMATTED = 'export const extra = 1;\n'
@@ -24,8 +26,10 @@ const ONLY_OXFMT = [
   '○ oxlint skipped, not selected by --only',
 ]
 
-function oxfmtFailed(dir: string): string[] {
-  return [
+function expectSentBackByOxfmt({ exitCode, stdout, stderr }: Run, dir: string): void {
+  expect(exitCode).toBe(2)
+  expect(stdout).toBe('')
+  expect(report(stderr)).toEqual([
     `uncheck in ${dir}`,
     ...ONLY_OXFMT,
     '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
@@ -33,7 +37,7 @@ function oxfmtFailed(dir: string): string[] {
     '○ tsc skipped, not selected by --only',
     '✘ 1 of 1 checks failed: oxfmt',
     '  rerun with `--fix` to apply oxfmt fixes',
-  ]
+  ])
 }
 
 describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app, tsc }) => {
@@ -81,16 +85,13 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
 
   it('reports a repository git refuses instead of checking the whole folder', async () => {
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
-    const refused = { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' }
 
     const fromInside = await stopHook(project, app, CLAUDE_CODE_STOP, {
       cwd: `${app}src`,
-      env: refused,
+      env: DUBIOUS_OWNERSHIP,
     })
-    const fromOutside = await run([...CLI, 'hooks', 'run', '--fix', ...dirFlags(app)], {
-      cwd: temporaryDirectory(),
-      env: hookEnv({ ...refused, CLAUDE_PROJECT_DIR: project.path(app) }),
-      input: JSON.stringify(CLAUDE_CODE_STOP),
+    const fromOutside = await stopHookIn(temporaryDirectory(), app, CLAUDE_CODE_STOP, {
+      env: { ...DUBIOUS_OWNERSHIP, CLAUDE_PROJECT_DIR: project.path(app) },
     })
 
     for (const { exitCode, stdout, stderr } of [fromInside, fromOutside]) {
@@ -131,21 +132,27 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
     },
   )
 
+  it("checks the agent's project from its own folder", async () => {
+    const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
+
+    const sentBack = await stopHook(project, app, CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: app,
+      env: { CLAUDE_PROJECT_DIR: project.path(app) },
+    })
+
+    expectSentBackByOxfmt(sentBack, project.path(app, '.'))
+  })
+
   it("checks the agent's project from a folder outside git", async () => {
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await run(
-      [...CLI, 'hooks', 'run', '--only=oxfmt', ...dirFlags(app)],
-      {
-        cwd: temporaryDirectory(),
-        env: hookEnv({ CLAUDE_PROJECT_DIR: project.path(app) }),
-        input: JSON.stringify(CLAUDE_CODE_STOP),
-      },
-    )
+    const sentBack = await stopHookIn(temporaryDirectory(), app, CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      env: { CLAUDE_PROJECT_DIR: project.path(app) },
+    })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
+    expectSentBackByOxfmt(sentBack, project.path(app, '.'))
   })
 
   it("checks the agent's project from a submodule the agent moved into", async () => {
@@ -167,30 +174,26 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
     )
     project.commit('submodule').write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+    const sentBack = await stopHook(project, app, CLAUDE_CODE_STOP, {
       args: ['--only=oxfmt'],
       cwd: 'vendor/lib',
       env: { CLAUDE_PROJECT_DIR: project.path(app) },
     })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
+    expectSentBackByOxfmt(sentBack, project.path(app, '.'))
   })
 
   it('checks the linked worktree the agent works in, although its project folder is the main checkout', async () => {
     const project = create()
     const worktree = linkedWorktree(project, app).write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(worktree, app, CLAUDE_CODE_STOP, {
+    const sentBack = await stopHook(worktree, app, CLAUDE_CODE_STOP, {
       args: ['--only=oxfmt'],
       cwd: `${app}src`,
       env: { CLAUDE_PROJECT_DIR: project.path(app) },
     })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(worktree.path(app, '.')))
+    expectSentBackByOxfmt(sentBack, worktree.path(app, '.'))
   })
 
   it('checks the repository the agent moved to when it is not part of the project', async () => {
@@ -200,15 +203,13 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
 
     const project = create().write({ [`${app}src/extra.ts`]: UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+    const sentBack = await stopHook(project, app, CLAUDE_CODE_STOP, {
       args: ['--only=oxfmt'],
       cwd: `${app}src`,
       env: { CLAUDE_PROJECT_DIR: elsewhere },
     })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(project.path(app, '.')))
+    expectSentBackByOxfmt(sentBack, project.path(app, '.'))
   })
 })
 
@@ -224,17 +225,7 @@ describe('hooks run in a monorepo', () => {
       cwd: 'packages/core/src',
     })
 
-    expect(app.exitCode).toBe(2)
-    expect(app.stdout).toBe('')
-    expect(report(app.stderr)).toEqual([
-      `uncheck in ${project.path('packages/app')}`,
-      ...ONLY_OXFMT,
-      '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
-      '✘ oxfmt failed',
-      '○ tsc skipped, not selected by --only',
-      '✘ 1 of 1 checks failed: oxfmt',
-      '  rerun with `--fix` to apply oxfmt fixes',
-    ])
+    expectSentBackByOxfmt(app, project.path('packages/app'))
 
     const top = await stopHook(project, '', CLAUDE_CODE_STOP, {
       args: ['--fix', '--only=oxfmt'],
@@ -295,14 +286,11 @@ describe('hooks run through links into a package', () => {
     const outside = new Project(temporaryDirectory()).link('app', project.path('packages/app'))
 
     for (const dir of [['--dir=packages/app'], []]) {
-      const { exitCode, stdout, stderr } = await run(
-        [...CLI, 'hooks', 'run', '--only=oxfmt', `--cwd=${outside.path('app')}`, ...dir],
-        { cwd: outside.dir, env: hookEnv(), input: JSON.stringify(CLAUDE_CODE_STOP) },
-      )
+      const sentBack = await stopHook(outside, '', CLAUDE_CODE_STOP, {
+        args: ['--only=oxfmt', `--cwd=${outside.path('app')}`, ...dir],
+      })
 
-      expect(exitCode).toBe(2)
-      expect(stdout).toBe('')
-      expect(report(stderr)).toEqual(oxfmtFailed(project.path('packages/app')))
+      expectSentBackByOxfmt(sentBack, project.path('packages/app'))
     }
   })
 
@@ -313,20 +301,13 @@ describe('hooks run through links into a package', () => {
     git(project.path('vendor/nested'), ['init', '--quiet'])
     project.write({ 'packages/app/src/extra.ts': UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(
-      project,
-      'packages/app/',
-      CLAUDE_CODE_STOP,
-      {
-        args: ['--only=oxfmt'],
-        cwd: 'vendor/nested',
-        env: { CLAUDE_PROJECT_DIR: outside.path('app') },
-      },
-    )
+    const sentBack = await stopHook(project, 'packages/app/', CLAUDE_CODE_STOP, {
+      args: ['--only=oxfmt'],
+      cwd: 'vendor/nested',
+      env: { CLAUDE_PROJECT_DIR: outside.path('app') },
+    })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(project.path('packages/app')))
+    expectSentBackByOxfmt(sentBack, project.path('packages/app'))
   })
 })
 
@@ -342,7 +323,7 @@ describe('hooks run in a repository nested in one git refuses', () => {
     git(nested.dir, ['init', '--quiet'])
     nested.commit('init').write({ 'src/extra.ts': UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(nested, '', CLAUDE_CODE_STOP, {
+    const sentBack = await stopHook(nested, '', CLAUDE_CODE_STOP, {
       args: ['--only=oxfmt'],
       cwd: 'src',
       env: {
@@ -354,9 +335,7 @@ describe('hooks run in a repository nested in one git refuses', () => {
       },
     })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(nested.dir))
+    expectSentBackByOxfmt(sentBack, nested.dir)
   })
 })
 
@@ -372,15 +351,13 @@ describe('hooks run in a repository whose work tree lies below its .git folder',
     git(holder, ['config', 'core.worktree', checkout.dir])
     checkout.commit('init').write({ 'src/extra.ts': UNFORMATTED })
 
-    const { exitCode, stdout, stderr } = await stopHook(checkout, '', CLAUDE_CODE_STOP, {
+    const sentBack = await stopHook(checkout, '', CLAUDE_CODE_STOP, {
       args: ['--only=oxfmt'],
       cwd: 'src',
       env: { CLAUDE_PROJECT_DIR: project.dir },
     })
 
-    expect(exitCode).toBe(2)
-    expect(stdout).toBe('')
-    expect(report(stderr)).toEqual(oxfmtFailed(checkout.dir))
+    expectSentBackByOxfmt(sentBack, checkout.dir)
   })
 })
 

@@ -34,7 +34,7 @@ export function inNodeModules(file: string): boolean {
   return /(?:^|\/)node_modules(?:\/|$)/.test(file)
 }
 
-export interface ChangedFiles {
+interface ChangedFiles {
   readonly files: ReadonlyArray<string>
   readonly deleted: ReadonlyArray<string>
 }
@@ -49,11 +49,7 @@ export function listChangedFiles(
   cwd: string,
 ): Effect.Effect<ChangedFiles | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.all(
-    [
-      // Without `--`, a file named HEAD makes the revision ambiguous and git fails.
-      rawDiff(cwd, 'HEAD', '--'),
-      gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
-    ],
+    [rawDiff(cwd, 'HEAD'), gitPaths(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])],
     { concurrency: 'unbounded' },
   ).pipe(
     Effect.map(([tracked, untracked]) => {
@@ -77,7 +73,6 @@ export const resolvePaths = Effect.fn(function* (
   cwd: string,
   projectFiles: ProjectFiles,
 ) {
-  const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const realCwd = realpathSync(cwd)
   const isCheckable = checkableFile(path, cwd, realCwd)
@@ -118,10 +113,7 @@ export const resolvePaths = Effect.fn(function* (
     }
 
     // An existing path is taken as it is, so `app/[id].ts` names that file rather than a glob.
-    const kind = yield* fs.stat(path.resolve(cwd, pattern)).pipe(
-      Effect.map((info) => info.type),
-      Effect.orElseSucceed(() => undefined),
-    )
+    const kind = yield* fileKind(path.resolve(cwd, pattern))
 
     if (kind === 'File') {
       matched.add(target)
@@ -181,7 +173,6 @@ export const resolvePaths = Effect.fn(function* (
   return { files: files.sort(), unmatched }
 })
 
-/** The given files the tools may get, the way a directory or glob keeps them. */
 export const checkableFiles = Effect.fn(function* (files: ReadonlyArray<string>, cwd: string) {
   const path = yield* Path.Path
   const isCheckable = checkableFile(path, cwd, realpathSync(cwd))
@@ -218,17 +209,17 @@ function checkableFile(path: Path.Path, cwd: string, realCwd: string): (file: st
   }
 }
 
-function isOutside(path: Path.Path, relative: string): boolean {
+export function isOutside(path: Path.Path, relative: string): boolean {
   return relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)
 }
 
-function slashedRelative(path: Path.Path, from: string, to: string): string {
+export function slashedRelative(path: Path.Path, from: string, to: string): string {
   // A backslash is a glob escape on POSIX, never a separator.
   return path.relative(from, to).split(path.sep).join('/')
 }
 
 /** `file` with every linked folder on its way resolved. A linked file keeps its own name. */
-function resolveFolders(path: Path.Path, file: string): string {
+export function resolveFolders(path: Path.Path, file: string): string {
   const rest: string[] = []
   let folder = file
 
@@ -271,6 +262,15 @@ export function ancestors(path: Path.Path, from: string): string[] {
 
   return dirs
 }
+
+export const fileKind = Effect.fn(function* (target: string) {
+  const fs = yield* FileSystem.FileSystem
+
+  return yield* fs.stat(target).pipe(
+    Effect.map((info) => info.type),
+    Effect.orElseSucceed(() => undefined),
+  )
+})
 
 export const readJson = Effect.fn(
   function* (file: string) {

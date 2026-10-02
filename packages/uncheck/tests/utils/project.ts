@@ -221,6 +221,8 @@ export function git(cwd: string, args: ReadonlyArray<string>, env?: Env): string
   })
 }
 
+export const DUBIOUS_OWNERSHIP: Env = { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' }
+
 export function run(
   command: ReadonlyArray<string>,
   { cwd, input = '', env }: Omit<RunOptions, 'cwd'> & { readonly cwd: string },
@@ -411,6 +413,18 @@ export class Project {
   }
 }
 
+export function commitWithHooks(project: Project, ...args: ReadonlyArray<string>): Promise<Run> {
+  return run(['git', 'commit', '--quiet', ...args], { cwd: project.dir })
+}
+
+export function commitOnSide(project: Project, files: Files): Project {
+  project.git('checkout', '--quiet', '-b', 'side')
+  project.write(files).commit('side')
+  project.git('checkout', '--quiet', 'main')
+
+  return project
+}
+
 function install(project: Project, tools: ReadonlyArray<Tool>): void {
   for (const tool of tools) {
     project.link(`node_modules/${tool}`, realpathSync(join(PACKAGE, 'node_modules', tool)))
@@ -462,7 +476,7 @@ export function project(files: Files = {}, { tools = TOOLS, git = 'commit' }: Pr
 
 const OXLINT_CONFIG = { rules: { 'no-var': 'error' } }
 
-function compilerOptions(extra: object = {}) {
+export function compilerOptions(extra: object = {}) {
   return {
     strict: true,
     module: 'esnext',
@@ -502,6 +516,9 @@ export function singleRepo(files: Files = {}, options?: ProjectOptions): Project
     options,
   )
 }
+
+export const UTILS_NOT_FOUND =
+  "src/index.ts(1,24): error TS2307: Cannot find module './utils' or its corresponding type declarations."
 
 /** A pnpm workspace whose `app` package builds on its `core` package through project references. */
 export function monorepo(files: Files = {}, options?: ProjectOptions): Project {
@@ -596,4 +613,19 @@ export interface Layout {
 export const LAYOUTS: ReadonlyArray<Layout> = [
   { name: 'single repo', create: singleRepo, app: '', tsc: '▶ tsc -p tsconfig.json --noEmit' },
   { name: 'monorepo', create: monorepo, app: 'packages/app/', tsc: '▶ tsc -b tsconfig.json' },
+]
+
+export const FULL_OXLINT = '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern'
+
+export const FULL_OXLINT_FIX =
+  '▶ oxlint --fix --ignore-pattern=node_modules --no-error-on-unmatched-pattern'
+
+export const FULL_OXFMT = '▶ oxfmt --check --no-error-on-unmatched-pattern'
+
+export const FULL_OXFMT_FIX = '▶ oxfmt --no-error-on-unmatched-pattern'
+
+export const SKIPPED_FOR_DELETIONS = [
+  '○ sherif skipped, no package.json among the given files',
+  '○ oxlint skipped, only deleted files',
+  '○ oxfmt skipped, only deleted files',
 ]

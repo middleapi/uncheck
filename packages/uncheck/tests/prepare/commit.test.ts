@@ -1,5 +1,5 @@
-import type { Project } from '../utils/project'
-import { LAYOUTS, monorepo, report, run } from '../utils/project'
+import type { Files, Project } from '../utils/project'
+import { commitWithHooks, LAYOUTS, monorepo, report, SKIPPED_FOR_DELETIONS } from '../utils/project'
 import { HUSKY_4_BANNER, HUSKY_4_RUNNER, installHusky, prepare } from './utils'
 
 const LINT_CONFIG = { rules: { 'no-var': 'error', 'no-empty-pattern': 'error' } }
@@ -10,8 +10,12 @@ const TSC_WITHOUT_REFERENCES = '▶ tsc -p tsconfig.json --noEmit'
 
 const TSC_WITH_REFERENCES = '▶ tsc -b tsconfig.json'
 
-function commit(project: Project, message: string) {
-  return run(['git', 'commit', '--quiet', `--message=${message}`], { cwd: project.dir })
+async function preparedMonorepo(files?: Files): Promise<Project> {
+  const project = monorepo(files)
+  await prepare(project, [], { cwd: 'packages/core' })
+  await prepare(project, [], { cwd: 'packages/app' })
+
+  return project
 }
 
 function blockedByLint(dir: string, tsc: string, file = 'src/ignore.ts'): string[] {
@@ -49,7 +53,7 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
     await prepare(project, [], { cwd: app })
     project.stage({ [`${app}src/ignore.ts`]: UNFIXABLE })
 
-    const { exitCode, stderr } = await commit(project, 'ignore')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=ignore')
 
     expect(exitCode).toBe(1)
     expect(report(stderr)).toEqual(blockedByLint(project.path(app, '.'), tsc))
@@ -62,7 +66,7 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
     await prepare(project, [], { cwd: app })
     project.stage({ [`${app}src/spaced.ts`]: 'export var spaced   =   1\n' })
 
-    const { exitCode, stderr } = await commit(project, 'spaced')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=spaced')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual(fixedAndStaged(project.path(app, '.'), tsc))
@@ -81,7 +85,7 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
     await prepare(project, [], { cwd: app })
     project.stage({ [`${app}src/ignore.ts`]: UNFIXABLE })
 
-    const { exitCode, stderr } = await commit(project, 'ignore')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=ignore')
 
     expect(exitCode).toBe(1)
     expect(report(stderr)).toEqual(blockedByLint(project.path(app, '.'), tsc))
@@ -95,7 +99,7 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
     project.commit('husky')
     project.stage({ [`${app}src/spaced.ts`]: 'export const spaced   =   1\n' })
 
-    const { exitCode, stderr } = await commit(project, 'spaced')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=spaced')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual(fixedAndStaged(project.path(app, '.'), tsc))
@@ -106,15 +110,13 @@ describe.each(LAYOUTS)('committing with the prepared hook in a $name', ({ create
 
 describe('committing with the prepared hook of several packages in a monorepo', () => {
   it('stops at the first package whose line fails', async () => {
-    const project = monorepo({ '.oxlintrc.json': LINT_CONFIG })
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo({ '.oxlintrc.json': LINT_CONFIG })
     project.stage({
       'packages/core/src/ignore.ts': UNFIXABLE,
       'packages/app/src/spaced.ts': 'export const spaced   =   1\n',
     })
 
-    const { exitCode, stderr } = await commit(project, 'both')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=both')
 
     expect(exitCode).toBe(1)
     expect(report(stderr)).toEqual(
@@ -125,12 +127,10 @@ describe('committing with the prepared hook of several packages in a monorepo', 
   })
 
   it('skips the line of a package the commit leaves alone', async () => {
-    const project = monorepo()
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo()
     project.stage({ 'packages/app/src/spaced.ts': 'export var spaced   =   1\n' })
 
-    const { exitCode, stderr } = await commit(project, 'spaced')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=spaced')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual(
@@ -140,14 +140,14 @@ describe('committing with the prepared hook of several packages in a monorepo', 
   })
 
   it('checks the files of `git commit <paths>` in a package', async () => {
-    const project = monorepo({ '.oxlintrc.json': LINT_CONFIG })
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo({ '.oxlintrc.json': LINT_CONFIG })
     project.write({ 'packages/app/src/index.ts': UNFIXABLE })
 
-    const { exitCode, stderr } = await run(
-      ['git', 'commit', '--quiet', '--message=ignore', '--', 'packages/app/src/index.ts'],
-      { cwd: project.dir },
+    const { exitCode, stderr } = await commitWithHooks(
+      project,
+      '--message=ignore',
+      '--',
+      'packages/app/src/index.ts',
     )
 
     expect(exitCode).toBe(1)
@@ -158,19 +158,15 @@ describe('committing with the prepared hook of several packages in a monorepo', 
   })
 
   it('runs the line of a package the commit only deletes from', async () => {
-    const project = monorepo()
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo()
     project.git('rm', '--quiet', 'packages/app/src/index.ts')
 
-    const { exitCode, stderr } = await commit(project, 'remove')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=remove')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual([
       `uncheck staged in ${project.path('packages/app')}`,
-      '○ sherif skipped, no package.json among the given files',
-      '○ oxlint skipped, only deleted files',
-      '○ oxfmt skipped, only deleted files',
+      ...SKIPPED_FOR_DELETIONS,
       TSC_WITH_REFERENCES,
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
@@ -179,13 +175,11 @@ describe('committing with the prepared hook of several packages in a monorepo', 
   })
 
   it('skips the line of a package that was moved away', async () => {
-    const project = monorepo()
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo()
     project.git('mv', 'packages/app', 'packages/web')
     await prepare(project, [], { cwd: 'packages/web' })
 
-    const { exitCode, stderr } = await commit(project, 'rename')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=rename')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual([
@@ -203,13 +197,11 @@ describe('committing with the prepared hook of several packages in a monorepo', 
   })
 
   it('skips the line of a package a sparse checkout leaves out', async () => {
-    const project = monorepo()
-    await prepare(project, [], { cwd: 'packages/core' })
-    await prepare(project, [], { cwd: 'packages/app' })
+    const project = await preparedMonorepo()
     project.git('sparse-checkout', 'set', 'packages/core')
     project.stage({ 'packages/core/src/spaced.ts': 'export var spaced   =   1\n' })
 
-    const { exitCode, stderr } = await commit(project, 'spaced')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=spaced')
 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual(
@@ -223,7 +215,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
     project.stage({ ':docs/src/ignore.ts': UNFIXABLE })
     await prepare(project, [], { cwd: ':docs' })
 
-    const { exitCode, stderr } = await commit(project, 'ignore')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=ignore')
 
     expect(exitCode).toBe(1)
     expect(report(stderr)).toEqual([

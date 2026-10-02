@@ -1,4 +1,4 @@
-import { LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
+import { FULL_OXFMT, FULL_OXLINT, LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
 import { monorepoWithMismatchedVersions } from './utils'
 
 const OTHERS_NOT_SELECTED = [
@@ -25,7 +25,7 @@ describe.each(LAYOUTS)('uncheck sherif in a $name', ({ create, app }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not installed',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
@@ -109,9 +109,9 @@ describe('uncheck sherif in a single repo', () => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '✘ sherif not a workspace root',
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check --no-error-on-unmatched-pattern',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',

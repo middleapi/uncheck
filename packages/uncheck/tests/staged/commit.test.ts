@@ -1,7 +1,8 @@
-import { cliError, LAYOUTS, linkedWorktree, report, run } from '../utils/project'
+import { cliError, commitWithHooks, LAYOUTS, linkedWorktree, report } from '../utils/project'
 import type { Project } from '../utils/project'
 import {
   EMPTY_COMMIT_ERROR,
+  expectFixesStaged,
   inIndex,
   SAVED_LINE,
   saveWhileTscRuns,
@@ -23,20 +24,16 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
       .chmod('.git/hooks/pre-commit', 0o755)
   }
 
-  function commit(project: Project, ...args: ReadonlyArray<string>) {
-    return run(['git', 'commit', '--quiet', ...args], { cwd: project.dir })
-  }
-
   it('fixes the files of `git commit <paths>` in the commit and in the index it leaves', async () => {
     const project = hooked().stage({ [other]: 'export const other = 2;\n' })
 
     project.write({ [file]: VERSIONS.staged })
     saveWhileTscRuns(project, [file])
 
-    const { exitCode, stderr } = await commit(project, '--message=extra', '--', file)
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=extra', '--', file)
 
     expect(exitCode).toBe(0)
-    expect(report(stderr).slice(-2)).toEqual(['✔ staged the fixes to src/extra.ts', ALL_PASSED])
+    expectFixesStaged(stderr, 'src/extra.ts', 'oxlint, oxfmt, tsc')
     expect(project.git('show', `HEAD:${file}`)).toBe(VERSIONS.fixed)
     expect(project.git('show', `HEAD:${other}`)).toBe('export const other = 1;\n')
     expect(inIndex(project, file)).toBe(VERSIONS.fixed)
@@ -49,15 +46,10 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
 
     project.write({ [file]: VERSIONS.staged, [other]: 'export const   other = 2\n' })
 
-    const { exitCode, stderr } = await run(['git', 'commit', '--quiet', '--all', '--message=all'], {
-      cwd: project.dir,
-    })
+    const { exitCode, stderr } = await commitWithHooks(project, '--all', '--message=all')
 
     expect(exitCode).toBe(0)
-    expect(report(stderr).slice(-2)).toEqual([
-      '✔ staged the fixes to src/extra.ts src/other.ts',
-      ALL_PASSED,
-    ])
+    expectFixesStaged(stderr, 'src/extra.ts src/other.ts', 'oxlint, oxfmt, tsc')
     expect(project.git('show', `HEAD:${file}`)).toBe(VERSIONS.fixed)
     expect(project.git('show', `HEAD:${other}`)).toBe('export const other = 2;\n')
     expect(project.git('status', '--porcelain')).toBe('')
@@ -75,7 +67,7 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
 
     saveWhileTscRuns(project, [file, other, clean])
 
-    const { exitCode, stderr } = await commit(project, '--message=saved')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=saved')
 
     expect(exitCode).toBe(0)
     expect(report(stderr).slice(-3)).toEqual([
@@ -98,7 +90,7 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
       file,
     )
 
-    const { exitCode, stderr } = await commit(project, '--message=broken')
+    const { exitCode, stderr } = await commitWithHooks(project, '--message=broken')
 
     expect(exitCode).toBe(1)
     expect(report(stderr).slice(-3)).toEqual([
@@ -116,22 +108,22 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
 
     project.stage(unformatted)
 
-    const amend = await commit(project, '--amend', '--message=reworded')
+    const amend = await commitWithHooks(project, '--amend', '--message=reworded')
 
     expect(amend.stderr).toContain(cliError(EMPTY_COMMIT_ERROR))
     expect(amend.exitCode).toBe(1)
     expect(project.git('log', '--format=%s')).toBe('init\n')
-    expect((await commit(project, '--amend', '--message=reworded')).exitCode).toBe(0)
+    expect((await commitWithHooks(project, '--amend', '--message=reworded')).exitCode).toBe(0)
     expect(project.git('log', '--format=%s')).toBe('reworded\n')
 
     project.stage(unformatted)
 
-    const plain = await commit(project, '--message=empty')
+    const plain = await commitWithHooks(project, '--message=empty')
 
     expect(plain.stderr).toContain(cliError(EMPTY_COMMIT_ERROR))
     expect(plain.exitCode).toBe(1)
 
-    const again = await commit(project, '--message=empty')
+    const again = await commitWithHooks(project, '--message=empty')
 
     expect(again.stdout).toContain('nothing to commit')
     expect(again.exitCode).toBe(1)
@@ -144,9 +136,7 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
       const project = hooked()
       const worktree = stagePartially(linkedWorktree(project, app), file)
 
-      const { exitCode, stderr } = await run(['git', 'commit', '--quiet', '--message=extra'], {
-        cwd: worktree.dir,
-      })
+      const { exitCode, stderr } = await commitWithHooks(worktree, '--message=extra')
 
       expect(exitCode).toBe(0)
       expect(report(stderr).slice(-3)).toEqual([
@@ -166,13 +156,10 @@ describe.each(LAYOUTS)('uncheck staged as the pre-commit hook of a $name', ({ cr
 
       worktree.write({ [file]: VERSIONS.staged })
 
-      const { exitCode, stderr } = await run(
-        ['git', 'commit', '--quiet', '--message=extra', '--', file],
-        { cwd: worktree.dir },
-      )
+      const { exitCode, stderr } = await commitWithHooks(worktree, '--message=extra', '--', file)
 
       expect(exitCode).toBe(0)
-      expect(report(stderr).slice(-2)).toEqual(['✔ staged the fixes to src/extra.ts', ALL_PASSED])
+      expectFixesStaged(stderr, 'src/extra.ts', 'oxlint, oxfmt, tsc')
       expect(worktree.git('show', `HEAD:${file}`)).toBe(VERSIONS.fixed)
       expect(inIndex(worktree, file)).toBe(VERSIONS.fixed)
       expect(worktree.git('status', '--porcelain')).toBe(`M  ${other}\n`)

@@ -1,13 +1,20 @@
 import { posix } from 'node:path'
 
-import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
+import { Cache, Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
 
 import { CannotCheck, NothingToCheck } from '../errors'
-import { ancestors, listProjectFiles, readJson } from '../files'
+import {
+  ancestors,
+  fileKind,
+  isOutside,
+  listProjectFiles,
+  readJson,
+  resolveFolders,
+} from '../files'
 import { git } from '../git'
 import type { Bin } from '../tool'
-import { resolveBin } from '../tool'
+import { argvBatches, resolveBin } from '../tool'
 import type { Check } from '../types'
 
 /**
@@ -76,42 +83,55 @@ export const tsc: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'no tsconfig.json found' }))
     }
 
+    const uncovered = notCovered(typescript, files)
+
     if (given !== undefined && given.length === 0) {
-      return yield* Effect.fail(notCovered(typescript, files))
+      return yield* Effect.fail(uncovered)
     }
 
     // A config above the folder may cover far more than it, so even a full run selects by its files.
     const targets = given ?? (inherited === undefined ? undefined : checkable(yield* projectFiles))
+    const tsconfigs = yield* cachedTsconfigs
     const references = yield* followReferences(
       inherited === undefined ? tracked : [...tracked, inherited],
+      tsconfigs,
+    )
+    const inputs = new Map(
+      yield* Effect.forEach(
+        new Set([...references.keys(), ...tracked]),
+        (configPath) =>
+          Effect.map(
+            loadTsconfigInputs(configPath, tsconfigs),
+            (loaded) => [configPath, loaded] as const,
+          ),
+        { concurrency: 'unbounded' },
+      ),
     )
 
-    const selected =
-      targets === undefined
-        ? tracked
-        : yield* selectTsconfigs(
-            references,
-            targets,
-            deleted.map((file) => path.resolve(cwd, file)),
-          )
+    let projects: ReadonlyArray<string> = tracked
 
-    const projectPaths = (yield* projectFiles).map((file) => path.resolve(cwd, file))
-    const projects =
-      targets === undefined
-        ? selected
-        : [
-            ...new Set([
-              ...selected,
-              ...(yield* workspaceDependents(
-                [...references.keys()],
-                [...selected, ...(given ?? []).filter((file) => posix.extname(file) !== '.json')],
-                projectPaths.filter((file) => path.basename(file) === 'package.json'),
-              )),
-            ]),
-          ]
+    if (targets !== undefined) {
+      const selected = yield* selectTsconfigs(
+        references,
+        inputs,
+        targets,
+        deleted.map((file) => path.resolve(cwd, file)),
+        tsconfigs.realPath,
+      )
+      const manifests = (yield* projectFiles)
+        .filter((file) => file === 'package.json' || file.endsWith('/package.json'))
+        .map((file) => path.resolve(cwd, file))
+      const dependentPackages = yield* workspaceDependents(
+        [...references.keys()],
+        [...selected, ...(given ?? []).filter((file) => posix.extname(file) !== '.json')],
+        manifests,
+      )
+
+      projects = [...new Set([...selected, ...dependentPackages])]
+    }
 
     if (projects.length === 0) {
-      return yield* Effect.fail(notCovered(typescript, files))
+      return yield* Effect.fail(uncovered)
     }
 
     if (typescript === undefined) {
@@ -148,62 +168,19 @@ export const tsc: Check = {
       )
     }
 
-    const dependents = new Map<string, string[]>()
-
-    for (const [dependent, referencedConfigs] of references) {
-      for (const configPath of referencedConfigs) {
-        const known = dependents.get(configPath) ?? []
-
-        known.push(dependent)
-        dependents.set(configPath, known)
-      }
-    }
-
-    const affected = new Set(targets === undefined ? references.keys() : projects)
-
-    for (const configPath of affected) {
-      for (const dependent of dependents.get(configPath) ?? []) {
-        affected.add(dependent)
-      }
-    }
-
-    const memberInputs = new Map(
-      yield* Effect.forEach(
-        members,
-        (configPath) =>
-          Effect.map(loadTsconfigInputs(configPath), (inputs) => [configPath, inputs] as const),
-        { concurrency: 'unbounded' },
-      ),
+    const dependents = reverseEdges(references.keys(), (configPath) => references.get(configPath)!)
+    const dependentsOf = (configPath: string) => dependents.get(configPath) ?? []
+    const affected = reachable(targets === undefined ? references.keys() : projects, dependentsOf)
+    const buildsBesideSources = reachable(
+      yield* writingBesideSources(cwd, yield* projectFiles, members, inputs),
+      dependentsOf,
     )
-    // `tsc -b` on these would write JavaScript next to the sources of a project, and Vite, for one,
-    // then loads a stale vite.config.js instead of vite.config.ts. Where git ignores that JavaScript,
-    // the project builds in place on purpose, and `-p` would read the declarations of its last build.
-    const buildsBesideSources = new Set(
-      yield* Effect.filter(
-        members,
-        (member) => {
-          const inputs = memberInputs.get(member)!
-
-          return hasInputs(inputs) && inputs.emitsBesideSources
-            ? Effect.map(gitIgnoresOutput(cwd, member, inputs, projectPaths), (ignored) => !ignored)
-            : Effect.succeed(false)
-        },
-        { concurrency: 'unbounded' },
-      ),
-    )
-
-    for (const configPath of buildsBesideSources) {
-      for (const dependent of dependents.get(configPath) ?? []) {
-        buildsBesideSources.add(dependent)
-      }
-    }
-
-    const extended = yield* extendedConfigs([...references.keys()])
-    const standalone = yield* Effect.filter(
+    const standalone = yield* withoutSharedBases(
+      cwd,
+      yield* projectFiles,
       projects.filter((configPath) => !members.includes(configPath)),
-      (configPath) =>
-        Effect.map(isSharedBase(configPath, extended, projectPaths), (shared) => !shared),
-      { concurrency: 'unbounded' },
+      inputs,
+      tsconfigs.realPath,
     )
     const built = new Set(
       members.filter(
@@ -217,18 +194,18 @@ export const tsc: Check = {
 
     for (const member of members) {
       if (affected.has(member) && buildsBesideSources.has(member)) {
-        const inputs = memberInputs.get(member)!
+        const memberInputs = inputs.get(member)!
 
         // A solution without sources needs `-p` too, or a reference to a missing config passes.
-        checkedAlone.set(member, inputs.composite ? WITHOUT_BUILD_INFO : [])
+        checkedAlone.set(member, memberInputs.composite ? WITHOUT_BUILD_INFO : [])
 
         // `-p` reads a referenced project through the declarations on disk, which a fresh checkout
         // lacks and an earlier build left stale.
         for (const referencedConfig of references.get(member)!) {
           if (
-            memberInputs.has(referencedConfig) &&
+            references.has(referencedConfig) &&
             !buildsBesideSources.has(referencedConfig) &&
-            (hasInputs(inputs) || affected.has(referencedConfig))
+            (hasInputs(memberInputs) || affected.has(referencedConfig))
           ) {
             built.add(referencedConfig)
           }
@@ -237,7 +214,7 @@ export const tsc: Check = {
     }
 
     if (built.size === 0 && checkedAlone.size === 0) {
-      return yield* Effect.fail(notCovered(typescript, files))
+      return yield* Effect.fail(uncovered)
     }
 
     return [
@@ -254,7 +231,10 @@ export const tsc: Check = {
   }),
 }
 
-const followReferences = Effect.fn(function* (configPaths: ReadonlyArray<string>) {
+const followReferences = Effect.fn(function* (
+  configPaths: ReadonlyArray<string>,
+  tsconfigs: Tsconfigs,
+) {
   const references = new Map<string, ReadonlyArray<string>>()
   const queue = [...configPaths]
 
@@ -262,7 +242,7 @@ const followReferences = Effect.fn(function* (configPaths: ReadonlyArray<string>
     const configPath = queue.pop()!
 
     if (!references.has(configPath) && (yield* fileKind(configPath)) === 'File') {
-      const referencedConfigs = yield* readReferences(configPath)
+      const referencedConfigs = yield* readReferences(configPath, tsconfigs)
 
       references.set(configPath, referencedConfigs)
       queue.push(...referencedConfigs)
@@ -288,32 +268,110 @@ function outputBeside(source: string): string | undefined {
     : `${source.slice(0, -extension.length)}${output}`
 }
 
-const gitIgnoresOutput = Effect.fn(function* (
+// `tsc -b` on these would write JavaScript next to the sources of a project, and Vite, for one,
+// then loads a stale vite.config.js instead of vite.config.ts. Where git ignores that JavaScript,
+// the project builds in place on purpose, and `-p` would read the declarations of its last build.
+const writingBesideSources = Effect.fn(function* (
   cwd: string,
+  projectFiles: ReadonlyArray<string>,
+  members: ReadonlyArray<string>,
+  inputs: ReadonlyMap<string, TsconfigInputs>,
+) {
+  const path = yield* Path.Path
+  const outputs = yield* Effect.forEach(
+    members.filter((member) => {
+      const memberInputs = inputs.get(member)!
+
+      return hasInputs(memberInputs) && memberInputs.emitsBesideSources
+    }),
+    (member) =>
+      Effect.map(
+        outputBesideAnInput(cwd, projectFiles, member, inputs.get(member)!),
+        (output) => [member, output] as const,
+      ),
+    { concurrency: 'unbounded' },
+  )
+  const written = outputs.map(([, output]) => output).filter(Predicate.isNotUndefined)
+  const ignored = yield* ignoredByGit(cwd, [
+    ...argvBatches(written.filter((output) => !isOutside(path, output))),
+    // git refuses every path given along with one outside its repository or behind a link.
+    ...written.filter((output) => isOutside(path, output)).map((output) => [output]),
+  ])
+
+  return outputs
+    .filter(([, output]) => output === undefined || !ignored.has(output))
+    .map(([member]) => member)
+})
+
+const outputBesideAnInput = Effect.fn(function* (
+  cwd: string,
+  projectFiles: ReadonlyArray<string>,
   configPath: string,
   inputs: TsconfigInputs,
-  projectPaths: ReadonlyArray<string>,
 ) {
   const path = yield* Path.Path
   const configDir = path.dirname(configPath)
   const files = ancestors(path, configDir).includes(cwd)
-    ? projectPaths
+    ? projectFiles
     : (yield* listProjectFiles(configDir)).map((file) => path.resolve(configDir, file))
+  const isInput = (file: string) =>
+    outputBeside(file) !== undefined && includesFile(inputs, path.resolve(cwd, file))
+  const relativeConfig = path.relative(cwd, configPath)
+  const input =
+    findInFolder(files, relativeConfig.slice(0, relativeConfig.lastIndexOf('/') + 1), isInput) ??
+    files.find(isInput)
 
-  for (const file of files) {
-    const output = outputBeside(file)
+  return input === undefined ? undefined : outputBeside(input)
+})
 
-    if (output !== undefined && includesFile(inputs, file)) {
-      // check-ignore refuses the literal pathspecs `git` turns on.
-      return yield* Effect.isSuccess(
-        git(cwd, ['check-ignore', '--quiet', '--no-index', '--', output], {
-          GIT_LITERAL_PATHSPECS: '0',
-        }),
-      )
+/** Needs `files` sorted, as listProjectFiles leaves them. */
+function findInFolder(
+  files: ReadonlyArray<string>,
+  folder: string,
+  predicate: (file: string) => boolean,
+): string | undefined {
+  let low = 0
+  let high = files.length
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+
+    if (files[middle]! < folder) {
+      low = middle + 1
+    } else {
+      high = middle
     }
   }
 
-  return false
+  for (let index = low; index < files.length && files[index]!.startsWith(folder); index += 1) {
+    if (predicate(files[index]!)) {
+      return files[index]
+    }
+  }
+
+  return undefined
+}
+
+const ignoredByGit = Effect.fn(function* (
+  cwd: string,
+  batches: ReadonlyArray<ReadonlyArray<string>>,
+) {
+  const printed = yield* Effect.forEach(
+    batches,
+    (batch) =>
+      // check-ignore refuses the literal pathspecs `git` turns on and exits with 1 when it ignores
+      // none. It takes `-z` only with `--stdin`, so it quotes a path holding a control character,
+      // `"` or `\`, which then matches no output.
+      git(cwd, ['-c', 'core.quotePath=false', 'check-ignore', '--no-index', '--', ...batch], {
+        GIT_LITERAL_PATHSPECS: '0',
+      }).pipe(
+        Effect.map((output) => output.split('\n')),
+        Effect.orElseSucceed(() => []),
+      ),
+    { concurrency: 'unbounded' },
+  )
+
+  return new Set(printed.flat())
 })
 
 const tsconfigAboveInRepository = Effect.fn(function* (cwd: string) {
@@ -331,39 +389,38 @@ const tsconfigAboveInRepository = Effect.fn(function* (cwd: string) {
   return yield* firstFile(searched.map((dir) => path.join(dir, 'tsconfig.json')))
 })
 
-/** The configs other configs extend, by their real path, as an extends through a workspace link names the link. */
-const extendedConfigs = Effect.fn(function* (configPaths: ReadonlyArray<string>) {
-  const chains = yield* Effect.forEach(
-    configPaths,
-    (configPath) => loadExtendsChain(configPath, new Set()),
-    { concurrency: 'unbounded' },
-  )
-
-  return new Set(
-    yield* Effect.forEach(
-      chains.flatMap((chain) => chain.slice(0, -1)),
-      ({ file }) => realPath(file),
-      { concurrency: 'unbounded' },
-    ),
-  )
-})
-
 /**
  * A shared base kept as a tsconfig.json, the way `@tsconfig/bases` packages ship theirs, has no
  * sources of its own: tsc fails it with TS18003, and the configs extending it are checked anyway.
  */
-const isSharedBase = Effect.fn(function* (
-  configPath: string,
-  extended: ReadonlySet<string>,
-  files: ReadonlyArray<string>,
+const withoutSharedBases = Effect.fn(function* (
+  cwd: string,
+  projectFiles: ReadonlyArray<string>,
+  configPaths: ReadonlyArray<string>,
+  inputs: ReadonlyMap<string, TsconfigInputs>,
+  realPath: (file: string) => Effect.Effect<string>,
 ) {
-  if (!extended.has(yield* realPath(configPath))) {
-    return false
+  if (configPaths.length === 0) {
+    return configPaths
   }
 
-  const inputs = yield* loadTsconfigInputs(configPath)
+  const path = yield* Path.Path
+  const bases = new Set([...inputs.values()].flatMap(({ configs }) => configs.slice(0, -1)))
+  const extended = new Set(yield* Effect.forEach(bases, realPath, { concurrency: 'unbounded' }))
 
-  return !files.some((file) => includesFile(inputs, file))
+  return yield* Effect.filter(
+    configPaths,
+    (configPath) =>
+      Effect.map(
+        realPath(configPath),
+        (real) =>
+          !extended.has(real) ||
+          projectFiles.some((file) =>
+            includesFile(inputs.get(configPath)!, path.resolve(cwd, file)),
+          ),
+      ),
+    { concurrency: 'unbounded' },
+  )
 })
 
 const DEPENDENCY_FIELDS = [
@@ -373,10 +430,13 @@ const DEPENDENCY_FIELDS = [
   'optionalDependencies',
 ] as const
 
-/**
- * The configs of the workspace packages that depend, directly or through others, on a package that
- * owns one of `changed`: a package imported through its workspace link needs no project reference.
- */
+interface WorkspacePackage {
+  readonly dir: string
+  readonly name: unknown
+  readonly dependencies: ReadonlyArray<string>
+}
+
+/** A package imported through its workspace link needs no project reference. */
 const workspaceDependents = Effect.fn(function* (
   candidates: ReadonlyArray<string>,
   changed: ReadonlyArray<string>,
@@ -386,7 +446,7 @@ const workspaceDependents = Effect.fn(function* (
   const packages = yield* Effect.forEach(
     manifests,
     (manifestPath) =>
-      Effect.map(readJson(manifestPath), (manifest) => ({
+      Effect.map(readJson(manifestPath), (manifest): WorkspacePackage => ({
         dir: path.dirname(manifestPath),
         name: manifest?.name,
         dependencies: DEPENDENCY_FIELDS.flatMap((field) => {
@@ -402,31 +462,49 @@ const workspaceDependents = Effect.fn(function* (
     ancestors(path, path.dirname(file)).find((dir) => packageDirs.has(dir))
 
   const owners = new Set(changed.map(ownerOf))
-  const reachedNames = new Set(
-    packages.filter(({ dir }) => owners.has(dir)).map(({ name }) => name),
+  const dependents = reverseEdges<unknown, WorkspacePackage>(
+    packages,
+    ({ dependencies }) => dependencies,
   )
-  const dependentDirs = new Set<string>()
-
-  for (let grown = true; grown;) {
-    grown = false
-
-    for (const { dir, name, dependencies } of packages) {
-      if (
-        !dependentDirs.has(dir) &&
-        dependencies.some((dependency) => reachedNames.has(dependency))
-      ) {
-        dependentDirs.add(dir)
-        reachedNames.add(name)
-        grown = true
-      }
-    }
-  }
+  const dependentsOf = ({ name }: WorkspacePackage) => dependents.get(name) ?? []
+  const reached = reachable(
+    packages.filter(({ dir }) => owners.has(dir)).flatMap(dependentsOf),
+    dependentsOf,
+  )
+  const dependentDirs = new Set([...reached].map(({ dir }) => dir))
 
   return candidates.filter((configPath) => {
     const owner = ownerOf(configPath)
     return owner !== undefined && dependentDirs.has(owner)
   })
 })
+
+function reverseEdges<K, T>(nodes: Iterable<T>, edges: (node: T) => Iterable<K>): Map<K, T[]> {
+  const reversed = new Map<K, T[]>()
+
+  for (const node of nodes) {
+    for (const target of edges(node)) {
+      const sources = reversed.get(target) ?? []
+
+      sources.push(node)
+      reversed.set(target, sources)
+    }
+  }
+
+  return reversed
+}
+
+function reachable<T>(seeds: Iterable<T>, next: (node: T) => Iterable<T>): Set<T> {
+  const reached = new Set(seeds)
+
+  for (const node of reached) {
+    for (const neighbour of next(node)) {
+      reached.add(neighbour)
+    }
+  }
+
+  return reached
+}
 
 function findCycle(
   nodes: ReadonlyArray<string>,
@@ -455,8 +533,10 @@ function findCycle(
 
 const selectTsconfigs = Effect.fn(function* (
   references: ReadonlyMap<string, ReadonlyArray<string>>,
+  inputs: ReadonlyMap<string, TsconfigInputs>,
   files: ReadonlyArray<string>,
   deleted: ReadonlyArray<string>,
+  realPath: (file: string) => Effect.Effect<string>,
 ) {
   const jsonFiles = yield* Effect.forEach(
     files.filter((file) => posix.extname(file) === '.json'),
@@ -466,20 +546,20 @@ const selectTsconfigs = Effect.fn(function* (
 
   return yield* Effect.filter(
     [...references.keys()],
-    (candidate) =>
+    (candidate) => {
+      const candidateInputs = inputs.get(candidate)!
+
       // A deleted config is no candidate, so only the configs that reference it lead to its dependents.
-      references.get(candidate)!.some((config) => deleted.includes(config))
+      return references.get(candidate)!.some((config) => deleted.includes(config)) ||
+        files.some((file) => includesFile(candidateInputs, file))
         ? Effect.succeed(true)
-        : Effect.flatMap(loadTsconfigInputs(candidate), (inputs) =>
-            files.some((file) => includesFile(inputs, file))
-              ? Effect.succeed(true)
-              : jsonFiles.length === 0
-                ? Effect.succeed(false)
-                : Effect.map(
-                    Effect.forEach(inputs.configs, realPath, { concurrency: 'unbounded' }),
-                    (configs) => configs.some((config) => jsonFiles.includes(config)),
-                  ),
-          ),
+        : jsonFiles.length === 0
+          ? Effect.succeed(false)
+          : Effect.map(
+              Effect.forEach(candidateInputs.configs, realPath, { concurrency: 'unbounded' }),
+              (configs) => configs.some((config) => jsonFiles.includes(config)),
+            )
+    },
     { concurrency: 'unbounded' },
   )
 })
@@ -494,9 +574,7 @@ const realPath = Effect.fn(function* (file: string) {
 
   // A deleted file has no real path, while the folder it was in can still be reached through a link.
   return yield* fs.realPath(file).pipe(
-    Effect.catch(() =>
-      Effect.map(fs.realPath(path.dirname(file)), (dir) => path.join(dir, path.basename(file))),
-    ),
+    Effect.catch(() => Effect.try(() => resolveFolders(path, file))),
     Effect.orElseSucceed(() => file),
   )
 })
@@ -523,11 +601,44 @@ const readTsconfig = Effect.fn(
   Effect.orElseSucceed((): RawTsconfig => ({})),
 )
 
+const resolveBases = Effect.fn(function* (configPath: string, raw: RawTsconfig) {
+  const path = yield* Path.Path
+  const specs =
+    typeof raw.extends === 'string' ? [raw.extends] : isStringArray(raw.extends) ? raw.extends : []
+  const bases = yield* Effect.forEach(specs, (spec) =>
+    resolveExtends(spec.replaceAll('\\', '/'), path.dirname(configPath)),
+  )
+
+  return bases.flatMap(Option.toArray)
+})
+
+interface Tsconfigs {
+  readonly read: (configPath: string) => Effect.Effect<RawTsconfig>
+  readonly bases: (configPath: string) => Effect.Effect<ReadonlyArray<string>>
+  readonly realPath: (file: string) => Effect.Effect<string>
+}
+
+function memoized<A, R>(lookup: (key: string) => Effect.Effect<A, never, R>) {
+  return Effect.map(
+    Cache.make({ capacity: Number.POSITIVE_INFINITY, lookup }),
+    (cache) => (key: string) => Cache.get(cache, key),
+  )
+}
+
+const cachedTsconfigs = Effect.gen(function* () {
+  const read = yield* memoized(readTsconfig)
+  const bases = yield* memoized((configPath: string) =>
+    Effect.flatMap(read(configPath), (raw) => resolveBases(configPath, raw)),
+  )
+
+  return { read, bases, realPath: yield* memoized(realPath) }
+})
+
 /** `references` are never inherited through `extends`, so only the file itself is read. */
-const readReferences = Effect.fn(function* (configPath: string) {
+const readReferences = Effect.fn(function* (configPath: string, tsconfigs: Tsconfigs) {
   const path = yield* Path.Path
   const configDir = path.dirname(configPath)
-  const { references } = yield* readTsconfig(configPath)
+  const { references } = yield* tsconfigs.read(configPath)
 
   return (Array.isArray(references) ? references : []).flatMap((reference: unknown) => {
     if (!Predicate.isObject(reference) || typeof reference.path !== 'string') {
@@ -551,7 +662,6 @@ interface TsconfigInputs {
   readonly include: ReadonlyArray<InputPattern>
   readonly exclude: ReadonlyArray<InputPattern>
   readonly extensions: ReadonlySet<string>
-  /** Neither `noEmit`, `emitDeclarationOnly`, `outDir` nor `outFile` keeps the output away from the sources. */
   readonly emitsBesideSources: boolean
   readonly composite: boolean
 }
@@ -574,9 +684,9 @@ interface Specs {
  * `tsc` does: each field comes from the last config in the `extends` chain that sets it, relative
  * paths resolve against the config that set them, and `${configDir}` means the leaf config's folder.
  */
-const loadTsconfigInputs = Effect.fn(function* (configPath: string) {
+const loadTsconfigInputs = Effect.fn(function* (configPath: string, tsconfigs: Tsconfigs) {
   const path = yield* Path.Path
-  const chain = yield* loadExtendsChain(configPath, new Set())
+  const chain = yield* loadExtendsChain(configPath, new Set(), tsconfigs)
   const leafDir = path.dirname(configPath)
 
   const last: Partial<
@@ -688,38 +798,19 @@ interface ChainEntry {
 const loadExtendsChain = Effect.fn(function* (
   configPath: string,
   resolving: ReadonlySet<string>,
-): Effect.fn.Return<ReadonlyArray<ChainEntry>, never, FileSystem.FileSystem | Path.Path> {
+  tsconfigs: Tsconfigs,
+): Effect.fn.Return<ReadonlyArray<ChainEntry>, never, Path.Path> {
   if (resolving.has(configPath)) {
     return []
   }
 
   const path = yield* Path.Path
-  const raw = yield* readTsconfig(configPath)
-  const dir = path.dirname(configPath)
-  const specs =
-    typeof raw.extends === 'string' ? [raw.extends] : isStringArray(raw.extends) ? raw.extends : []
-
-  const bases = yield* Effect.forEach(specs, (spec) =>
-    resolveExtends(spec.replaceAll('\\', '/'), dir).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.succeed<ReadonlyArray<ChainEntry>>([]),
-          onSome: (base) => loadExtendsChain(base, new Set(resolving).add(configPath)),
-        }),
-      ),
-    ),
+  const raw = yield* tsconfigs.read(configPath)
+  const chains = yield* Effect.forEach(yield* tsconfigs.bases(configPath), (base) =>
+    loadExtendsChain(base, new Set(resolving).add(configPath), tsconfigs),
   )
 
-  return [...bases.flat(), { file: configPath, dir, raw }]
-})
-
-const fileKind = Effect.fn(function* (target: string) {
-  const fs = yield* FileSystem.FileSystem
-
-  return yield* fs.stat(target).pipe(
-    Effect.map((info) => info.type),
-    Effect.orElseSucceed(() => undefined),
-  )
+  return [...chains.flat(), { file: configPath, dir: path.dirname(configPath), raw }]
 })
 
 const firstFile = (candidates: ReadonlyArray<string>) =>

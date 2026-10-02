@@ -16,7 +16,7 @@ import { CheckFailed, platformMessage, userError } from '../errors'
 import { checkableFiles, listProjectFiles, resolvePaths } from '../files'
 import type { GitFailed } from '../git'
 import { bold, dim, green, listFiles, red } from '../style'
-import { captureLines, execute } from '../tool'
+import { captureLines, execute, logLines } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 
 const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
@@ -77,19 +77,18 @@ export interface RunSettings extends CheckSelection {
   readonly cwd: string
   readonly fix: boolean
   readonly allowUnmatched?: boolean
-  /** The paths are file names from git: never patterns, and a run where none has anything to check passes. */
+  /**
+   * The paths are file names from git, a change the hooks fix: never patterns, a run where none has
+   * anything to check passes, and only the fixes that stay within them apply.
+   */
   readonly literal?: boolean
-  /** Only the fixes that stay within the given files apply. */
-  readonly fixesWithinFiles?: boolean
-  /** Paths the change deletes. Only for `literal` runs: without paths, any other run checks everything. */
+  /** Only for `literal` runs: without paths, any other run checks everything. */
   readonly deleted?: ReadonlyArray<string>
-  /** Runs once the checks that can fix files are done, before the others start. */
   readonly afterFixes?: Effect.Effect<
     void,
     GitFailed | PlatformError.PlatformError,
     ChildProcessSpawner.ChildProcessSpawner
   >
-  /** Takes the closing summary instead of printing it, for a caller that prints it last. */
   readonly holdSummary?: (lines: ReadonlyArray<string>) => Effect.Effect<void>
 }
 
@@ -165,12 +164,10 @@ export const checkPaths = Effect.fn(function* (
     literal = false,
     deleted = [],
   } = settings
-  const appliesFixes = (fixes: Check['fixes']) =>
-    settings.fixesWithinFiles === true ? fixes === 'files' : fixes !== false
+  const appliesFixes = (fixes: Check['fixes']) => (literal ? fixes === 'files' : fixes !== false)
   const { cwd } = settings
   const summarize = (lines: ReadonlyArray<string>) =>
-    settings.holdSummary?.(lines) ??
-    Effect.forEach(lines, (line) => Console.log(line), { discard: true })
+    settings.holdSummary?.(lines) ?? logLines(lines)
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
@@ -207,11 +204,18 @@ export const checkPaths = Effect.fn(function* (
       }
 
       return plan({ cwd, fix: fix && appliesFixes(fixes), files, deleted, projectFiles }).pipe(
-        Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
-        Effect.catchTag('NothingToCheck', ({ reason, unrelated, evenIfRequired }) =>
+        // A plan without commands, as oxlint and oxfmt make for a change that only deletes files,
+        // would pass without running anything. It stays skipped when required, or
+        // `--require=oxlint` would block every such commit.
+        Effect.map((commands): CheckPlan =>
+          commands.length === 0
+            ? { name, status: 'skipped', reason: 'only deleted files', unrelated: true }
+            : { name, status: 'run', commands },
+        ),
+        Effect.catchTag('NothingToCheck', ({ reason, unrelated }) =>
           Effect.succeed<CheckPlan>({
             name,
-            status: required.includes(name) && evenIfRequired !== true ? 'failed' : 'skipped',
+            status: required.includes(name) ? 'failed' : 'skipped',
             reason,
             unrelated,
           }),
@@ -326,7 +330,7 @@ const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, 
   for (const fiber of fibers) {
     const [exitCode, lines] = yield* Fiber.join(fiber)
 
-    yield* Effect.forEach(lines, (line) => Console.log(line), { discard: true })
+    yield* logLines(lines)
     exitCodes.push(exitCode)
   }
 

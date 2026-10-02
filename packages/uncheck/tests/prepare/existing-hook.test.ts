@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { readFileSync, writeFileSync } from 'node:fs'
 
+import type { Project } from '../utils/project'
 import { LAYOUTS, monorepo } from '../utils/project'
 import {
   COMMAND,
@@ -10,12 +11,18 @@ import {
   HUSKY_4_RUNNER,
   notWritten,
   prepare,
+  previousHookLine,
+  runsIn,
   shownHook,
   syntaxCheck,
   written,
 } from './utils'
 
 const HOOK = '.git/hooks/pre-commit'
+
+function expectHookParses(project: Project): void {
+  expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+}
 
 const EXITING_HOOKS = [
   {
@@ -81,6 +88,12 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
     return { ...run, project, hook: project.read(HOOK) }
   }
 
+  async function expectUnchangedWhenPreparedAgain(project: Project): Promise<void> {
+    const again = await prepare(project, [], { cwd: app })
+
+    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+  }
+
   it('rewrites the line an older version wrote in place', async () => {
     const old =
       app === '' ? 'npx uncheck staged --fix' : `cd "${folder}" && yarn uncheck staged --fix`
@@ -99,9 +112,7 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
       expect(stdout).toBe(written(shownHook(project, app), 'updated'))
       expect(hook).toBe(`${setup}${line}\n${commands}`)
 
-      const again = await prepare(project, [], { cwd: app })
-
-      expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+      await expectUnchangedWhenPreparedAgain(project)
     },
   )
 
@@ -114,21 +125,21 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
   })
 
   it('keeps its line in each branch of an if, indented, so the hook still parses', async () => {
-    const runs = (command: string) => (app === '' ? command : `(cd "${folder}" && ${command})`)
     const branches = (first: string, second: string) =>
       `#!/bin/sh\nif [ -n "$CI" ]; then\n  ${first}\nelse\n  ${second}\nfi\n`
 
     const { stdout, hook, project } = await prepareHook(
-      branches(runs('pnpm exec uncheck staged --only=oxlint'), runs('pnpm exec uncheck staged')),
+      branches(
+        runsIn(app, 'pnpm exec uncheck staged --only=oxlint'),
+        runsIn(app, 'pnpm exec uncheck staged'),
+      ),
     )
 
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(branches(line, line))
-    expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+    expectHookParses(project)
 
-    const again = await prepare(project, [], { cwd: app })
-
-    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    await expectUnchangedWhenPreparedAgain(project)
   })
 
   it.each([
@@ -144,11 +155,9 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
 
       expect(stdout).toBe(written(shownHook(project, app), 'updated'))
       expect(hook).toBe(existing(line))
-      expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+      expectHookParses(project)
 
-      const again = await prepare(project, [], { cwd: app })
-
-      expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+      await expectUnchangedWhenPreparedAgain(project)
     },
   )
 
@@ -161,24 +170,21 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
     const { hook, project } = await prepareHook(existing(lineOfV003))
 
     expect(hook).toBe(existing(line))
-    expect(syntaxCheck(project.path(HOOK))).toEqual({ status: 0, stderr: '' })
+    expectHookParses(project)
   })
 
   it('keeps its line after a block that runs it too', async () => {
-    const runs = (command: string) => (app === '' ? command : `(cd "${folder}" && ${command})`)
     const existing = (inBlock: string, after: string) =>
       `#!/bin/sh\nif [ -n "$CI" ]; then\n  ${inBlock}\nfi\n${after}\n`
 
     const { stdout, hook, project } = await prepareHook(
-      existing(runs('pnpm exec uncheck staged --only=oxlint'), `${runs(COMMAND)} || exit 1`),
+      existing(runsIn(app, 'pnpm exec uncheck staged --only=oxlint'), previousHookLine(app)),
     )
 
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(existing(line, line))
 
-    const again = await prepare(project, [], { cwd: app })
-
-    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    await expectUnchangedWhenPreparedAgain(project)
   })
 
   it('drops the copies of its line and settles on one', async () => {
@@ -195,9 +201,7 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(`${HEADER}${line}\npnpm test\npnpm test\n`)
 
-    const again = await prepare(project, [], { cwd: app })
-
-    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    await expectUnchangedWhenPreparedAgain(project)
   })
 
   it('leaves alone the lines that only mention the command or run it another way', async () => {
@@ -274,18 +278,14 @@ describe.each(LAYOUTS)('prepare with an existing hook in a $name', ({ create, ap
   })
 
   it('moves the line an older version wrote after the runner of husky 4 before it', async () => {
-    const old = app === '' ? line : `(cd "${folder}" && ${COMMAND}) || exit 1`
-
     const { stdout, hook, project } = await prepareHook(
-      `${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n${old}\n`,
+      `${HUSKY_4_BANNER}${HUSKY_4_RUNNER}\n${previousHookLine(app)}\n`,
     )
 
     expect(stdout).toBe(written(shownHook(project, app), 'updated'))
     expect(hook).toBe(`${HUSKY_4_BANNER}${line}\n${HUSKY_4_RUNNER}\n`)
 
-    const again = await prepare(project, [], { cwd: app })
-
-    expect(again.stdout).toBe(written(shownHook(project, app), 'unchanged'))
+    await expectUnchangedWhenPreparedAgain(project)
   })
 
   it('keeps its line after a block that only runs the husky 4 runner when it exists', async () => {
@@ -416,8 +416,8 @@ describe('prepare with an existing hook in a monorepo', () => {
     const project = monorepo().write({
       [HOOK]: [
         '#!/bin/sh',
-        '(cd "packages/core" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1',
-        '(cd "packages/app" && pnpm exec uncheck staged --fix) || exit 1',
+        previousHookLine('packages/core/', `${COMMAND} --only=oxlint`),
+        previousHookLine('packages/app/'),
         'pnpm test',
         '',
       ].join('\n'),

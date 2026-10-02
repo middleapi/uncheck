@@ -99,6 +99,10 @@ export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckComm
   return yield* handle.exitCode
 }, Effect.scoped)
 
+export function logLines(lines: ReadonlyArray<string>): Effect.Effect<void> {
+  return Effect.forEach(lines, (line) => Console.log(line), { discard: true })
+}
+
 export function captureLines<A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<readonly [A, ReadonlyArray<string>], E, R> {

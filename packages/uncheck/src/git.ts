@@ -95,6 +95,8 @@ export function rawDiff(cwd: string, ...args: ReadonlyArray<string>) {
       '--relative',
       '-z',
       ...args,
+      // Without it, a file named like a revision, such as HEAD, makes git fail as ambiguous.
+      '--',
     ]),
     (output) => {
       const fields = output.split('\0')

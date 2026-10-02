@@ -3,6 +3,7 @@ import { lstatSync, readdirSync } from 'node:fs'
 import { cliError, LAYOUTS, PERMISSIONS_ENFORCED, report, run, wrappedGit } from '../utils/project'
 import {
   conflictError,
+  expectFixesStaged,
   folderOf,
   inIndex,
   LEFTOVER_ERROR,
@@ -118,10 +119,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
 
     expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
     expect(exitCode).toBe(1)
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/extra.ts src/far.ts src/other.ts',
-      '✔ all checks passed (oxfmt)',
-    ])
+    expectFixesStaged(stdout, 'src/extra.ts src/far.ts src/other.ts', 'oxfmt')
     expect(inIndex(project, file)).toBe('export const   extra = 42\n')
     expect(inIndex(project, `${app}src/far.ts`)).toBe(stagedFar)
     expect(inIndex(project, `${app}src/other.ts`)).toBe('export const   other = 2\n')
@@ -155,10 +153,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
 
     expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
     expect(exitCode).toBe(1)
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/extra.ts src/other.ts src/plain.ts',
-      '✔ all checks passed (oxfmt, tsc)',
-    ])
+    expectFixesStaged(stdout, 'src/extra.ts src/other.ts src/plain.ts', 'oxfmt, tsc')
     expect(inIndex(project, other)).toBe('export const   other = 2\n')
     expect(project.read(other)).toBe(`${SAVED_LINE}export const other = 2;\n`)
     expect(inIndex(project, plain)).toBe('export const   plain = 3\n')
@@ -185,10 +180,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
 
     expect(stderr).toBe(cliError(conflictError('src/conflicting.ts')))
     expect(exitCode).toBe(1)
-    expect(report(stdout).slice(-2)).toEqual([
-      '✔ staged the fixes to src/conflicting.ts src/extra.ts',
-      '✔ all checks passed (oxfmt, tsc)',
-    ])
+    expectFixesStaged(stdout, 'src/conflicting.ts src/extra.ts', 'oxfmt, tsc')
     expect(project.read(file)).toBe(SAVED_LINE + VERSIONS.merged)
     expect(inIndex(project, file)).toBe(VERSIONS.staged)
     expect(project.read(conflicting)).toBe('export const   c = 43\n')

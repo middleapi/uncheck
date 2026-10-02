@@ -2,16 +2,13 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import process from 'node:process'
 
-import { CLI, environment } from '../utils/project'
-import type { Env, Files, Project, Run } from '../utils/project'
+import { CLI, environment, report } from '../utils/project'
+import type { Env, Project, Run } from '../utils/project'
 
 /** The folder of a layout's package, relative to the top of the repository. */
 export function folderOf(app: string): string {
   return app.replace(/\/$/, '') || '.'
 }
-
-export const UTILS_NOT_FOUND =
-  "src/index.ts(1,24): error TS2307: Cannot find module './utils' or its corresponding type declarations."
 
 export const LEFTOVER_ERROR =
   'An earlier run left the unstaged versions of your files in <project>/.git/uncheck-unstaged, at their paths from the top of the repository. Unless another commit is running, copy back what your files are missing, delete the folder, then commit again.'
@@ -54,10 +51,14 @@ export function stagePartially(project: Project, file: string): Project {
   return project.stage({ [file]: VERSIONS.staged }).write({ [file]: VERSIONS.unstaged })
 }
 
-/** What `saveWhileTscRuns` adds to a file. */
+export function expectRestored(project: Project, file: string): void {
+  expect(project.read(file)).toBe(VERSIONS.unstaged)
+  expect(inIndex(project, file)).toBe(VERSIONS.staged)
+  expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+}
+
 export const SAVED_LINE = '// saved while tsc ran\n'
 
-/** Fakes a tsc that adds `SAVED_LINE` to the top of `files`, or to their end, as an editor would. */
 export function saveWhileTscRuns(
   project: Project,
   files: ReadonlyArray<string>,
@@ -73,17 +74,15 @@ export function saveWhileTscRuns(
   )
 }
 
-/** Commits `files` on a new `side` branch, then goes back to `main`. */
-export function commitOnSide(project: Project, files: Files): Project {
-  project.git('checkout', '--quiet', '-b', 'side')
-  project.write(files).commit('side')
-  project.git('checkout', '--quiet', 'main')
-
-  return project
-}
-
 export function inIndex(project: Project, file: string): string {
   return project.git('show', `:${file}`)
+}
+
+export function expectFixesStaged(output: string, files: string, checks: string): void {
+  expect(report(output).slice(-2)).toEqual([
+    `✔ staged the fixes to ${files}`,
+    `✔ all checks passed (${checks})`,
+  ])
 }
 
 export interface Started {
