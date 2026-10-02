@@ -7,6 +7,7 @@ import { CannotCheck, NothingToCheck } from '../errors'
 import {
   ancestors,
   fileKind,
+  firstFile,
   isOutside,
   listProjectFiles,
   readJson,
@@ -812,11 +813,6 @@ const loadExtendsChain = Effect.fn(function* (
 
   return [...chains.flat(), { file: configPath, dir: path.dirname(configPath), raw }]
 })
-
-const firstFile = (candidates: ReadonlyArray<string>) =>
-  Effect.findFirst(candidates, (candidate) =>
-    Effect.map(fileKind(candidate), (type) => type === 'File'),
-  )
 
 const resolveExtends = Effect.fn(function* (spec: string, dir: string) {
   const path = yield* Path.Path

@@ -7,6 +7,7 @@ import { CliConfig, CliError, CliOutput, Command, GlobalFlag } from 'effect/unst
 
 import pkg from '../package.json'
 import { hooks } from './commands/hooks'
+import { init } from './commands/init'
 import { prepare } from './commands/prepare'
 import { staged } from './commands/staged'
 import { uncheck } from './commands/uncheck'
@@ -21,7 +22,7 @@ for (const stream of [process.stdout, process.stderr]) {
 // (the shell forwards it, then the kernel), so `once` is not enough.
 process.on('SIGHUP', () => process.kill(process.pid, 'SIGTERM'))
 
-Command.run(uncheck.pipe(Command.withSubcommands([staged, prepare, hooks])), {
+Command.run(uncheck.pipe(Command.withSubcommands([init, staged, prepare, hooks])), {
   version: pkg.version,
 }).pipe(
   Effect.catchTag('CheckFailed', () =>

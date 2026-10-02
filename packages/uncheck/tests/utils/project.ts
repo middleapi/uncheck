@@ -38,12 +38,16 @@ export interface RunOptions {
   readonly env?: Env
 }
 
+export interface Answer {
+  /** Typed one at a time once the output shows `waitFor`. */
+  readonly keys: ReadonlyArray<string>
+  readonly waitFor: string
+}
+
 export interface TerminalOptions {
   readonly cwd?: string
   readonly env?: Env
-  /** Typed one at a time once the output shows `waitFor`. */
-  readonly keys?: ReadonlyArray<string>
-  readonly waitFor?: string
+  readonly answers?: ReadonlyArray<Answer>
 }
 
 export interface Run {
@@ -98,7 +102,7 @@ for (let dir = realpathSync(tmpdir()); ; dir = dirname(dir)) {
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'uncheck-e2e-')))
 const GIT_CONFIG = join(ROOT, 'gitconfig')
 const SHIMS = join(ROOT, 'bin')
-const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+export const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
 
 writeFileSync(GIT_CONFIG, '')
 mkdirSync(SHIMS)
@@ -251,10 +255,18 @@ function shellQuote(arg: string): string {
   return `'${arg.replaceAll("'", `'\\''`)}'`
 }
 
+export const DOWN = '\u001B[B'
+export const SPACE = ' '
+export const ENTER = '\r'
+
+export function fromAnswer(output: string, question: string): string {
+  return output.slice(output.lastIndexOf(`✔ ${question}`))
+}
+
 /** Runs `command` in a pseudo-terminal, which merges stdout and stderr into `stdout`. */
 export function runInTerminal(
   command: ReadonlyArray<string>,
-  { cwd, env, keys = [], waitFor }: Omit<TerminalOptions, 'cwd'> & { readonly cwd: string },
+  { cwd, env, answers = [] }: Omit<TerminalOptions, 'cwd'> & { readonly cwd: string },
 ): Promise<Run> {
   // Without exec, the shell that script starts also gets Ctrl-C and exits 130 whatever the command does.
   const args =
@@ -265,15 +277,29 @@ export function runInTerminal(
   return new Promise((resolve, reject) => {
     const child = spawn('script', args, { cwd: inside(cwd), env: environment(env) })
     let stdout = ''
-    let typing = false
+    let answered = 0
+    let shownFrom = 0
 
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       stdout += chunk
 
-      if (!typing && waitFor !== undefined && stripVTControlCharacters(stdout).includes(waitFor)) {
-        typing = true
-        keys.forEach((key, index) => setTimeout(() => child.stdin.write(key), 100 * (index + 1)))
+      const answer = answers[answered]
+
+      if (answer === undefined) {
+        return
       }
+
+      const shown = stripVTControlCharacters(stdout).indexOf(answer.waitFor, shownFrom)
+
+      if (shown === -1) {
+        return
+      }
+
+      answered += 1
+      shownFrom = shown + answer.waitFor.length
+      answer.keys.forEach((key, index) =>
+        setTimeout(() => child.stdin.write(key), 100 * (index + 1)),
+      )
     })
     child.on('error', reject)
     child.on('close', (exitCode, signal) =>

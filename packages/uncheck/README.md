@@ -24,7 +24,7 @@
 `uncheck` lints, format checks and type checks your project with one command, and keeps a monorepo consistent. It runs the tools your project already has, so you, your git hooks and your coding agents all run the same check.
 
 ```sh
-npm i -D uncheck oxlint oxfmt typescript   # add sherif in a monorepo
+npx uncheck init                   # install the tools, add the scripts and hooks
 
 npx uncheck                        # check everything
 npx uncheck --fix                  # fix what can be fixed, report the rest
@@ -32,7 +32,7 @@ npx uncheck prepare --pre-commit   # check every commit
 npx uncheck hooks install claude   # check every agent turn
 ```
 
-uncheck needs Node 22.20 or later. Install only the tools you want: a check runs when its tool is installed and is skipped otherwise, except that a `tsconfig.json` without TypeScript installed fails. uncheck always uses the versions you installed.
+uncheck needs Node 22.20 or later. Install only the tools you want, with [`init`](#set-up-a-project) or by hand (`npm i -D uncheck oxlint oxfmt typescript`, plus sherif in a monorepo): a check runs when its tool is installed and is skipped otherwise, except that a `tsconfig.json` without TypeScript installed fails. uncheck always uses the versions you installed.
 
 | Check    | Checks               | Runs when                                                                                          |
 | -------- | -------------------- | -------------------------------------------------------------------------------------------------- |
@@ -40,6 +40,25 @@ uncheck needs Node 22.20 or later. Install only the tools you want: a check runs
 | `oxlint` | lint rules           | [oxlint](https://oxc.rs) 1.60+ is installed                                                        |
 | `oxfmt`  | formatting           | [oxfmt](https://oxc.rs) is installed                                                               |
 | `tsc`    | types                | the project has a `tsconfig.json`                                                                  |
+
+## Set up a project
+
+```sh
+npx uncheck init   # or pnpm dlx, yarn dlx, bunx
+```
+
+`init` sets up the folder it runs in, a new project or an existing one, and installs with the package manager the project uses: the one its `packageManager` field or lockfile names, or else the one that started `init`. It asks:
+
+1. **Which tools to install:** oxlint and oxfmt, plus sherif at a [workspace root](#monorepos). uncheck itself is always installed.
+2. **Which tools get a preset config:** oxlint and oxfmt can start from the [presets](#presets) when they have no config yet.
+3. **Whether to check every commit:** it adds the [`prepare` script](#run-it-before-every-commit) (`postinstall` with Yarn 2+) and writes the hook.
+4. **Which agents run uncheck** [after every turn](#run-it-after-every-agent-turn).
+
+It also adds a `check` script (`uncheck`) and a `fix` script (`uncheck --fix`), unless the project has scripts with those names. Running `init` again only sets up what is missing. A `prepare` script that already runs `uncheck prepare` keeps its hook, and agents that already run uncheck keep their flags: change those in the `prepare` script or with `uncheck hooks install`.
+
+`npx uncheck init --yes` takes the default answers, which it needs without a terminal. It installs the missing tools, checks every commit, and sets up the agents whose folders the project has, such as `.claude`, that do not run uncheck yet. It writes no preset config.
+
+In a monorepo, run `init` at the workspace root to set up every package at once. TypeScript is left to you: tsc runs once the project has a `tsconfig.json` and TypeScript is installed.
 
 ## Check your project
 

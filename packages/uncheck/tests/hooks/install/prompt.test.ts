@@ -1,15 +1,8 @@
-import { LAYOUTS, cliError, monorepo } from '../../utils/project'
+import { DOWN, ENTER, LAYOUTS, SPACE, cliError, fromAnswer, monorepo } from '../../utils/project'
 import { asWritten, claudeSettings, cursorHooks, hookCommand, installOutput } from './utils'
 
 const QUESTION = 'Which agents should run uncheck when they finish a turn?'
 const CHOICES = `? ${QUESTION} › \n  Select All\n  Inverse Selection\n  ☐ Claude Code \n  ☐ CodeBuddy \n  ☐ Cursor \n  ☐ GitHub Copilot `
-const DOWN = '\u001B[B'
-const SPACE = ' '
-const ENTER = '\r'
-
-function fromAnswer(output: string): string {
-  return output.slice(output.lastIndexOf(`✔ ${QUESTION}`))
-}
 
 describe.each(LAYOUTS)('hooks install without agents in a $name', ({ create, app }) => {
   it('writes the agents chosen in a terminal', async () => {
@@ -18,13 +11,12 @@ describe.each(LAYOUTS)('hooks install without agents in a $name', ({ create, app
 
     const { exitCode, stdout } = await project.uncheckInTerminal(['hooks', 'install'], {
       cwd: app,
-      waitFor: QUESTION,
-      keys: [DOWN, DOWN, SPACE, DOWN, DOWN, SPACE, ENTER],
+      answers: [{ waitFor: QUESTION, keys: [DOWN, DOWN, SPACE, DOWN, DOWN, SPACE, ENTER] }],
     })
 
     expect(exitCode).toBe(0)
     expect(stdout.slice(0, CHOICES.length)).toBe(CHOICES)
-    expect(fromAnswer(stdout)).toBe(
+    expect(fromAnswer(stdout, QUESTION)).toBe(
       `✔ ${QUESTION} …  Claude Code, Cursor\n${installOutput(
         ['Claude Code .claude/settings.json created', 'Cursor .cursor/hooks.json created'],
         command,
@@ -57,12 +49,11 @@ describe('hooks install without agents in a monorepo package', () => {
 
     const { exitCode, stdout } = await project.uncheckInTerminal(['hooks', 'install'], {
       cwd: 'packages/app',
-      waitFor: QUESTION,
-      keys: [SPACE, ENTER],
+      answers: [{ waitFor: QUESTION, keys: [SPACE, ENTER] }],
     })
 
     expect(exitCode).toBe(1)
-    expect(fromAnswer(stdout)).toBe(
+    expect(fromAnswer(stdout, QUESTION)).toBe(
       `✔ ${QUESTION} …  Claude Code, CodeBuddy, Cursor, GitHub Copilot\n${cliError(
         'Copilot reads .github/hooks only at the top of the repository, not in packages/app: install copilot from there',
       )}`,

@@ -8,6 +8,7 @@ import { readTextIfExists } from '../files'
 import { git, gitLocation, refusesRepository } from '../git'
 import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
+import type { CheckSelection } from './uncheck'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
 
 const HOOK_COMMAND = 'uncheck staged'
@@ -203,6 +204,156 @@ function locked<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
   })
 }
 
+interface PreCommitOptions extends CheckSelection {
+  readonly fix: boolean
+  readonly allowEmpty: boolean
+}
+
+export const writePreCommitHook = Effect.fn(function* (
+  cwd: string,
+  { fix, allowEmpty, ...selection }: PreCommitOptions,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+
+  const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.result)
+
+  if (Result.isFailure(repository)) {
+    const { failure } = repository
+
+    if (failure._tag === 'GitFailed' && refusesRepository(failure)) {
+      const reason = failure.stderr.split('\n')[0]!.replace(/^fatal: /, '')
+
+      return yield* Console.log(
+        `${red('✘')} ${bold('pre-commit')} ${dim(`not written, git refuses the repository: ${reason}`)}`,
+      )
+    }
+
+    // A `prepare` script runs on every install, including where there is no repository to hook.
+    return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
+  }
+
+  const {
+    prefix,
+    paths: [hooks],
+  } = repository.success
+  const inside = prefix.replace(/\/$/, '')
+  const exec = yield* detectExec(cwd)
+  const command = [
+    exec,
+    HOOK_COMMAND,
+    ...(fix ? ['--fix'] : []),
+    ...(allowEmpty ? ['--allow-empty'] : []),
+    ...selectionArgs(selection),
+  ].join(' ')
+  const line = hookLine(inside, command)
+
+  // husky 9 and Vite+ point core.hooksPath at a `_` folder of generated shims that source the `h`
+  // dispatcher, which exits before any line appended to a shim and runs the hook in the folder above.
+  const configured = path.resolve(cwd, hooks!)
+  const dispatched =
+    path.basename(configured) === '_' &&
+    (yield* fs.exists(path.join(configured, 'h')).pipe(Effect.orElseSucceed(() => false)))
+  const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
+  const relative = path.relative(cwd, file)
+  const shown = relative.startsWith('..') ? file : relative
+  // A scope option turns includes off, and an included file can set a global core.hooksPath.
+  const hooksPath = (option: string) =>
+    git(cwd, ['config', option, '--includes', '--get', 'core.hooksPath'])
+  const shared = yield* hooksPath('--show-scope').pipe(
+    Effect.map((scoped) => /^(global|system)\t/.exec(scoped)?.[1]),
+    // Git before 2.26 has no --show-scope, which must not pass for an unset core.hooksPath.
+    Effect.catchIf(
+      (error) => error._tag === 'GitFailed' && error.exitCode === 129,
+      () =>
+        Effect.findFirst(['local', 'global', 'system'], (scope) =>
+          hooksPath(`--${scope}`).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          ),
+        ).pipe(Effect.map(Option.getOrUndefined)),
+    ),
+    Effect.map((scope) => (scope === 'local' ? undefined : scope)),
+    Effect.orElseSucceed(() => undefined),
+  )
+
+  const written = yield* Effect.gen(function* () {
+    if (shared !== undefined) {
+      return yield* Effect.fail(
+        `core.hooksPath is set in the ${shared} git config, so every repository runs it`,
+      )
+    }
+
+    if (UNQUOTABLE.test(inside)) {
+      return yield* Effect.fail(
+        `sh would misread the folder name ${JSON.stringify(inside)} between double quotes`,
+      )
+    }
+
+    // Renaming over a symlinked hook would replace the link, not the script it points to.
+    const target = yield* fs.realPath(file).pipe(
+      Effect.catch(() => fs.readLink(file)),
+      Effect.map((link) => path.resolve(path.dirname(file), link)),
+      Effect.orElseSucceed(() => file),
+    )
+
+    yield* fs.makeDirectory(path.dirname(target), { recursive: true })
+
+    return yield* locked(
+      target,
+      Effect.gen(function* () {
+        const existing = yield* readTextIfExists(target)
+
+        if (
+          existing !== undefined &&
+          (OTHER_INTERPRETER.test(existing) || NOT_TEXT.test(existing))
+        ) {
+          return yield* Effect.fail(`it is not a shell script, have it run \`${line}\` yourself`)
+        }
+
+        const next = rewrite(existing ?? HEADER, line, inside)
+        const result =
+          existing === undefined ? 'created' : next === existing ? 'unchanged' : 'updated'
+
+        // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would
+        // leave every clone with a change to commit.
+        if (result === 'unchanged') {
+          if (!dispatched) {
+            yield* fs.chmod(target, 0o755)
+          }
+
+          return result
+        }
+
+        const mode = dispatched
+          ? yield* fs.stat(target).pipe(
+              Effect.map((info) => info.mode & 0o7777),
+              Effect.orElseSucceed(() => undefined),
+            )
+          : 0o755
+
+        yield* replaceFile(target, next, mode)
+
+        return result
+      }),
+    )
+  }).pipe(
+    Effect.mapError((error) => (typeof error === 'string' ? error : platformMessage(error))),
+    Effect.result,
+  )
+
+  // `prepare` runs on every install, so a hook it may not write says so rather than failing it.
+  if (Result.isFailure(written)) {
+    return yield* Console.log(
+      `${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${written.failure}`)}`,
+    )
+  }
+
+  yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${written.success}`)}`)
+
+  return command
+})
+
 export const prepare = Command.make(
   'prepare',
   {
@@ -227,11 +378,10 @@ export const prepare = Command.make(
     ),
     ...selectionFlags,
   },
-  Effect.fn(function* ({ cwd: directory, preCommit, fix, allowEmpty, ...selection }) {
-    const fs = yield* FileSystem.FileSystem
+  Effect.fn(function* ({ cwd: directory, preCommit, ...options }) {
     const path = yield* Path.Path
 
-    yield* validateSelection(selection)
+    yield* validateSelection(options)
 
     if (!preCommit) {
       return yield* userError(
@@ -239,146 +389,14 @@ export const prepare = Command.make(
       )
     }
 
-    const cwd = path.resolve(directory)
+    const command = yield* writePreCommitHook(path.resolve(directory), options)
 
-    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.result)
-
-    if (Result.isFailure(repository)) {
-      const { failure } = repository
-
-      if (failure._tag === 'GitFailed' && refusesRepository(failure)) {
-        const reason = failure.stderr.split('\n')[0]!.replace(/^fatal: /, '')
-
-        return yield* Console.log(
-          `${red('✘')} ${bold('pre-commit')} ${dim(`not written, git refuses the repository: ${reason}`)}`,
-        )
-      }
-
-      // A `prepare` script runs on every install, including where there is no repository to hook.
-      return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
-    }
-
-    const {
-      prefix,
-      paths: [hooks],
-    } = repository.success
-    const inside = prefix.replace(/\/$/, '')
-    const exec = yield* detectExec(cwd)
-    const command = [
-      exec,
-      HOOK_COMMAND,
-      ...(fix ? ['--fix'] : []),
-      ...(allowEmpty ? ['--allow-empty'] : []),
-      ...selectionArgs(selection),
-    ].join(' ')
-    const line = hookLine(inside, command)
-
-    // husky 9 and Vite+ point core.hooksPath at a `_` folder of generated shims that source the `h`
-    // dispatcher, which exits before any line appended to a shim and runs the hook in the folder above.
-    const configured = path.resolve(cwd, hooks!)
-    const dispatched =
-      path.basename(configured) === '_' &&
-      (yield* fs.exists(path.join(configured, 'h')).pipe(Effect.orElseSucceed(() => false)))
-    const file = path.join(dispatched ? path.dirname(configured) : configured, 'pre-commit')
-    const relative = path.relative(cwd, file)
-    const shown = relative.startsWith('..') ? file : relative
-    // A scope option turns includes off, and an included file can set a global core.hooksPath.
-    const hooksPath = (option: string) =>
-      git(cwd, ['config', option, '--includes', '--get', 'core.hooksPath'])
-    const shared = yield* hooksPath('--show-scope').pipe(
-      Effect.map((scoped) => /^(global|system)\t/.exec(scoped)?.[1]),
-      // Git before 2.26 has no --show-scope, which must not pass for an unset core.hooksPath.
-      Effect.catchIf(
-        (error) => error._tag === 'GitFailed' && error.exitCode === 129,
-        () =>
-          Effect.findFirst(['local', 'global', 'system'], (scope) =>
-            hooksPath(`--${scope}`).pipe(
-              Effect.as(true),
-              Effect.orElseSucceed(() => false),
-            ),
-          ).pipe(Effect.map(Option.getOrUndefined)),
-      ),
-      Effect.map((scope) => (scope === 'local' ? undefined : scope)),
-      Effect.orElseSucceed(() => undefined),
-    )
-
-    const written = yield* Effect.gen(function* () {
-      if (shared !== undefined) {
-        return yield* Effect.fail(
-          `core.hooksPath is set in the ${shared} git config, so every repository runs it`,
-        )
-      }
-
-      if (UNQUOTABLE.test(inside)) {
-        return yield* Effect.fail(
-          `sh would misread the folder name ${JSON.stringify(inside)} between double quotes`,
-        )
-      }
-
-      // Renaming over a symlinked hook would replace the link, not the script it points to.
-      const target = yield* fs.realPath(file).pipe(
-        Effect.catch(() => fs.readLink(file)),
-        Effect.map((link) => path.resolve(path.dirname(file), link)),
-        Effect.orElseSucceed(() => file),
-      )
-
-      yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-
-      return yield* locked(
-        target,
-        Effect.gen(function* () {
-          const existing = yield* readTextIfExists(target)
-
-          if (
-            existing !== undefined &&
-            (OTHER_INTERPRETER.test(existing) || NOT_TEXT.test(existing))
-          ) {
-            return yield* Effect.fail(`it is not a shell script, have it run \`${line}\` yourself`)
-          }
-
-          const next = rewrite(existing ?? HEADER, line, inside)
-          const result =
-            existing === undefined ? 'created' : next === existing ? 'unchanged' : 'updated'
-
-          // The dispatcher runs the hook with `sh`, and flipping the mode of a committed hook would
-          // leave every clone with a change to commit.
-          if (result === 'unchanged') {
-            if (!dispatched) {
-              yield* fs.chmod(target, 0o755)
-            }
-
-            return result
-          }
-
-          const mode = dispatched
-            ? yield* fs.stat(target).pipe(
-                Effect.map((info) => info.mode & 0o7777),
-                Effect.orElseSucceed(() => undefined),
-              )
-            : 0o755
-
-          yield* replaceFile(target, next, mode)
-
-          return result
-        }),
-      )
-    }).pipe(
-      Effect.mapError((error) => (typeof error === 'string' ? error : platformMessage(error))),
-      Effect.result,
-    )
-
-    // `prepare` runs on every install, so a hook it may not write says so rather than failing it.
-    if (Result.isFailure(written)) {
-      return yield* Console.log(
-        `${red('✘')} ${bold('pre-commit')} ${dim(`${shown} not written, ${written.failure}`)}`,
+    if (command !== undefined) {
+      yield* Console.log('')
+      yield* Console.log(
+        `${dim('The hook runs')} ${bold(command)} ${dim('before every commit, `git commit --no-verify` skips it.')}`,
       )
     }
-
-    yield* Console.log(`${green('✔')} ${bold('pre-commit')} ${dim(`${shown} ${written.success}`)}`)
-    yield* Console.log('')
-    yield* Console.log(
-      `${dim('The hook runs')} ${bold(command)} ${dim('before every commit, `git commit --no-verify` skips it.')}`,
-    )
   }),
 ).pipe(
   Command.withDescription(
