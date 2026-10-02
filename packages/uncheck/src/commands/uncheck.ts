@@ -15,7 +15,7 @@ import { tsc } from '../checks/tsc'
 import { CheckFailed, platformMessage, userError } from '../errors'
 import { checkableFiles, listProjectFiles, resolvePaths } from '../files'
 import type { GitFailed } from '../git'
-import { bold, dim, green, listFiles, red } from '../style'
+import { bold, dim, green, listed, listFiles, red } from '../style'
 import { captureLines, execute, logLines } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 
@@ -263,13 +263,13 @@ export const checkPaths = Effect.fn(function* (
           appliesFixes(CHECKS.find((check) => check.name === outcome.name)!.fixes),
       )
       .map((outcome) => outcome.name)
-      .join(', ')
-      .replace(/, ([^,]+)$/, ' and $1')
 
     yield* summarize([
       '',
       `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map((outcome) => outcome.name).join(', ')}`,
-      ...(!fix && fixable !== '' ? [dim(`  rerun with \`--fix\` to apply ${fixable} fixes`)] : []),
+      ...(!fix && fixable.length > 0
+        ? [dim(`  rerun with \`--fix\` to apply ${listed(fixable)} fixes`)]
+        : []),
     ])
 
     return yield* Effect.fail(new CheckFailed({ outcomes }))

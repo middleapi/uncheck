@@ -13,3 +13,7 @@ export const green = paint('green')
 export function listFiles(files: ReadonlyArray<string>): string {
   return files.length <= 3 ? files.join(' ') : `[${files.length} files]`
 }
+
+export function listed(names: ReadonlyArray<string>): string {
+  return names.join(', ').replace(/, ([^,]+)$/, ' and $1')
+}

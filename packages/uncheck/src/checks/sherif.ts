@@ -1,22 +1,18 @@
 import process from 'node:process'
 
-import { Effect, FileSystem, Path, Predicate } from 'effect'
+import { Effect, Path, Predicate } from 'effect'
 
 import { CannotCheck, NothingToCheck } from '../errors'
-import { readJson } from '../files'
+import { isWorkspaceRoot, readJson } from '../files'
 import { resolveBin } from '../tool'
 import type { Check } from '../types'
 
 const WORKSPACE_FILES = new Set(['package.json', 'pnpm-workspace.yaml'])
 
-// pnpm also keeps its settings in pnpm-workspace.yaml, and sherif fails on one without packages.
-const DECLARES_PACKAGES = /^["']?packages["']?\s*:/m
-
 export const sherif: Check = {
   name: 'sherif',
   fixes: 'workspace',
   plan: Effect.fn(function* ({ cwd, fix, files, deleted }) {
-    const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
     const bin = yield* resolveBin('sherif', cwd)
@@ -34,22 +30,13 @@ export const sherif: Check = {
       )
     }
 
-    const [manifest, pnpmWorkspace] = yield* Effect.all(
-      [
-        readJson(path.join(cwd, 'package.json')),
-        fs.readFileString(path.join(cwd, 'pnpm-workspace.yaml')).pipe(
-          Effect.map((text) => DECLARES_PACKAGES.test(text)),
-          Effect.orElseSucceed(() => false),
-        ),
-      ],
-      { concurrency: 'unbounded' },
-    )
+    const manifest = yield* readJson(path.join(cwd, 'package.json'))
 
     if (manifest === undefined) {
       return yield* Effect.fail(new NothingToCheck({ reason: 'no package.json found' }))
     }
 
-    if (manifest.workspaces === undefined && !pnpmWorkspace) {
+    if (!(yield* isWorkspaceRoot(cwd, manifest))) {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not a workspace root' }))
     }
 

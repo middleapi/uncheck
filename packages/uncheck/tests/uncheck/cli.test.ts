@@ -107,7 +107,7 @@ describe('uncheck command line', () => {
     const { exitCode, stdout, stderr } = await singleRepo().uncheck(['--completions', 'bash'])
 
     expect(stdout).toMatch(/^###-begin-uncheck-completions-###\n/)
-    expect(stdout).toContain("compgen -W 'staged prepare hooks'")
+    expect(stdout).toContain("compgen -W 'init staged prepare hooks'")
     expect(stdout).toMatch(/\ncomplete -F _uncheck uncheck\n###-end-uncheck-completions-###\n$/)
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)

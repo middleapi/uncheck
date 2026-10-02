@@ -9,6 +9,7 @@ import { readJson, readTextIfExists } from '../../files'
 import { gitLocation } from '../../git'
 import { detectExec, invokes } from '../../pm'
 import { bold, dim, green } from '../../style'
+import type { CheckSelection } from '../uncheck'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
 
 // Copilot (30 s) and CodeBuddy (60 s) kill a typecheck at their default timeout and end the turn as
@@ -23,7 +24,7 @@ const CLAUDE_FORMAT = {
   group: (entry: object) => ({ hooks: [entry] }),
 }
 
-const AGENTS = [
+export const AGENTS = [
   { id: 'claude', name: 'Claude Code', path: '.claude/settings.json', ...CLAUDE_FORMAT },
   { id: 'codebuddy', name: 'CodeBuddy', path: '.codebuddy/settings.json', ...CLAUDE_FORMAT },
   {
@@ -50,6 +51,165 @@ const AGENTS = [
 
 const AGENT_IDS = AGENTS.map((agent) => agent.id)
 
+type Agent = (typeof AGENTS)[number]
+
+export type AgentId = Agent['id']
+
+// Agents run the hook wherever they last `cd`'d, so a project below the top of the repository is
+// named relative to it.
+export function agentHookDir(cwd: string) {
+  return gitLocation(cwd).pipe(
+    Effect.map(({ prefix }) => prefix.replace(/\/$/, '')),
+    Effect.orElseSucceed(() => ''),
+  )
+}
+
+// A reinstall that cannot recognise the command would add a second hook next to it.
+export function validateAgentHookDir(dir: string) {
+  return invokes(`${HOOK_COMMAND} --dir=${dir}`, HOOK_COMMAND)
+    ? Effect.void
+    : userError(
+        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-`,
+      )
+}
+
+export const agentHookCommand = Effect.fn(function* (
+  cwd: string,
+  dir: string,
+  selection: CheckSelection,
+) {
+  const path = yield* Path.Path
+
+  yield* validateAgentHookDir(dir)
+
+  const manifest = yield* readJson(path.join(cwd, 'package.json'))
+  const declaresUncheck = [manifest?.dependencies, manifest?.devDependencies].some(
+    (dependencies) => Predicate.isObject(dependencies) && 'uncheck' in dependencies,
+  )
+  const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' || !declaresUncheck })
+  const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
+
+  return { dir, command: `${exec} ${HOOK_COMMAND} ${flags.join(' ')}` }
+})
+
+export function chooseAgents(
+  agents: ReadonlyArray<Agent>,
+  { preselected = [], min }: { readonly preselected?: ReadonlyArray<Agent>; readonly min?: number },
+) {
+  return Prompt.run(
+    Prompt.MultiSelect({
+      message: 'Which agents should run uncheck when they finish a turn?',
+      choices: agents.map((agent) => ({
+        title: agent.name,
+        value: agent.id,
+        selected: preselected.includes(agent),
+      })),
+      min,
+    }),
+  )
+}
+
+const parseConfig = (text: string, errors: ParseError[] = []): unknown =>
+  parseJsonc(text, errors, { allowTrailingComma: true })
+
+export const hasOwnHook = Effect.fn(function* (cwd: string, agent: Agent) {
+  const path = yield* Path.Path
+  const config = parseConfig((yield* readTextIfExists(path.join(cwd, agent.path))) ?? '')
+  const hooks = Predicate.isObject(config) && Predicate.isObject(config.hooks) ? config.hooks : {}
+  let found = false
+
+  mapOwnEntries(hooks[agent.event], (hook) => {
+    found = true
+    return hook
+  })
+
+  return found
+})
+
+export const writeAgentHooks = Effect.fn(function* (
+  cwd: string,
+  { dir, command }: { readonly dir: string; readonly command: string },
+  selected: ReadonlyArray<AgentId>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+
+  if (dir !== '' && selected.includes('copilot')) {
+    return yield* userError(
+      `Copilot reads .github/hooks only at the top of the repository, not in ${dir}: install copilot from there`,
+    )
+  }
+
+  const updates = yield* Effect.forEach(
+    AGENTS.filter((agent) => selected.includes(agent.id)),
+    (agent) =>
+      Effect.gen(function* () {
+        const file = path.join(cwd, agent.path)
+        const existing = yield* readTextIfExists(file)
+        const text = existing ?? ''
+        const errors: ParseError[] = []
+        const current = parseConfig(text, errors)
+
+        if (text.trim() !== '' && (errors.length > 0 || !Predicate.isObject(current))) {
+          const [error] = errors
+          const problem =
+            error === undefined
+              ? 'is not a JSON object'
+              : `has ${printParseErrorCode(error.error)} on line ${text.slice(0, error.offset).split('\n').length}`
+
+          return yield* userError(`${agent.path} ${problem}, fix it and run again`)
+        }
+
+        const base = Predicate.isObject(current) ? current : {}
+        const hooks = Predicate.isObject(base.hooks) ? base.hooks : {}
+        const entry = agent.entry(command)
+        const timeout = { [agent.timeout]: TIMEOUT_SECONDS }
+        const entries = hooks[agent.event]
+        const found: object[] = []
+        // Copilot takes `timeout` as another name for `timeoutSec`, so either is one the user chose.
+        const replaced = mapOwnEntries(entries, (hook) => {
+          found.push(hook)
+          return {
+            ...hook,
+            ...entry,
+            ...('timeout' in hook || 'timeoutSec' in hook ? {} : timeout),
+          }
+        })
+        const next = {
+          ...base,
+          ...(found.length > 0 ? {} : agent.root),
+          hooks: {
+            ...hooks,
+            [agent.event]:
+              found.length > 0
+                ? replaced
+                : [
+                    ...(Array.isArray(entries) ? entries : []),
+                    agent.group({ ...entry, ...timeout }),
+                  ],
+          },
+        }
+        const result =
+          existing === undefined
+            ? 'created'
+            : isDeepStrictEqual(next, base)
+              ? 'unchanged'
+              : 'updated'
+
+        return { agent, file, next, result }
+      }),
+  )
+
+  for (const { agent, file, next, result } of updates) {
+    if (result !== 'unchanged') {
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+      yield* fs.writeFileString(file, `${JSON.stringify(next, null, 2)}\n`)
+    }
+
+    yield* Console.log(`${green('✔')} ${bold(agent.name)} ${dim(`${agent.path} ${result}`)}`)
+  }
+})
+
 export const install = Command.make(
   'install',
   {
@@ -63,34 +223,13 @@ export const install = Command.make(
     ),
   },
   Effect.fn(function* ({ cwd, agents, ...selection }) {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
     const stdio = yield* Stdio.Stdio
 
     yield* validateSelection(selection)
 
-    // Agents run the hook wherever they last `cd`'d, so a project below the top of the repository
-    // is named relative to it.
-    const dir = yield* gitLocation(cwd).pipe(
-      Effect.map(({ prefix }) => prefix.replace(/\/$/, '')),
-      Effect.orElseSucceed(() => ''),
-    )
-    const manifest = yield* readJson(path.join(cwd, 'package.json'))
-    const declaresUncheck = [manifest?.dependencies, manifest?.devDependencies].some(
-      (dependencies) => Predicate.isObject(dependencies) && 'uncheck' in dependencies,
-    )
-    const exec = yield* detectExec(cwd, { fromAnyWorkspace: dir === '' || !declaresUncheck })
-    const flags = ['--fix', ...selectionArgs(selection), ...(dir === '' ? [] : [`--dir=${dir}`])]
-    const command = `${exec} ${HOOK_COMMAND} ${flags.join(' ')}`
+    const hook = yield* agentHookCommand(cwd, yield* agentHookDir(cwd), selection)
 
-    // A reinstall that cannot recognise the command would add a second hook next to it.
-    if (!invokes(command, HOOK_COMMAND)) {
-      return yield* userError(
-        `The hook command cannot name ${dir}: install from the top of the repository or from a directory whose path has only letters, digits and _=./@+-`,
-      )
-    }
-
-    let selected: ReadonlyArray<(typeof AGENT_IDS)[number]> = agents
+    let selected: ReadonlyArray<AgentId> = agents
 
     if (selected.length === 0) {
       if (!(yield* stdio.stdinIsTerminal)) {
@@ -99,93 +238,13 @@ export const install = Command.make(
         )
       }
 
-      selected = yield* Prompt.run(
-        Prompt.MultiSelect({
-          message: 'Which agents should run uncheck when they finish a turn?',
-          choices: AGENTS.map((agent) => ({ title: agent.name, value: agent.id })),
-          min: 1,
-        }),
-      )
+      selected = yield* chooseAgents(AGENTS, { min: 1 })
     }
 
-    if (dir !== '' && selected.includes('copilot')) {
-      return yield* userError(
-        `Copilot reads .github/hooks only at the top of the repository, not in ${dir}: install copilot from there`,
-      )
-    }
-
-    const updates = yield* Effect.forEach(
-      AGENTS.filter((agent) => selected.includes(agent.id)),
-      (agent) =>
-        Effect.gen(function* () {
-          const file = path.join(cwd, agent.path)
-          const existing = yield* readTextIfExists(file)
-          const text = existing ?? ''
-          const errors: ParseError[] = []
-          const current: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
-
-          if (text.trim() !== '' && (errors.length > 0 || !Predicate.isObject(current))) {
-            const [error] = errors
-            const problem =
-              error === undefined
-                ? 'is not a JSON object'
-                : `has ${printParseErrorCode(error.error)} on line ${text.slice(0, error.offset).split('\n').length}`
-
-            return yield* userError(`${agent.path} ${problem}, fix it and run again`)
-          }
-
-          const base = Predicate.isObject(current) ? current : {}
-          const hooks = Predicate.isObject(base.hooks) ? base.hooks : {}
-          const entry = agent.entry(command)
-          const timeout = { [agent.timeout]: TIMEOUT_SECONDS }
-          const entries = hooks[agent.event]
-          const found: object[] = []
-          // Copilot takes `timeout` as another name for `timeoutSec`, so either is one the user chose.
-          const replaced = mapOwnEntries(entries, (hook) => {
-            found.push(hook)
-            return {
-              ...hook,
-              ...entry,
-              ...('timeout' in hook || 'timeoutSec' in hook ? {} : timeout),
-            }
-          })
-          const next = {
-            ...base,
-            ...(found.length > 0 ? {} : agent.root),
-            hooks: {
-              ...hooks,
-              [agent.event]:
-                found.length > 0
-                  ? replaced
-                  : [
-                      ...(Array.isArray(entries) ? entries : []),
-                      agent.group({ ...entry, ...timeout }),
-                    ],
-            },
-          }
-          const result =
-            existing === undefined
-              ? 'created'
-              : isDeepStrictEqual(next, base)
-                ? 'unchanged'
-                : 'updated'
-
-          return { agent, file, next, result }
-        }),
-    )
-
-    for (const { agent, file, next, result } of updates) {
-      if (result !== 'unchanged') {
-        yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-        yield* fs.writeFileString(file, `${JSON.stringify(next, null, 2)}\n`)
-      }
-
-      yield* Console.log(`${green('✔')} ${bold(agent.name)} ${dim(`${agent.path} ${result}`)}`)
-    }
-
+    yield* writeAgentHooks(cwd, hook, selected)
     yield* Console.log('')
     yield* Console.log(
-      `${dim('The hook runs')} ${bold(command)} ${dim('whenever the agent finishes a turn.')}`,
+      `${dim('The hook runs')} ${bold(hook.command)} ${dim('whenever the agent finishes a turn.')}`,
     )
   }),
 ).pipe(

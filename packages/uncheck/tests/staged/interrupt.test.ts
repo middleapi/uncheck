@@ -56,8 +56,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
 
     const { exitCode } = await project.uncheckInTerminal(['staged', '--only=oxlint'], {
       cwd: folder,
-      waitFor: 'waiting',
-      keys: ['\u0003'],
+      answers: [{ waitFor: 'waiting', keys: ['\u0003'] }],
     })
 
     expect(exitCode).toBe(130)
@@ -75,7 +74,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
 
     const { exitCode, stdout } = await project.uncheckInTerminal(
       ['staged', '--fix', '--only=oxfmt'],
-      { cwd: folder, waitFor: 'waiting', keys: ['\u0003'] },
+      { cwd: folder, answers: [{ waitFor: 'waiting', keys: ['\u0003'] }] },
     )
 
     expect(exitCode).toBe(130)

@@ -272,6 +272,11 @@ export const fileKind = Effect.fn(function* (target: string) {
   )
 })
 
+export const firstFile = (candidates: ReadonlyArray<string>) =>
+  Effect.findFirst(candidates, (candidate) =>
+    Effect.map(fileKind(candidate), (type) => type === 'File'),
+  )
+
 export const readJson = Effect.fn(
   function* (file: string) {
     const fs = yield* FileSystem.FileSystem
@@ -282,6 +287,25 @@ export const readJson = Effect.fn(
   },
   Effect.orElseSucceed(() => undefined),
 )
+
+// pnpm also keeps its settings in pnpm-workspace.yaml, and sherif fails on one without packages.
+const DECLARES_PACKAGES = /^["']?packages["']?\s*:/m
+
+export const isWorkspaceRoot = Effect.fn(function* (
+  dir: string,
+  manifest: Readonly<Record<string, unknown>>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+
+  return (
+    manifest.workspaces !== undefined ||
+    (yield* fs.readFileString(path.join(dir, 'pnpm-workspace.yaml')).pipe(
+      Effect.map((text) => DECLARES_PACKAGES.test(text)),
+      Effect.orElseSucceed(() => false),
+    ))
+  )
+})
 
 /** The folders `tsc` itself never looks into. */
 const SKIPPED_DIRECTORIES = new Set(['node_modules', 'bower_components', 'jspm_packages'])
