@@ -168,7 +168,12 @@ describe('committing with the prepared hook of several packages in a monorepo', 
     expect(exitCode).toBe(0)
     expect(report(stderr)).toEqual([
       `uncheck staged in ${project.path('packages/app')}`,
-      '○ nothing to check, no staged files',
+      '○ sherif skipped, no package.json among the given files',
+      '○ oxlint skipped, only deleted files',
+      '○ oxfmt skipped, only deleted files',
+      TSC_WITH_REFERENCES,
+      '✔ tsc passed',
+      '✔ all checks passed (tsc)',
     ])
     expect(project.git('log', '--format=%s')).toBe('remove\ninit\n')
   })
@@ -228,7 +233,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
       '✘ oxlint failed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/ignore.ts',
       '✔ oxfmt passed',
-      '○ tsc skipped, no tsconfig.json found',
+      '○ tsc skipped, no tsconfig.json covers the given files',
       '✘ 1 of 2 checks failed: oxlint',
     ])
     expect(project.git('log', '--format=%s')).toBe('init\n')

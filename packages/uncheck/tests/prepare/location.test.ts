@@ -298,8 +298,8 @@ describe('prepare with --cwd naming a symlink to a package', () => {
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxlint)',
       '○ unstaged changes of src/extra.ts restored',
+      '✔ all checks passed (oxlint)',
     ])
     expect(project.read(file)).toBe('export const extra = 1;\nvar   unstaged = 1\n')
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)

@@ -146,7 +146,7 @@ describe.each(LAYOUTS)('uncheck selecting files by path in a $name', ({ create, 
     expect(fromLink.stderr).toBe('')
     expect(fromLink.exitCode).toBe(0)
     expect(selectedReport(fromLink.stdout)).toEqual([
-      `uncheck in ${linked}`,
+      `uncheck in ${project.dir}`,
       `▶ oxlint --no-error-on-unmatched-pattern ${routes}/home.ts`,
       '✔ oxlint passed',
       '✔ all checks passed (oxlint)',
