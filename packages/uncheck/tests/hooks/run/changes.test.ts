@@ -55,7 +55,7 @@ describe.each(LAYOUTS)(
       expect(project.read(`${app}dist/bundle.js`)).toBe('export var   bundle = 1\n')
     })
 
-    it('leaves installed packages that no ignore rule covers and links leaving the project alone', async () => {
+    it('leaves alone installed packages that no ignore rule covers, links into them and links leaving the project', async () => {
       const store = temporaryDirectory()
       writeFileSync(join(store, 'shared.ts'), UNFORMATTED)
       const dependency = `${app}lib/node_modules/dep/index.js`
@@ -65,6 +65,7 @@ describe.each(LAYOUTS)(
           [`${app}src/extra.ts`]: 'export const   extra = 1\n',
         })
         .link(`${app}src/shared.ts`, join(store, 'shared.ts'))
+        .link(`${app}src/vendor.js`, '../lib/node_modules/dep/index.js')
 
       const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
         args: ['--fix', '--only=oxlint', '--only=oxfmt'],

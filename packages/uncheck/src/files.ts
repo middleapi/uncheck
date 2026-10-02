@@ -192,7 +192,7 @@ export const checkableFiles = Effect.fn(function* (files: ReadonlyArray<string>,
 const GLOB_CHARACTERS = /[*?[\]{}()]/
 
 // git lists a linked folder as one file, and a fix through a link rewrites its target, so of the links
-// only those to a file inside `cwd` are kept.
+// only those to a file inside `cwd` and outside node_modules are kept.
 function checkableFile(path: Path.Path, cwd: string, realCwd: string): (file: string) => boolean {
   return (file) => {
     const absolute = path.resolve(cwd, file)
@@ -205,8 +205,13 @@ function checkableFile(path: Path.Path, cwd: string, realCwd: string): (file: st
       }
 
       const target = realpathSync(absolute)
+      const relativeTarget = slashedRelative(path, realCwd, target)
 
-      return statSync(target).isFile() && !isOutside(path, slashedRelative(path, realCwd, target))
+      return (
+        statSync(target).isFile() &&
+        !isOutside(path, relativeTarget) &&
+        !inNodeModules(relativeTarget)
+      )
     } catch {
       return false
     }
