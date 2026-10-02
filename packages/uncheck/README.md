@@ -47,9 +47,9 @@ uncheck needs Node 22.20 or later. Install only the tools you want: a check runs
 $ npx uncheck
 uncheck in /home/me/my-app
 ○ sherif skipped, not installed
-▶ oxlint
+▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern
 ✔ oxlint passed 67ms
-▶ oxfmt --check
+▶ oxfmt --check --no-error-on-unmatched-pattern
 Format issues found in above 2 files. Run without `--check` to fix.
 ✘ oxfmt failed 65ms
 ▶ tsc -p tsconfig.json --noEmit
@@ -83,9 +83,9 @@ npx uncheck src '!src/generated'      # a directory, minus a part of it
 npx uncheck '!**/*.gen.ts'            # everything except some files
 ```
 
-uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
+uncheck turns your paths into one file list that every tool gets, so they never disagree about what a path means. Directories and globs match the files git knows about (tracked, or new and not ignored), dot files included, but never links that point outside the directory uncheck runs in or into `node_modules`. Without paths, each tool finds the files itself, and oxlint checks and fixes those links too: pass `.` to leave them out. A path that exists is never read as a glob, so `'app/[id]/page.tsx'` and `'app/(marketing)/**'` just work. An exclusion glob also leaves out the folders it matches, as in `.gitignore`: `'!**/generated'`. A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
 
-tsc then checks only the projects that include one of the files, and sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among them.
+tsc then checks only the projects that include one of the files, and the projects that depend on those. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among the files.
 
 ## Run it before every commit
 
@@ -101,28 +101,32 @@ Add a `prepare` script, so every clone sets up the hook on install, and run it o
 
 Every commit then runs `uncheck staged --fix`: it checks the staged files, fixes what oxlint and oxfmt can, and stages those fixes. A failing check blocks the commit, and `git commit --no-verify` skips the hook. No lint-staged or simple-git-hooks needed.
 
-| `prepare` flag                  | Effect                                                                 |
+To change the hook, put flags in the `prepare` script and run it again, such as `"prepare": "uncheck prepare --pre-commit --only=oxlint --only=oxfmt"`. Every install runs the script, so a flag passed only by hand is undone by the next install.
+
+| Flag in the `prepare` script    | Effect                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------- |
 | `--no-fix`                      | The hook only checks and never changes your files                      |
 | `--allow-empty`                 | The hook lets a commit through when the fixes undo every staged change |
-| `--only`, `--skip`, `--require` | Written into the hook command                                          |
+| `--only`, `--skip`, `--require` | Pick the checks the hook runs                                          |
 
-Run `prepare` again with other flags to change the hook. What it guarantees:
+What the hook guarantees:
 
-- **You commit what was checked.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
+- **Each staged file is checked as you staged it.** After `git add -p`, the unstaged part of a file is set aside while the checks run and put back afterwards, even after Ctrl-C.
 - **Nothing is lost.** If a fix clashes with your unstaged changes, every fix is undone and the commit stops. Stage the whole file, or stash the rest, and commit again.
-- **Only fixes to staged files are staged.** During a merge, only files that differ from the branch being merged in are checked.
+- **Only fixes to staged files are staged.** The fixes are staged once oxlint and oxfmt finish, so an edit you save while tsc runs stays unstaged. During a merge, only files that differ from the branch being merged in are checked.
 - **No empty commits.** If the fixes undo every staged change, the commit fails, unless you pass `--allow-empty`.
 
 Good to know:
 
-- tsc checks whole projects, so it can report errors in files you did not stage. `--only=oxlint --only=oxfmt` keeps the hook inside the commit.
+- tsc checks whole projects as they are on disk, so it can report errors in files you did not stage, and pass thanks to a file you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook inside the commit.
+- A hook line checks the staged files in its folder and below, so a line at the root already covers every package. A package's own line adds its checks, with its flags, on top.
 - sherif only reports in the hook, since its fixes reach beyond the commit. Run `npx uncheck --fix` for them.
 - A commit no selected check covers, such as a README change with `--only=tsc`, passes. Add `--require=tsc` to make it fail.
 - An existing hook is kept: uncheck adds one line after its setup (comments, `source`, `export`, variables) and before its commands. With husky 9 or Vite+, it writes the `pre-commit` file they run.
-- uncheck writes nothing, and says why, outside a git repository, when `core.hooksPath` comes from your global or system git config, or when the existing hook is not a shell script. Your install keeps working.
+- uncheck writes nothing, and says why, outside a git repository, when git refuses the repository, when `core.hooksPath` comes from your global or system git config, or when the existing hook is not a shell script. Your install keeps working.
 - The hook runs uncheck through your package manager (`pnpm exec`, `yarn run --silent`, `bunx --no-install` or `npx --no`), so a missing install fails instead of downloading uncheck.
 - Yarn 2+ does not run `prepare`. Use `postinstall` instead, and in a package you publish, turn it off while packing, for example with `"prepack": "pinst --disable"` and `"postpack": "pinst --enable"`.
+- Installs that leave out devDependencies (`npm ci --omit=dev`, `NODE_ENV=production`, `bun install --production`, `yarn workspaces focus --production`) still run `prepare` or `postinstall`, but without uncheck. Append `|| exit 0` so they pass: `"prepare": "uncheck prepare --pre-commit || exit 0"`.
 
 ## Run it after every agent turn
 
@@ -138,33 +142,37 @@ npx uncheck hooks install                    # or pick them from a list
 | Cursor         | `cursor`    | `.cursor/hooks.json`         |
 | GitHub Copilot | `copilot`   | `.github/hooks/uncheck.json` |
 
-Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what it can, and when problems remain, sends the agent back to fix them. That happens at most once per turn, so an agent that cannot fix something is never stuck in a loop.
+Whenever the agent finishes a turn, the hook runs `uncheck hooks run --fix`. It checks the files changed since the last commit, fixes what oxlint and oxfmt can, and when problems remain, sends the agent back to fix them. It sends the agent back again only after the checks have passed in between, whatever other hooks do, so an agent that cannot fix something is never stuck in a loop.
 
+- **sherif only reports** here, since its fixes reach beyond the agent's change: they move versions in other packages and run your install. Run `npx uncheck --fix` for them.
 - **Too slow?** Leave the typecheck to CI: `npx uncheck hooks install claude --only=oxlint --only=oxfmt`. Install again to change the flags.
+- **Outside git** and before the first commit, the hook checks the whole folder, and oxlint also fixes the files that links in it point to. In a repository git refuses, such as one another user owns, the hook checks nothing and shows git's message.
+- **Installed from a package?** The hook finds uncheck only where your package manager can run it, so add uncheck to the workspace root too when the agent may work outside that package.
 - **Your config is kept.** Other hooks and settings stay, and installing again only updates uncheck's entry. Comments in the file are lost when it is rewritten.
 - **Avoid double runs.** Cursor and Copilot CLI also run the hooks in `.claude/settings.json`, so add `cursor` or `copilot` next to `claude` only where they do not read that file.
 - **Copilot** reads `.github/hooks` only at the top of the repository, so install `copilot` from there.
 
 ## Monorepos
 
-Run uncheck from the workspace root, the folder whose `package.json` has `workspaces` or that has a `pnpm-workspace.yaml`, to check the whole monorepo.
+Run uncheck from the workspace root, the folder whose `package.json` has `workspaces` or whose `pnpm-workspace.yaml` lists `packages`, to check the whole monorepo.
 
-**sherif** checks the workspace as a whole, so it only runs at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). With `--fix`, mismatched versions move to the highest one (unless you set `select`), and your install runs afterwards (unless you set `"noInstall": true`). When `CI` is set, sherif only reports.
+**sherif** checks the workspace as a whole, so it only runs at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). With `--fix`, mismatched versions move to the highest one (unless you set `select`), and your install runs afterwards (unless you set `"noInstall": true`). When `CI` is set, sherif only reports. Leave out `"fix": true`, since uncheck decides when sherif fixes: a run that only reports fails while it is set.
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`:
 
-- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations.
-- Every other project is checked with `tsc -p --noEmit`, a few at a time.
-- When only some files are checked, tsc runs just the projects that include them, and the projects that reference those. A changed tsconfig selects every project that extends it.
+- Projects linked by `references` are built with one `tsc -b`, which writes what your configs ask for, such as declarations. A project that sets none of `noEmit`, `emitDeclarationOnly`, `outDir` and `outFile` gets JavaScript next to its sources. When git ignores that JavaScript, the project builds in place on purpose and stays in `tsc -b`. Otherwise, as with Vite's `tsconfig.node.json`, it and the projects that reference it are checked with `tsc -p --noEmit` instead, after `tsc -b` builds the projects they reference. These cannot import each other: tsc reports TS6305.
+- Every other project is checked with `tsc -p --noEmit`, a few at a time. A `tsconfig.json` that other configs extend and that includes no files is a shared base, not a project.
+- When only some files are checked, tsc runs just the projects that include them, the projects that reference those, and the projects of the packages that depend on the files' packages. A changed tsconfig selects every project that extends it. In the hooks, a deleted or moved file also selects the projects that included or extended it.
+- In a folder without its own `tsconfig.json`, such as a package that shares the root one, uncheck also uses the nearest one above it in the same git repository, when it includes files of that folder.
 
-**Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags:
+**Hooks.** Each package that runs `uncheck prepare --pre-commit` gets its own line in the one pre-commit hook, with its own flags. A package's line runs only when the commit changes files in that package:
 
 ```sh
 #!/bin/sh
 # Written by `uncheck prepare`, run it again to change the command.
 pnpm exec uncheck staged --fix || exit 1
-(cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1
-(cd "packages/b" && pnpm exec uncheck staged --fix) || exit 1
+git --literal-pathspecs diff --cached --quiet -- "packages/a" || [ ! -d "packages/a" ] || (cd "packages/a" && pnpm exec uncheck staged --fix --only=oxlint) || exit 1
+git --literal-pathspecs diff --cached --quiet -- "packages/b" || [ ! -d "packages/b" ] || (cd "packages/b" && pnpm exec uncheck staged --fix) || exit 1
 ```
 
 An agent hook installed from a package folder checks only that package, wherever the agent moves to.
@@ -199,13 +207,15 @@ export default defineConfig({ ...middleapi })
 }
 ```
 
-The presets need oxlint 1.70+, oxfmt 0.41+ and TypeScript 5.6+. The tsconfig presets load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
+The presets need oxlint 1.70+, oxfmt 0.43+ and TypeScript 5.6+. The tsconfig presets load no runtime types, so name yours: `"types": ["node"]` for Node.js, or `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for browsers.
 
 ## Troubleshooting
 
 **A path looks like a command, a flag or an exclusion.** Start it with `./`: `./staged`, `./-draft.ts`, `'./!notes.ts'`.
 
 **`uncheck dist` says "No files match".** git ignores that folder, so it holds no project files. You can still name an ignored file directly.
+
+**git refuses the repository ("detected dubious ownership").** git does not trust a repository another user owns, such as a checkout mounted into a container, so `prepare` writes no hook and `uncheck staged` and the agent hook check nothing. Run the `safe.directory` command `git status` prints there, then try again.
 
 **A commit stops with "An earlier run left the unstaged versions of your files in …".** A pre-commit run was killed before it could put your unstaged changes back. Copy what your files are missing from the folder the message names, delete the folder, and commit again.
 

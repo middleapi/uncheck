@@ -2,23 +2,37 @@ import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-import { Console, Duration, Effect, Fiber, Semaphore } from 'effect'
+import type { PlatformError } from 'effect'
+import { Console, Duration, Effect, Fiber, FileSystem, Semaphore } from 'effect'
 import type { CliError } from 'effect/unstable/cli'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
+import type { ChildProcessSpawner } from 'effect/unstable/process'
 
 import { oxfmt } from '../checks/oxfmt'
 import { oxlint } from '../checks/oxlint'
 import { sherif } from '../checks/sherif'
 import { tsc } from '../checks/tsc'
 import { CheckFailed, platformMessage, userError } from '../errors'
-import { existingFiles, listProjectFiles, resolvePaths } from '../files'
+import { checkableFiles, listProjectFiles, resolvePaths } from '../files'
+import type { GitFailed } from '../git'
 import { bold, dim, green, listFiles, red } from '../style'
-import { captureLines, execute } from '../tool'
+import { captureLines, execute, logLines } from '../tool'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types'
 
 const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
 
+const FIXES_DONE_AFTER = CHECKS.reduce(
+  (count, check, index) => (check.fixes === false ? count : index + 1),
+  0,
+)
+
+// git runs in the folder a symlink points to and prints its paths relative to that folder.
+export const followLinks = Flag.mapEffect((directory: string) =>
+  FileSystem.FileSystem.use((fs) => fs.realPath(directory)).pipe(Effect.orDie),
+)
+
 export const cwdFlag = Flag.Directory('cwd', { mustExist: true }).pipe(
+  followLinks,
   Flag.withDefault(Effect.sync(() => process.cwd())),
   Flag.withDescription('Directory to run in. Defaults to the current one'),
 )
@@ -63,10 +77,19 @@ export interface RunSettings extends CheckSelection {
   readonly cwd: string
   readonly fix: boolean
   readonly allowUnmatched?: boolean
-  /** The paths are file names from git: never patterns, and a run where none has anything to check passes. */
+  /**
+   * The paths are file names from git, a change the hooks fix: never patterns, a run where none has
+   * anything to check passes, and only the fixes that stay within them apply.
+   */
   readonly literal?: boolean
-  /** Fixes are staged again, so only the ones that stay within the given files apply. */
-  readonly staged?: boolean
+  /** Only for `literal` runs: without paths, any other run checks everything. */
+  readonly deleted?: ReadonlyArray<string>
+  readonly afterFixes?: Effect.Effect<
+    void,
+    GitFailed | PlatformError.PlatformError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >
+  readonly holdSummary?: (lines: ReadonlyArray<string>) => Effect.Effect<void>
 }
 
 export function selectionArgs({ only, required, skipped }: CheckSelection): ReadonlyArray<string> {
@@ -132,17 +155,26 @@ export const checkPaths = Effect.fn(function* (
   paths: ReadonlyArray<string>,
   settings: RunSettings,
 ) {
-  const { fix, only, required, skipped, allowUnmatched = false, literal = false } = settings
-  const appliesFixes = (fixes: Check['fixes']) =>
-    settings.staged === true ? fixes === 'files' : fixes !== false
+  const {
+    fix,
+    only,
+    required,
+    skipped,
+    allowUnmatched = false,
+    literal = false,
+    deleted = [],
+  } = settings
+  const appliesFixes = (fixes: Check['fixes']) => (literal ? fixes === 'files' : fixes !== false)
   const { cwd } = settings
+  const summarize = (lines: ReadonlyArray<string>) =>
+    settings.holdSummary?.(lines) ?? logLines(lines)
   const projectFiles = yield* Effect.cached(listProjectFiles(cwd))
 
   let files: ReadonlyArray<string> | undefined
 
-  if (paths.length > 0) {
+  if (paths.length > 0 || deleted.length > 0) {
     const resolved = literal
-      ? { files: yield* existingFiles(paths, cwd), unmatched: [] }
+      ? { files: yield* checkableFiles(paths, cwd), unmatched: [] }
       : yield* resolvePaths(paths, cwd, projectFiles)
 
     if (resolved.unmatched.length > 0 && !allowUnmatched) {
@@ -151,8 +183,8 @@ export const checkPaths = Effect.fn(function* (
       )
     }
 
-    if (resolved.files.length === 0) {
-      yield* Console.log(`${dim('○')} nothing to check, no files match ${paths.join(' ')}`)
+    if (resolved.files.length === 0 && deleted.length === 0) {
+      yield* summarize([`${dim('○')} nothing to check, no files match ${paths.join(' ')}`])
       return
     }
 
@@ -171,13 +203,21 @@ export const checkPaths = Effect.fn(function* (
         return Effect.succeed<CheckPlan>({ name, status: 'skipped', reason: exclusion })
       }
 
-      return plan({ cwd, fix: fix && appliesFixes(fixes), files, projectFiles }).pipe(
-        Effect.map((commands): CheckPlan => ({ name, status: 'run', commands })),
-        Effect.catchTag('NothingToCheck', ({ reason }) =>
+      return plan({ cwd, fix: fix && appliesFixes(fixes), files, deleted, projectFiles }).pipe(
+        // A plan without commands, as oxlint and oxfmt make for a change that only deletes files,
+        // would pass without running anything. It stays skipped when required, or
+        // `--require=oxlint` would block every such commit.
+        Effect.map((commands): CheckPlan =>
+          commands.length === 0
+            ? { name, status: 'skipped', reason: 'only deleted files', unrelated: true }
+            : { name, status: 'run', commands },
+        ),
+        Effect.catchTag('NothingToCheck', ({ reason, unrelated }) =>
           Effect.succeed<CheckPlan>({
             name,
             status: required.includes(name) ? 'failed' : 'skipped',
             reason,
+            unrelated,
           }),
         ),
         Effect.catchTag('CannotCheck', ({ reason }) =>
@@ -188,29 +228,34 @@ export const checkPaths = Effect.fn(function* (
     { concurrency: 'unbounded' },
   )
 
-  const outcomes = yield* Effect.forEach(plans, (plan) => runCheck(plan, cwd))
+  const runAll = (planned: ReadonlyArray<CheckPlan>) =>
+    Effect.forEach(planned, (plan) => runCheck(plan, cwd))
+  const fixing = yield* runAll(plans.slice(0, FIXES_DONE_AFTER))
+
+  yield* settings.afterFixes ?? Effect.void
+
+  const outcomes = [...fixing, ...(yield* runAll(plans.slice(FIXES_DONE_AFTER)))]
 
   const ran = outcomes.filter((outcome) => outcome.status !== 'skipped')
   const failed = outcomes.filter((outcome) => outcome.status === 'failed')
 
-  yield* Console.log('')
-
   if (ran.length === 0) {
     const reasons = outcomes.map((outcome) => `${outcome.name} ${outcome.reason}`).join(', ')
 
-    if (files !== undefined && (allowUnmatched || literal)) {
-      return yield* Console.log(`${dim('○')} nothing to check: ${reasons}`)
+    if (
+      files !== undefined &&
+      (allowUnmatched || literal) &&
+      outcomes.some((outcome) => outcome.unrelated === true)
+    ) {
+      yield* summarize(['', `${dim('○')} nothing to check: ${reasons}`])
+      return
     }
 
-    yield* Console.log(`${red('✘')} nothing to check: ${reasons}`)
+    yield* summarize(['', `${red('✘')} nothing to check: ${reasons}`])
     return yield* Effect.fail(new CheckFailed({ outcomes }))
   }
 
   if (failed.length > 0) {
-    yield* Console.log(
-      `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map((outcome) => outcome.name).join(', ')}`,
-    )
-
     const fixable = failed
       .filter(
         (outcome) =>
@@ -221,16 +266,19 @@ export const checkPaths = Effect.fn(function* (
       .join(', ')
       .replace(/, ([^,]+)$/, ' and $1')
 
-    if (!fix && fixable !== '') {
-      yield* Console.log(dim(`  rerun with \`--fix\` to apply ${fixable} fixes`))
-    }
+    yield* summarize([
+      '',
+      `${red('✘')} ${failed.length} of ${ran.length} checks failed: ${failed.map((outcome) => outcome.name).join(', ')}`,
+      ...(!fix && fixable !== '' ? [dim(`  rerun with \`--fix\` to apply ${fixable} fixes`)] : []),
+    ])
 
     return yield* Effect.fail(new CheckFailed({ outcomes }))
   }
 
-  yield* Console.log(
+  yield* summarize([
+    '',
     `${green('✔')} all checks passed (${ran.map((outcome) => outcome.name).join(', ')})`,
-  )
+  ])
 })
 
 const runCheck = Effect.fn(function* (plan: CheckPlan, cwd: string) {
@@ -282,7 +330,7 @@ const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, 
   for (const fiber of fibers) {
     const [exitCode, lines] = yield* Fiber.join(fiber)
 
-    yield* Effect.forEach(lines, (line) => Console.log(line), { discard: true })
+    yield* logLines(lines)
     exitCodes.push(exitCode)
   }
 

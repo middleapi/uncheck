@@ -1,4 +1,13 @@
-import { cliError, LAYOUTS, project as bareProject, report, singleRepo } from '../utils/project'
+import {
+  cliError,
+  FULL_OXFMT,
+  FULL_OXLINT,
+  LAYOUTS,
+  project as bareProject,
+  report,
+  singleRepo,
+  TOOLS,
+} from '../utils/project'
 import { layoutChecks, NOT_COVERED, SKIPPED_BESIDE_TSC, UNFORMATTED_CODE } from './utils'
 
 describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc }) => {
@@ -12,7 +21,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       tsc,
@@ -30,7 +39,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
       '○ tsc skipped, disabled with --skip=tsc',
@@ -47,7 +56,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(skipped.stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, not selected by --only',
@@ -60,7 +69,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(required.stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
       '✘ oxfmt not installed',
       '○ tsc skipped, not selected by --only',
@@ -81,9 +90,9 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
@@ -143,6 +152,47 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
     ])
     expect(exitCode).toBe(0)
   })
+
+  it.each([
+    {
+      outcome: 'passes',
+      typescript: 'installed',
+      tools: TOOLS,
+      tscReason: 'no tsconfig.json covers the given files',
+      mark: '○',
+      expectedExitCode: 0,
+    },
+    {
+      outcome: 'fails',
+      typescript: 'not installed',
+      tools: TOOLS.filter((tool) => tool !== 'typescript'),
+      tscReason: 'not installed',
+      mark: '✘',
+      expectedExitCode: 1,
+    },
+  ])(
+    '$outcome on a source file no tsconfig.json covers when typescript is $typescript and unmatched patterns are allowed',
+    async ({ tools, tscReason, mark, expectedExitCode }) => {
+      const project = create(
+        { [`${app}scripts/release.ts`]: 'export const release = 1;\n' },
+        { tools },
+      )
+
+      const { exitCode, stdout } = await project.uncheck([
+        '--no-error-on-unmatched-pattern',
+        '--only=tsc',
+        `${app}scripts/release.ts`,
+      ])
+
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        ...SKIPPED_BESIDE_TSC,
+        `○ tsc skipped, ${tscReason}`,
+        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${tscReason}`,
+      ])
+      expect(exitCode).toBe(expectedExitCode)
+    },
+  )
 })
 
 describe('uncheck check selection', () => {
@@ -161,6 +211,36 @@ describe('uncheck check selection', () => {
     ])
     expect(exitCode).toBe(1)
   })
+
+  it.each([
+    { file: 'src/index.ts', typescript: 'not installed', tools: [] },
+    { file: 'README.md', typescript: 'not installed', tools: [] },
+    { file: 'README.md', typescript: 'installed', tools: ['typescript'] as const },
+  ])(
+    'fails on $file in a project that uses none of the tools with typescript $typescript, even when unmatched patterns are allowed',
+    async ({ file, tools }) => {
+      const project = bareProject(
+        {
+          'package.json': { name: 'bare', private: true },
+          'README.md': '# Bare\n',
+          'src/index.ts': 'export const answer = 42;\n',
+        },
+        { tools },
+      )
+
+      const { exitCode, stdout } = await project.uncheck(['--no-error-on-unmatched-pattern', file])
+
+      expect(report(stdout)).toEqual([
+        `uncheck in ${project.dir}`,
+        '○ sherif skipped, not installed',
+        '○ oxlint skipped, not installed',
+        '○ oxfmt skipped, not installed',
+        '○ tsc skipped, no tsconfig.json found',
+        '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+      ])
+      expect(exitCode).toBe(1)
+    },
+  )
 
   it.each([
     {

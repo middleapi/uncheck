@@ -1,4 +1,4 @@
-import { LAYOUTS, report } from '../utils/project'
+import { FULL_OXFMT, FULL_OXLINT, LAYOUTS, report } from '../utils/project'
 import {
   CODE_WITH_TYPE_ERROR,
   CODE_WITH_VAR,
@@ -19,9 +19,9 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
@@ -41,9 +41,9 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
@@ -62,9 +62,9 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✘ oxfmt failed',
       tsc,
       '✔ tsc passed',
@@ -85,9 +85,9 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       tsc,
       '✘ tsc failed',
@@ -105,9 +105,9 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       `✘ tsc found ${tsconfigs} tsconfig.json but typescript is not installed`,
       `✘ 1 of ${checks.length} checks failed: tsc`,
@@ -127,9 +127,9 @@ describe('uncheck in a monorepo', () => {
       `uncheck in ${project.dir}`,
       '▶ sherif',
       '✘ sherif failed',
-      '▶ oxlint',
+      FULL_OXLINT,
       '✔ oxlint passed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '▶ tsc -b tsconfig.json',
       '✔ tsc passed',

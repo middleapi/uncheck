@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 
 import { cliError, git, LAYOUTS, report } from '../utils/project'
-import { EMPTY_COMMIT_ERROR, folderOf, inIndex } from './utils'
+import { EMPTY_COMMIT_ERROR, expectFixesStaged, folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc }) => {
   const folder = folderOf(app)
@@ -24,8 +24,8 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
-      '✔ all checks passed (oxlint, oxfmt, tsc)',
       '✔ staged the fixes to src/index.ts',
+      '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(inIndex(project, `${app}src/index.ts`)).toBe('const answer = 42;\nexport { answer };\n')
     expect(project.read(`${app}src/index.ts`)).toBe('const answer = 42;\nexport { answer };\n')
@@ -45,8 +45,8 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
     expect(stderr).toBe('')
     expect(exitCode).toBe(1)
     expect(report(stdout).slice(-2)).toEqual([
-      '✘ 1 of 2 checks failed: tsc',
       '✔ staged the fixes to src/index.ts',
+      '✘ 1 of 2 checks failed: tsc',
     ])
     expect(inIndex(project, `${app}src/index.ts`)).toBe('export const answer: number = "42";\n')
   })
@@ -73,7 +73,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
 
     expect(empty.stderr).toBe(cliError(EMPTY_COMMIT_ERROR))
     expect(empty.exitCode).toBe(1)
-    expect(report(empty.stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
+    expectFixesStaged(empty.stdout, 'src/extra.ts', 'oxfmt')
     expect(project.git('status', '--porcelain')).toBe('')
 
     project.stage(unformatted)
@@ -84,7 +84,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
 
     expect(allowed.stderr).toBe('')
     expect(allowed.exitCode).toBe(0)
-    expect(report(allowed.stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
+    expectFixesStaged(allowed.stdout, 'src/extra.ts', 'oxfmt')
     expect(project.git('status', '--porcelain')).toBe('')
   })
 
@@ -105,7 +105,13 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       ).trimEnd(),
     )
     expect(exitCode).toBe(1)
-    expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxfmt)')
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxfmt passed',
+    ])
     expect(inIndex(project, `${app}src/extra.ts`)).toBe('export const   extra = 1\n')
   })
 
@@ -124,7 +130,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
+    expectFixesStaged(stdout, 'src/extra.ts', 'oxfmt')
     expect(inIndex(project, `${app}src/extra.ts`)).toBe('export const extra = 1;\n')
     expect(project.git('diff', '--name-only')).toBe('')
   })
@@ -142,7 +148,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/run.ts')
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/run.ts')
+    expectFixesStaged(stdout, 'src/run.ts', 'oxfmt')
     expect(project.git('ls-files', '--stage', '--', file)).toMatch(/^100755 /)
     expect(inIndex(project, file)).toBe('export const run = 1;\n')
     expect(project.mode(file)).toBe(0o755)
@@ -163,7 +169,11 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
     expect(nothing.exitCode).toBe(0)
     expect(report(nothing.stdout)).toEqual([
       `uncheck staged in ${project.path(folder)}`,
-      '○ nothing to check, no staged files',
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '○ oxfmt skipped, only deleted files',
+      '○ tsc skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt only deleted files, tsc not selected by --only',
     ])
 
     project.write({ [`${app}src/link.ts`]: null })
@@ -175,12 +185,56 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/link.ts')
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/link.ts')
+    expectFixesStaged(stdout, 'src/link.ts', 'oxfmt')
     expect(inIndex(project, `${app}src/link.ts`)).toBe('export const link = 1;\n')
     expect(project.read(`${app}src/messy.ts`)).toBe('export const   messy = 1\n')
     expect(project.git('status', '--porcelain')).toBe(
       `A  ${app}src/alias.ts\nD  ${app}src/gone.ts\nT  ${app}src/link.ts\n?? ${app}src/messy.ts\n`,
     )
+  })
+
+  it('leaves staged files under node_modules alone', async () => {
+    const dependency = `${app}vendor/node_modules/dep/index.js`
+    const project = create().write({
+      [dependency]: 'export var   dep = 1\n',
+      [`${app}src/extra.ts`]: 'export const   extra = 1\n',
+    })
+
+    project.git('add', '--force', '--', dependency)
+
+    const alone = await project.uncheck(['staged', '--fix', '--only=oxlint', '--only=oxfmt'], {
+      cwd: folder,
+    })
+
+    expect(alone.stderr).toBe('')
+    expect(alone.exitCode).toBe(0)
+    expect(report(alone.stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ nothing to check, only links and node_modules files are staged',
+    ])
+
+    project.git('add', '--', `${app}src/extra.ts`)
+
+    const { exitCode, stdout, stderr } = await project.uncheck(
+      ['staged', '--fix', '--only=oxlint', '--only=oxfmt'],
+      { cwd: folder },
+    )
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ sherif skipped, not selected by --only',
+      '▶ oxlint --fix --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxlint passed',
+      '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxfmt passed',
+      '○ tsc skipped, not selected by --only',
+      '✔ staged the fixes to src/extra.ts',
+      '✔ all checks passed (oxlint, oxfmt)',
+    ])
+    expect(inIndex(project, dependency)).toBe('export var   dep = 1\n')
+    expect(project.read(dependency)).toBe('export var   dep = 1\n')
   })
 
   it('fixes and stages exactly the staged files, whatever their names look like', async () => {
@@ -208,8 +262,8 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '▶ oxfmt --no-error-on-unmatched-pattern !x.ts -x.ts routes/[id]/page.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxlint, oxfmt)',
       '✔ staged the fixes to !x.ts -x.ts routes/[id]/page.ts',
+      '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(inIndex(project, `${app}!x.ts`)).toBe('export const bang = 1;\n')
     expect(inIndex(project, `${app}-x.ts`)).toBe('export const dash = 1;\n')
@@ -242,7 +296,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
     })
 
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/extra.ts')
+    expectFixesStaged(stdout, 'src/extra.ts', 'oxfmt')
     expect(project.git('rev-parse', `:${app}vendor`)).toBe(before)
   })
 })

@@ -32,8 +32,8 @@ describe.each(LAYOUTS)(
       expect(exitCode).toBe(1)
       expect(report(stdout).slice(-3)).toEqual([
         '✘ tsc failed',
-        '✘ 1 of 2 checks failed: tsc',
         '✔ staged the fixes to src/extra.ts',
+        '✘ 1 of 2 checks failed: tsc',
       ])
       expect(inIndex(project, file)).toBe('export const   extra: number = "42"\n')
       expect(project.read(file)).toBe('export const   extra: number = "43"\n')
@@ -67,9 +67,9 @@ describe.each(LAYOUTS)(
         '✘ oxlint failed',
         '○ oxfmt skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
+        strandedLine,
         '✘ 1 of 1 checks failed: oxlint',
         '  rerun with `--fix` to apply oxlint fixes',
-        strandedLine,
       ])
       expect(project.normalize(stdout)).toContain(`\n${strandedLine}\n${STRANDED_HINT}`)
       expect(project.read(`.git/uncheck-unstaged/${file}`)).toBe(VERSIONS.unstaged)
@@ -94,8 +94,8 @@ describe.each(LAYOUTS)(
       expect(exitCode).toBe(1)
       expect(report(stdout).slice(-3)).toEqual([
         '✘ tsc failed',
-        '✘ 1 of 2 checks failed: tsc',
         '✔ staged the fixes to src/extra.ts',
+        '✘ 1 of 2 checks failed: tsc',
       ])
       expect(project.git('status', '--porcelain')).toBe('')
     })

@@ -1,4 +1,4 @@
-import { LAYOUTS, report } from '../utils/project'
+import { FULL_OXFMT, FULL_OXLINT, LAYOUTS, report } from '../utils/project'
 import { CLEAN_CODE, CODE_WITH_VAR, NOT_COVERED, selectedReport } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
@@ -52,13 +52,36 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
     expect(everything.exitCode).toBe(1)
     expect(selectedReport(everything.stdout)).toEqual([
       `uncheck in ${project.path(app, 'src/routes')}`,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '✘ 1 of 2 checks failed: oxlint',
       '  rerun with `--fix` to apply oxlint fixes',
     ])
+  })
+
+  it('passes oxlint and oxfmt without paths in a folder holding nothing they handle', async () => {
+    const project = create({
+      [`${app}config/base.json`]: { compilerOptions: { strict: true } },
+      [`${app}notes/todo.txt`]: 'var   draft\n',
+    })
+
+    for (const folder of ['config', 'notes']) {
+      const { exitCode, stdout } = await project.uncheck(ONLY_FILE_CHECKS, {
+        cwd: `${app}${folder}`,
+      })
+
+      expect(selectedReport(stdout)).toEqual([
+        `uncheck in ${project.path(app, folder)}`,
+        FULL_OXLINT,
+        '✔ oxlint passed',
+        FULL_OXFMT,
+        '✔ oxfmt passed',
+        '✔ all checks passed (oxlint, oxfmt)',
+      ])
+      expect(exitCode).toBe(0)
+    }
   })
 
   it('fixes only the given files', async () => {

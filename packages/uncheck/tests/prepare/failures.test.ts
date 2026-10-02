@@ -1,7 +1,16 @@
-import { readdirSync } from 'node:fs'
+import { readdirSync, rmSync } from 'node:fs'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import type { Project } from '../utils/project'
-import { LAYOUTS, monorepo, PERMISSIONS_ENFORCED, singleRepo } from '../utils/project'
+import {
+  DUBIOUS_OWNERSHIP,
+  LAYOUTS,
+  monorepo,
+  PERMISSIONS_ENFORCED,
+  singleRepo,
+  temporaryDirectory,
+  wrappedGit,
+} from '../utils/project'
 import { HEADER, hookLine, notWritten, prepare, shownHook, written } from './utils'
 
 const HOOK = '.git/hooks/pre-commit'
@@ -11,6 +20,22 @@ function leftoverLocksAndCopies(project: Project, folder = '.git/hooks'): string
 }
 
 describe.each(LAYOUTS)('prepare failing to write the hook in a $name', ({ create, app }) => {
+  it('reports a repository git refuses to work in', async () => {
+    const project = create()
+
+    const { exitCode, stdout, stderr } = await prepare(project, [], {
+      cwd: app,
+      env: DUBIOUS_OWNERSHIP,
+    })
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(stdout).toBe(
+      `✘ pre-commit not written, git refuses the repository: detected dubious ownership in repository at '${project.dir}'\n`,
+    )
+    expect(project.exists(HOOK)).toBe(false)
+  })
+
   it.runIf(PERMISSIONS_ENFORCED)('reports a hooks folder it may not write to', async () => {
     const project = create().chmod('.git/hooks', 0o555)
 
@@ -120,8 +145,31 @@ describe('prepare in every package of a monorepo at once', () => {
       ),
     )
     const folders = ['', ...packages.map((name) => `packages/${name}/`)]
+    const atLock = temporaryDirectory()
+    // Relies on `git config --show-scope` being the last git call before the lock.
+    const env = wrappedGit(
+      `case " $* " in *" --show-scope "*) "$GIT" "$@"; status=$?; touch '${atLock}'/$$; exit $status;; esac`,
+    )
+    project.write({ [`${HOOK}.lock`]: '' })
 
-    const runs = await Promise.all(folders.map((folder) => prepare(project, [], { cwd: folder })))
+    const running = folders.map((folder) => prepare(project, [], { cwd: folder, env }))
+    onTestFinished(async () => {
+      await Promise.allSettled(running)
+    })
+    const endedEarly = Promise.race(running).then(({ stdout }) => {
+      throw new Error(`A run ended while the lock was held:\n${stdout}`)
+    })
+
+    await Promise.race([
+      endedEarly,
+      vi.waitFor(() => expect(readdirSync(atLock)).toHaveLength(folders.length), {
+        timeout: 30_000,
+        interval: 10,
+      }),
+    ])
+    await sleep(200)
+    rmSync(project.path(`${HOOK}.lock`))
+    const runs = await Promise.all(running)
 
     expect(runs.map(({ exitCode }) => exitCode)).toEqual(folders.map(() => 0))
     expect(runs.map(({ stdout }) => stdout.split('\n')[0])).toEqual(
@@ -133,6 +181,7 @@ describe('prepare in every package of a monorepo at once', () => {
         ),
       ),
     )
+    expect(runs.filter(({ stdout }) => stdout.split('\n')[0]!.endsWith(' created'))).toHaveLength(1)
     expect(project.read(HOOK).split('\n').sort()).toEqual(
       [...HEADER.split('\n'), ...folders.map((folder) => hookLine(folder))].sort(),
     )

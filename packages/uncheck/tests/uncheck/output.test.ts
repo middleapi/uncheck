@@ -1,22 +1,23 @@
 import { availableParallelism } from 'node:os'
 import { styleText } from 'node:util'
 
-import { LAYOUTS, report, singleRepo } from '../utils/project'
+import {
+  compilerOptions,
+  FULL_OXFMT,
+  FULL_OXLINT,
+  LAYOUTS,
+  report,
+  singleRepo,
+} from '../utils/project'
 import { CODE_WITH_VAR, layoutChecks } from './utils'
 
-const STANDALONE_TSCONFIG = {
-  compilerOptions: {
-    strict: true,
-    module: 'esnext',
-    moduleResolution: 'bundler',
-    types: [],
-    noEmit: true,
-  },
-}
+const STANDALONE_TSCONFIG = { compilerOptions: compilerOptions({ noEmit: true }) }
 
 const PRINT_FORCE_COLOR = "console.log('the tool sees FORCE_COLOR=' + process.env.FORCE_COLOR);\n"
 
 const STANDALONE_PROJECTS = [1, 2, 3, 4, 5].map((index) => `project-${index}`)
+
+const HOLD_AT_CAP_MS = 300
 
 function countConcurrentRuns(cap: number, total: number): string {
   return `const { mkdirSync, readdirSync, renameSync, writeFileSync } = require('node:fs');
@@ -26,6 +27,7 @@ const marker = config.replaceAll('/', '_');
 const count = (dir) => readdirSync(dir).length;
 const giveUp = Date.now() + 10_000;
 let most = 0;
+let reachedCap;
 
 console.log(\`\${config} started\`);
 mkdirSync('running', { recursive: true });
@@ -36,7 +38,13 @@ writeFileSync(\`running/\${marker}\`, '');
   const running = count('running');
   most = Math.max(most, running);
 
-  if (running === ${cap} || running + count('finished') === ${total}) {
+  if (running >= ${cap}) {
+    reachedCap ??= Date.now();
+  }
+
+  const heldAtCap = reachedCap !== undefined && Date.now() - reachedCap >= ${HOLD_AT_CAP_MS};
+
+  if (heldAtCap || running + count('finished') === ${total}) {
     console.log(\`\${config} saw \${most} running\`);
     renameSync(\`running/\${marker}\`, \`finished/\${marker}\`);
   } else if (Date.now() > giveUp) {
@@ -61,14 +69,14 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
     const { exitCode, stdout } = await project.uncheck(['--skip=tsc'])
 
     expect(stdout).toMatch(
-      /^▶ oxlint\nProcess interrupted due to receipt of signal: 'SIGKILL'\n✘ oxlint failed /m,
+      /^▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nProcess interrupted due to receipt of signal: 'SIGKILL'\n✘ oxlint failed /m,
     )
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
@@ -152,7 +160,7 @@ describe('uncheck output', () => {
       `${paint('dim', '○')} ${paint('bold', 'sherif')} ${paint('dim', 'skipped, not selected by --only')}\n`,
     )
     expect(stdout).toContain(
-      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check')}\nthe tool sees FORCE_COLOR=1\n`,
+      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check --no-error-on-unmatched-pattern')}\nthe tool sees FORCE_COLOR=1\n`,
     )
     expect(stdout).toContain(
       `${paint('green', '✔')} ${paint('bold', 'oxfmt')} ${paint('green', 'passed')} `,
@@ -162,7 +170,7 @@ describe('uncheck output', () => {
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
@@ -200,7 +208,9 @@ describe('uncheck output', () => {
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint'])
 
-    expect(stdout).toContain('▶ oxlint\nthe tool sees FORCE_COLOR=undefined\n')
+    expect(stdout).toContain(
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nthe tool sees FORCE_COLOR=undefined\n',
+    )
     expect(stdout).not.toContain('\u001B[')
     expect(exitCode).toBe(0)
   })

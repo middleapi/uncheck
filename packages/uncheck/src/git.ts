@@ -24,6 +24,11 @@ export class GitFailed extends Data.TaggedError('GitFailed')<{
   }
 }
 
+export function refusesRepository(error: GitFailed): boolean {
+  // git translates its messages, but never the name of a setting.
+  return error.stderr.includes('safe.directory')
+}
+
 /**
  * Runs git in `cwd` and returns the bytes it printed. A non-zero exit fails with `GitFailed`
  * carrying stderr, where git explains itself; running outside a repository is one such failure.
@@ -78,6 +83,36 @@ export function git(
 /** `git` for listings made with `-z`: the NUL-separated paths it printed. */
 export function gitPaths(cwd: string, args: ReadonlyArray<string>) {
   return Effect.map(git(cwd, args), (output) => output.split('\0').filter((entry) => entry !== ''))
+}
+
+export function rawDiff(cwd: string, ...args: ReadonlyArray<string>) {
+  return Effect.map(
+    git(cwd, [
+      'diff',
+      '--raw',
+      '--no-renames',
+      '--ignore-submodules=all',
+      '--relative',
+      '-z',
+      ...args,
+      // Without it, a file named like a revision, such as HEAD, makes git fail as ambiguous.
+      '--',
+    ]),
+    (output) => {
+      const fields = output.split('\0')
+
+      return Array.from({ length: Math.floor(fields.length / 2) }, (_, index) => {
+        const [fromMode, toMode, , , status] = fields[index * 2]!.slice(1).split(' ')
+
+        return {
+          file: fields[index * 2 + 1]!,
+          status: status!,
+          fromMode: fromMode!,
+          toMode: toMode!,
+        }
+      })
+    },
+  )
 }
 
 /**

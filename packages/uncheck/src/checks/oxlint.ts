@@ -14,17 +14,19 @@ export const oxlint: Check = {
       return yield* Effect.fail(new NothingToCheck({ reason: 'not installed' }))
     }
 
-    const args = fix ? ['--fix'] : []
+    const args = [
+      ...(fix ? ['--fix'] : []),
+      // oxlint walks into node_modules unless an ignore file says not to, and a fix there rewrites
+      // installed packages, through pnpm's hard links even those of its shared store.
+      ...(files === undefined ? ['--ignore-pattern=node_modules'] : []),
+      // A folder with nothing oxlint handles, or a given file it does not (a .md file), is no failure.
+      '--no-error-on-unmatched-pattern',
+    ]
 
     if (files === undefined) {
       return [{ bin, args }]
     }
 
-    // Given files may include ones oxlint does not handle (a Markdown file), which is not a failure.
-    return argvBatches(files).map((batch) => ({
-      bin,
-      args: [...args, '--no-error-on-unmatched-pattern'],
-      files: batch,
-    }))
+    return argvBatches(files).map((batch) => ({ bin, args, files: batch }))
   }),
 }

@@ -1,5 +1,13 @@
-import { cliError, LAYOUTS, monorepo, report, singleRepo } from '../utils/project'
-import { folderOf, inIndex } from './utils'
+import {
+  cliError,
+  DUBIOUS_OWNERSHIP,
+  LAYOUTS,
+  monorepo,
+  project as bareProject,
+  report,
+  singleRepo,
+} from '../utils/project'
+import { expectFixesStaged, folderOf, inIndex } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
   const folder = folderOf(app)
@@ -10,6 +18,22 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
     const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
 
     expect(stderr).toBe(cliError('`uncheck staged` needs a git repository'))
+    expect(stdout).toBe('')
+    expect(exitCode).toBe(1)
+  })
+
+  it('shows why git refuses the repository', async () => {
+    const project = create()
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'], {
+      cwd: folder,
+      env: DUBIOUS_OWNERSHIP,
+    })
+
+    expect(project.normalize(stderr)).toContain(
+      cliError("fatal: detected dubious ownership in repository at '<project>'").trimEnd(),
+    )
+    expect(stderr).toContain('safe.directory')
     expect(stdout).toBe('')
     expect(exitCode).toBe(1)
   })
@@ -154,10 +178,32 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '▶ oxfmt --no-error-on-unmatched-pattern [4 files]',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxfmt)',
       '✔ staged the fixes to [4 files]',
+      '✔ all checks passed (oxfmt)',
     ])
     expect(inIndex(project, `${app}src/d.ts`)).toBe('export const d = 1;\n')
+  })
+})
+
+describe('uncheck staged without tools', () => {
+  it('fails when no check can run on the staged files', async () => {
+    const project = bareProject(
+      { 'package.json': { name: 'bare', private: true } },
+      { tools: [] },
+    ).stage({ 'src/index.ts': 'export const answer = 42;\n' })
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'])
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(1)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      '○ sherif skipped, not installed',
+      '○ oxlint skipped, not installed',
+      '○ oxfmt skipped, not installed',
+      '○ tsc skipped, no tsconfig.json found',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+    ])
   })
 })
 
@@ -208,7 +254,7 @@ describe('uncheck staged in a package of a monorepo', () => {
     })
 
     expect(fixed.exitCode).toBe(0)
-    expect(report(fixed.stdout).at(-1)).toBe('✔ staged the fixes to src/index.ts')
+    expectFixesStaged(fixed.stdout, 'src/index.ts', 'oxfmt')
     expect(inIndex(project, 'packages/app/src/index.ts')).toBe('export const app = 1;\n')
     expect(inIndex(project, 'packages/core/src/index.ts')).toBe(edits['packages/core/src/index.ts'])
   })
@@ -255,8 +301,8 @@ describe('uncheck staged in a package of a monorepo', () => {
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json packages/app/src/index.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
-      '✘ 1 of 3 checks failed: sherif',
       '✔ staged the fixes to packages/app/src/index.ts',
+      '✘ 1 of 3 checks failed: sherif',
     ])
     expect(JSON.parse(inIndex(project, 'packages/app/package.json'))).toEqual(manifest)
     expect(JSON.parse(project.read('packages/app/package.json'))).toEqual(manifest)

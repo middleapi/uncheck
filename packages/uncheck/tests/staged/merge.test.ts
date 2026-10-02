@@ -1,5 +1,14 @@
-import { cliError, LAYOUTS, report, run } from '../utils/project'
-import { commitOnSide, folderOf, inIndex, stagePartially, VERSIONS } from './utils'
+import {
+  cliError,
+  commitOnSide,
+  LAYOUTS,
+  report,
+  run,
+  singleRepo,
+  SKIPPED_FOR_DELETIONS,
+  UTILS_NOT_FOUND,
+} from '../utils/project'
+import { expectFixesStaged, folderOf, inIndex, stagePartially, VERSIONS } from './utils'
 
 describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, app }) => {
   const folder = folderOf(app)
@@ -29,9 +38,30 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(exitCode).toBe(0)
     expect(report(stdout)).toContain('▶ oxfmt --no-error-on-unmatched-pattern src/other.ts')
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/other.ts')
+    expectFixesStaged(stdout, 'src/other.ts', 'oxfmt')
     expect(inIndex(project, other)).toBe('export const other = 4;\n')
     expect(inIndex(project, `${app}src/theirs.ts`)).toBe('export const   theirs = 1\n')
+  })
+
+  it('leaves out what the branch being merged in deletes, even beside a file named MERGE_HEAD', async () => {
+    const project = commitOnSide(
+      create({
+        [`${app}MERGE_HEAD`]: 'not a revision\n',
+        [`${app}src/gone.ts`]: 'export const gone = 1;\n',
+      }),
+      { [`${app}src/gone.ts`]: null },
+    )
+
+    project.git('merge', '--quiet', '--no-commit', '--no-ff', 'side')
+
+    const { exitCode, stdout, stderr } = await project.uncheck(['staged'], { cwd: folder })
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ nothing to check, every staged file comes from the branch being merged in',
+    ])
   })
 
   it('never takes a merge whose fixes bring back the tree of HEAD for an empty commit', async () => {
@@ -49,7 +79,7 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
-    expect(report(stdout).at(-1)).toBe('✔ staged the fixes to src/other.ts')
+    expectFixesStaged(stdout, 'src/other.ts', 'oxfmt')
     expect(project.git('diff', '--cached', '--name-only')).toBe('')
 
     project.git('commit', '--quiet', '--no-edit', '--no-verify')
@@ -90,5 +120,26 @@ describe.each(LAYOUTS)('uncheck staged during a merge in a $name', ({ create, ap
     expect(report(stdout)).toEqual([`uncheck staged in ${project.path(folder)}`])
     expect(project.read(file)).toBe(VERSIONS.unstaged)
     expect(inIndex(project, file)).toBe(VERSIONS.staged)
+  })
+})
+
+describe('uncheck staged during a merge in a single repo', () => {
+  it('typechecks a deletion of its own that the branch being merged in keeps', async () => {
+    const project = commitOnSide(singleRepo(), { 'src/theirs.ts': 'export const theirs = 1;\n' })
+
+    project.git('merge', '--quiet', '--no-commit', '--no-ff', 'side')
+    project.git('rm', '--quiet', '--', 'src/utils.ts')
+
+    const { exitCode, stdout } = await project.uncheck(['staged'])
+
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.dir}`,
+      ...SKIPPED_FOR_DELETIONS,
+      '▶ tsc -p tsconfig.json --noEmit',
+      '✘ tsc failed',
+      '✘ 1 of 1 checks failed: tsc',
+    ])
+    expect(stdout).toContain(UTILS_NOT_FOUND)
+    expect(exitCode).toBe(1)
   })
 })

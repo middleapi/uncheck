@@ -42,9 +42,9 @@ describe.each(LAYOUTS)('uncheck staged with many files in a $name', ({ create, a
       '▶ oxfmt --no-error-on-unmatched-pattern [14 files]',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
-      '✔ all checks passed (oxlint, oxfmt)',
       '✔ staged the fixes to [150 files]',
       '○ unstaged changes of [150 files] restored',
+      '✔ all checks passed (oxlint, oxfmt)',
     ])
 
     for (const file of [fixed[0]!, fixed.at(-1)!]) {

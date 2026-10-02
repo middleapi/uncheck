@@ -1,4 +1,11 @@
-import { LAYOUTS, report } from '../utils/project'
+import {
+  FULL_OXFMT,
+  FULL_OXFMT_FIX,
+  FULL_OXLINT,
+  FULL_OXLINT_FIX,
+  LAYOUTS,
+  report,
+} from '../utils/project'
 import { layoutChecks } from './utils'
 
 const PRESET_CONFIGS = {
@@ -110,9 +117,9 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...sherif,
-      '▶ oxlint',
+      FULL_OXLINT,
       '✘ oxlint failed',
-      '▶ oxfmt --check',
+      FULL_OXFMT,
       '✘ oxfmt failed',
       tsc,
       '✘ tsc failed',
@@ -158,9 +165,9 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       ...layoutChecks(app, { fix: true }).sherif,
-      '▶ oxlint --fix',
+      FULL_OXLINT_FIX,
       '✘ oxlint failed',
-      '▶ oxfmt',
+      FULL_OXFMT_FIX,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,

@@ -1,8 +1,15 @@
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import type { Env } from '../utils/project'
-import { gitConfig, LAYOUTS, temporaryDirectory, wrappedGit } from '../utils/project'
+import {
+  gitConfig,
+  LAYOUTS,
+  monorepo,
+  report,
+  temporaryDirectory,
+  wrappedGit,
+} from '../utils/project'
 import {
   DISPATCHER,
   HEADER,
@@ -250,5 +257,51 @@ describe.each(LAYOUTS)('prepare with a symlinked hook in a $name', ({ create, ap
     expect(lstatSync(project.path('.git/hooks/pre-commit')).isSymbolicLink()).toBe(true)
     expect(project.read('hooks/pre-commit')).toBe(`${HEADER}${hookLine(app)}\n`)
     expect(project.mode('hooks/pre-commit')).toBe(0o755)
+  })
+})
+
+describe('prepare with --cwd naming a symlink to a package', () => {
+  function linkedApp() {
+    return monorepo().link('applink', 'packages/app')
+  }
+
+  it('writes the hook of the repository the package is in, and nothing above it', async () => {
+    const project = linkedApp()
+
+    const { exitCode, stdout } = await prepare(project, ['--cwd=applink'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toBe(written(project.path('.git/hooks/pre-commit'), 'created'))
+    expect(project.read('.git/hooks/pre-commit')).toBe(`${HEADER}${hookLine('packages/app/')}\n`)
+    expect(existsSync(join(dirname(project.dir), '.git'))).toBe(false)
+  })
+
+  it('lets the hook command set aside unstaged changes in the package', async () => {
+    const file = 'packages/app/src/extra.ts'
+    const project = linkedApp()
+      .stage({ [file]: 'export const extra = 1;\n' })
+      .write({ [file]: 'export const extra = 1;\nvar   unstaged = 1\n' })
+
+    const { exitCode, stdout, stderr } = await project.uncheck([
+      'staged',
+      '--only=oxlint',
+      '--cwd=applink',
+    ])
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path('packages/app')}`,
+      '○ unstaged changes of src/extra.ts set aside until the checks finish',
+      '○ sherif skipped, not selected by --only',
+      '▶ oxlint --no-error-on-unmatched-pattern src/extra.ts',
+      '✔ oxlint passed',
+      '○ oxfmt skipped, not selected by --only',
+      '○ tsc skipped, not selected by --only',
+      '○ unstaged changes of src/extra.ts restored',
+      '✔ all checks passed (oxlint)',
+    ])
+    expect(project.read(file)).toBe('export const extra = 1;\nvar   unstaged = 1\n')
+    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 })

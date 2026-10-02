@@ -77,10 +77,30 @@ export const SKIPPED_BESIDE_TSC = [
   '○ oxfmt skipped, not selected by --only',
 ]
 
+export function tscOnlyReport(
+  heading: string,
+  plan: ReadonlyArray<string>,
+  outcome: 'passed' | 'failed',
+): string[] {
+  return [
+    heading,
+    ...SKIPPED_BESIDE_TSC,
+    ...plan,
+    ...(outcome === 'passed'
+      ? ['✔ tsc passed', '✔ all checks passed (tsc)']
+      : ['✘ tsc failed', '✘ 1 of 1 checks failed: tsc']),
+  ]
+}
+
 // oxlint-disable-next-line no-template-curly-in-string
 export const CONFIG_DIR = '${configDir}'
 
 export const ALLOW_JS = { compilerOptions: { allowJs: true } }
+
+/** Without it, the members of a references graph are checked with `-p` instead of built with `-b`. */
+export const OUT_DIR = { compilerOptions: { outDir: 'dist' } }
+
+export const NO_EMIT = { compilerOptions: { noEmit: true } }
 
 export function withFakeTsc(
   create: Layout['create'],

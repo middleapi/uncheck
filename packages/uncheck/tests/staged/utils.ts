@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import process from 'node:process'
 
-import { CLI, environment } from '../utils/project'
-import type { Env, Files, Project, Run } from '../utils/project'
+import { CLI, environment, report } from '../utils/project'
+import type { Env, Project, Run } from '../utils/project'
 
 /** The folder of a layout's package, relative to the top of the repository. */
 export function folderOf(app: string): string {
@@ -13,7 +14,7 @@ export const LEFTOVER_ERROR =
   'An earlier run left the unstaged versions of your files in <project>/.git/uncheck-unstaged, at their paths from the top of the repository. Unless another commit is running, copy back what your files are missing, delete the folder, then commit again.'
 
 export const EMPTY_COMMIT_ERROR =
-  'The fixes undid every staged change, so the commit would be empty. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.'
+  'The fixes undid every staged change and are staged now, so nothing new is left to commit. Commit again: git amends only the message, or refuses an empty commit. To allow empty commits, pass --allow-empty to `uncheck staged`, or to `uncheck prepare` for the hook it writes.'
 
 export function conflictError(files: string): string {
   return `The fixes conflict with the unstaged changes of ${files} and were undone. Stage the whole file, or stash its unstaged changes, then commit again.`
@@ -50,24 +51,104 @@ export function stagePartially(project: Project, file: string): Project {
   return project.stage({ [file]: VERSIONS.staged }).write({ [file]: VERSIONS.unstaged })
 }
 
-/** Commits `files` on a new `side` branch, then goes back to `main`. */
-export function commitOnSide(project: Project, files: Files): Project {
-  project.git('checkout', '--quiet', '-b', 'side')
-  project.write(files).commit('side')
-  project.git('checkout', '--quiet', 'main')
+export function expectRestored(project: Project, file: string): void {
+  expect(project.read(file)).toBe(VERSIONS.unstaged)
+  expect(inIndex(project, file)).toBe(VERSIONS.staged)
+  expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+}
 
-  return project
+export const SAVED_LINE = '// saved while tsc ran\n'
+
+export function saveWhileTscRuns(
+  project: Project,
+  files: ReadonlyArray<string>,
+  { atEnd = false }: { readonly atEnd?: boolean } = {},
+): Project {
+  const paths = JSON.stringify(files.map((file) => project.path(file)))
+  const line = JSON.stringify(SAVED_LINE)
+  const content = "fs.readFileSync(file, 'utf8')"
+
+  return project.fake(
+    'typescript',
+    `const fs = require('node:fs')\nfor (const file of ${paths}) fs.writeFileSync(file, ${atEnd ? `${content} + ${line}` : `${line} + ${content}`})\n`,
+  )
 }
 
 export function inIndex(project: Project, file: string): string {
   return project.git('show', `:${file}`)
 }
 
+export function expectFixesStaged(output: string, files: string, checks: string): void {
+  expect(report(output).slice(-2)).toEqual([
+    `✔ staged the fixes to ${files}`,
+    `✔ all checks passed (${checks})`,
+  ])
+}
+
 export interface Started {
   readonly child: ChildProcessWithoutNullStreams
-  /** Resolves once stdout has shown `marker`. */
+  /** Resolves once stdout or stderr has shown `marker`. */
   readonly printed: (marker: string) => Promise<void>
   readonly exited: Promise<Run>
+}
+
+interface StartOptions {
+  readonly cwd: string
+  readonly env?: Env
+  readonly ownProcessGroup?: boolean
+}
+
+function start(
+  command: ReadonlyArray<string>,
+  { cwd, env, ownProcessGroup = false }: StartOptions,
+): Started {
+  const child = spawn(command[0]!, command.slice(1), {
+    cwd,
+    env: environment(env),
+    detached: ownProcessGroup,
+  })
+  const waiters: Array<{ readonly marker: string; readonly resolve: () => void }> = []
+  const output = { stdout: '', stderr: '' }
+  const shown = (marker: string) => output.stdout.includes(marker) || output.stderr.includes(marker)
+  const collect = (stream: keyof typeof output) => (chunk: string) => {
+    output[stream] += chunk
+
+    for (const waiter of waiters.filter(({ marker }) => shown(marker))) {
+      waiters.splice(waiters.indexOf(waiter), 1)
+      waiter.resolve()
+    }
+  }
+
+  onTestFinished(() => {
+    if (!ownProcessGroup) {
+      child.kill('SIGKILL')
+      return
+    }
+
+    // Throws once every process of the group has exited.
+    try {
+      process.kill(-child.pid!, 'SIGKILL')
+    } catch {}
+  })
+
+  child.stdout.setEncoding('utf8').on('data', collect('stdout'))
+  child.stderr.setEncoding('utf8').on('data', collect('stderr'))
+
+  return {
+    child,
+    printed: (marker) =>
+      new Promise((resolve) => {
+        if (shown(marker)) {
+          resolve()
+        } else {
+          waiters.push({ marker, resolve })
+        }
+      }),
+    exited: new Promise((resolve, reject) => {
+      child.on('error', reject)
+      child.on('close', (exitCode, signal) => resolve({ exitCode, signal, ...output }))
+    }),
+  }
 }
 
 /** Starts the CLI without waiting for it, for tests that act on the process while it runs. */
@@ -76,43 +157,18 @@ export function startUncheck(
   args: ReadonlyArray<string>,
   { cwd = '.', env }: { readonly cwd?: string; readonly env?: Env } = {},
 ): Started {
-  const child = spawn(CLI[0], [...CLI.slice(1), ...args], {
-    cwd: project.path(cwd),
-    env: environment(env),
-  })
-  const waiters: Array<{ readonly marker: string; readonly resolve: () => void }> = []
-  let stdout = ''
-  let stderr = ''
+  return start([...CLI, ...args], { cwd: project.path(cwd), env })
+}
 
-  onTestFinished(() => {
-    child.kill('SIGKILL')
-  })
+/**
+ * Starts `git <args>` in a process group of its own, which `interrupt` sends Ctrl-C to as a terminal
+ * would. `exited` waits for the hooks git started too, since they hold its output.
+ */
+export function startGit(
+  project: Project,
+  args: ReadonlyArray<string>,
+): Started & { readonly interrupt: () => void } {
+  const started = start(['git', ...args], { cwd: project.dir, ownProcessGroup: true })
 
-  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-    stdout += chunk
-
-    for (const waiter of waiters.filter(({ marker }) => stdout.includes(marker))) {
-      waiters.splice(waiters.indexOf(waiter), 1)
-      waiter.resolve()
-    }
-  })
-  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-    stderr += chunk
-  })
-
-  return {
-    child,
-    printed: (marker) =>
-      new Promise((resolve) => {
-        if (stdout.includes(marker)) {
-          resolve()
-        } else {
-          waiters.push({ marker, resolve })
-        }
-      }),
-    exited: new Promise((resolve, reject) => {
-      child.on('error', reject)
-      child.on('close', (exitCode, signal) => resolve({ exitCode, signal, stdout, stderr }))
-    }),
-  }
+  return { ...started, interrupt: () => process.kill(-started.child.pid!, 'SIGINT') }
 }

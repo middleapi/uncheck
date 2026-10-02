@@ -94,17 +94,21 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     }
   })
 
-  it('checks a linked file but never a linked folder or a broken link, as the walk outside git', async () => {
+  it('checks a linked file inside the project but never a linked folder, a broken link or a link into node_modules, as the walk outside git', async () => {
     const store = temporaryDirectory()
     writeFileSync(join(store, 'vendor.ts'), CODE_WITH_VAR)
     const project = create({
       [`${routes}/home.ts`]: CLEAN_CODE,
       [`${routes}/shared/util.ts`]: CODE_WITH_VAR,
+      'node_modules/dep/index.ts': CODE_WITH_VAR,
     })
+    project
       .link(`${routes}/alias.ts`, 'home.ts')
       .link(`${routes}/broken.ts`, 'missing.ts')
       .link(`${routes}/linked`, 'shared')
       .link(`${routes}/vendor`, store)
+      .link(`${routes}/outside.ts`, join(store, 'vendor.ts'))
+      .link(`${routes}/installed.ts`, project.path('node_modules/dep/index.ts'))
       .commit()
 
     const check = await project.uncheck(['--only=oxlint', routes])
@@ -113,6 +117,8 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     expect(check.stdout).toContain(`${routes}/shared/util.ts:1:1`)
     expect(check.stdout).not.toContain(`${routes}/linked/`)
     expect(check.stdout).not.toContain(`${routes}/vendor/`)
+    expect(check.stdout).not.toContain(`${routes}/outside.ts`)
+    expect(check.stdout).not.toContain(`${routes}/installed.ts`)
     expect(selectedReport(check.stdout)).toEqual([
       `uncheck in ${project.dir}`,
       `▶ oxlint --no-error-on-unmatched-pattern ${routes}/alias.ts ${routes}/home.ts ${routes}/shared/util.ts`,
@@ -124,8 +130,12 @@ describe.each(LAYOUTS)('uncheck with paths in the git repository of a $name', ({
     const fix = await project.uncheck(['--only=oxlint', '--fix', routes])
 
     expect(fix.exitCode).toBe(0)
+    expect(selectedReport(fix.stdout)).toContain(
+      `▶ oxlint --fix --no-error-on-unmatched-pattern ${routes}/alias.ts ${routes}/home.ts ${routes}/shared/util.ts`,
+    )
     expect(project.read(`${routes}/shared/util.ts`)).toBe('const count = 1;\nexport { count };\n')
     expect(readFileSync(join(store, 'vendor.ts'), 'utf8')).toBe(CODE_WITH_VAR)
+    expect(project.read('node_modules/dep/index.ts')).toBe(CODE_WITH_VAR)
   })
 
   it('leaves out a linked node_modules that a folder-only ignore rule misses', async () => {

@@ -7,6 +7,7 @@ import {
   COPILOT_STOP_IN_CLAUDE_FORMAT,
   CURSOR_STOP,
   TYPE_ERROR,
+  hookEnv,
   stopHook,
 } from './utils'
 
@@ -41,7 +42,11 @@ async function installHook(
       : (JSON.parse(project.read(`${app}.cursor/hooks.json`)) as CursorHooks).hooks.stop[0]!.command
 
   return (payload) =>
-    run(['sh', '-c', command], { cwd: project.path('docs'), input: JSON.stringify(payload) })
+    run(['sh', '-c', command], {
+      cwd: project.path('docs'),
+      env: hookEnv(),
+      input: JSON.stringify(payload),
+    })
 }
 
 function sendBackReason(stderr: string): string {
@@ -64,6 +69,20 @@ describe.each(LAYOUTS)(
     const failure = (project: Project) =>
       checks(project, '✘ tsc failed', '✘ 1 of 3 checks failed: tsc')
 
+    function expectBlocked(project: Project, { exitCode, stdout, stderr }: Run): void {
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(report(stderr)).toEqual(failure(project))
+    }
+
+    function expectStillFails(project: Project, { exitCode, stdout, stderr }: Run): void {
+      expect(exitCode).toBe(0)
+      expect(JSON.parse(stdout)).toEqual({
+        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
+      })
+      expect(report(stderr)).toEqual(failure(project))
+    }
+
     it('blocks Claude Code with exit code 2 until its change passes, through its hook run from outside the change', async () => {
       const project = create(DOCS)
       const stop = await installHook(project, app, 'claude')
@@ -72,18 +91,12 @@ describe.each(LAYOUTS)(
 
       const blocked = await stop(CLAUDE_CODE_STOP)
 
-      expect(blocked.exitCode).toBe(2)
-      expect(blocked.stdout).toBe('')
-      expect(report(blocked.stderr)).toEqual(failure(project))
+      expectBlocked(project, blocked)
       expect(blocked.stderr).toContain(`\n${DIAGNOSTIC}\n`)
 
       const again = await stop(CLAUDE_CODE_STOP_AGAIN)
 
-      expect(again.exitCode).toBe(0)
-      expect(JSON.parse(again.stdout)).toEqual({
-        systemMessage: 'uncheck still fails: 1 of 3 checks failed: tsc',
-      })
-      expect(report(again.stderr)).toEqual(failure(project))
+      expectStillFails(project, again)
 
       project.write({ [`${app}src/index.ts`]: 'export const   answer: string = "42"\n' })
 
@@ -95,6 +108,67 @@ describe.each(LAYOUTS)(
         checks(project, '✔ tsc passed', '✔ all checks passed (oxlint, oxfmt, tsc)'),
       )
       expect(project.read(`${app}src/index.ts`)).toBe('export const answer: string = "42";\n')
+    })
+
+    it('blocks Claude Code again only after its checks passed, even when another hook continued the turn', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const continued = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expectBlocked(project, continued)
+
+      const again = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expectStillFails(project, again)
+
+      const nextTurn = await stopHook(project, app, CLAUDE_CODE_STOP)
+
+      expectBlocked(project, nextTurn)
+
+      project.write({ [`${app}src/index.ts`]: 'export const answer: string = "42";\n' })
+
+      const passing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(passing.exitCode).toBe(0)
+      expect(passing.stdout).toBe('')
+      expect(report(passing.stderr)).toEqual(
+        checks(project, '✔ tsc passed', '✔ all checks passed (oxlint, oxfmt, tsc)'),
+      )
+
+      project.write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const failingAfterPassing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expectBlocked(project, failingAfterPassing)
+
+      const stillFailing = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expectStillFails(project, stillFailing)
+
+      project.git('checkout', '--', '.')
+
+      const reverted = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expect(reverted.exitCode).toBe(0)
+      expect(reverted.stdout).toBe('')
+      expect(reverted.stderr).toBe('')
+
+      project.write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const failingAfterReverting = await stopHook(project, app, CLAUDE_CODE_STOP_AGAIN)
+
+      expectBlocked(project, failingAfterReverting)
+    })
+
+    it('takes a continued turn without a session id as one uncheck already blocked', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+
+      const continued = await stopHook(project, app, {
+        hook_event_name: 'Stop',
+        stop_hook_active: true,
+      })
+
+      expectStillFails(project, continued)
     })
 
     it('sends Cursor back once with a follow-up message, through its hook run from outside the change', async () => {
@@ -116,6 +190,47 @@ describe.each(LAYOUTS)(
       expect(again.exitCode).toBe(0)
       expect(again.stdout).toBe('')
       expect(report(again.stderr)).toEqual(failure(project))
+
+      const anotherConversation = await stop({
+        ...CURSOR_STOP,
+        conversation_id: 'other',
+        loop_count: 1,
+      })
+
+      expect(anotherConversation.exitCode).toBe(0)
+      expect(report(anotherConversation.stderr)).toEqual(failure(project))
+      expect(JSON.parse(anotherConversation.stdout)).toEqual({
+        followup_message: sendBackReason(anotherConversation.stderr),
+      })
+    })
+
+    it('blocks Copilot once per turn, even after another hook continued it', async () => {
+      const project = create().write({ [`${app}src/index.ts`]: TYPE_ERROR })
+      const continuedStop = { ...COPILOT_AGENT_STOP, stop_hook_active: true }
+
+      const continued = await stopHook(project, app, continuedStop)
+
+      expect(continued.exitCode).toBe(0)
+      expect(report(continued.stderr)).toEqual(failure(project))
+      expect(JSON.parse(continued.stdout)).toEqual({
+        decision: 'block',
+        reason: sendBackReason(continued.stderr),
+      })
+
+      const again = await stopHook(project, app, continuedStop)
+
+      expect(again.exitCode).toBe(0)
+      expect(again.stdout).toBe('')
+      expect(report(again.stderr)).toEqual(failure(project))
+
+      const nextTurn = await stopHook(project, app, COPILOT_AGENT_STOP)
+
+      expect(nextTurn.exitCode).toBe(0)
+      expect(report(nextTurn.stderr)).toEqual(failure(project))
+      expect(JSON.parse(nextTurn.stdout)).toEqual({
+        decision: 'block',
+        reason: sendBackReason(nextTurn.stderr),
+      })
     })
 
     it('blocks Copilot with a decision, whichever payload format it sends', async () => {

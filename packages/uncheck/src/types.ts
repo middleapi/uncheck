@@ -11,6 +11,7 @@ export interface CheckOutcome {
   readonly name: CheckName
   readonly status: 'passed' | 'failed' | 'skipped'
   readonly reason?: string
+  readonly unrelated?: boolean
 }
 
 export interface CheckCommand {
@@ -26,12 +27,14 @@ export interface CheckInput {
   readonly fix: boolean
   /** Files to check, relative to `cwd`, or `undefined` for everything under it. */
   readonly files: ReadonlyArray<string> | undefined
+  /** Files the change deletes, relative to `cwd`. Never handed to a tool, which would read `[id].ts` as a glob. */
+  readonly deleted: ReadonlyArray<string>
   readonly projectFiles: ProjectFiles
 }
 
 export interface Check {
   readonly name: CheckName
-  /** `workspace` fixes reach beyond the given files, so a commit, which stages only those, cannot take them. */
+  /** `workspace` fixes reach beyond the given files, so the hooks, which fix only a commit or an agent's change, leave them out. */
   readonly fixes: false | 'files' | 'workspace'
   readonly plan: (
     input: CheckInput,

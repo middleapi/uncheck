@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process'
+
 import type { Project, Run, RunOptions } from '../utils/project'
 
 export const HEADER =
@@ -13,8 +15,20 @@ export function prepare(
   return project.uncheck(['prepare', '--pre-commit', ...args], options)
 }
 
+export function runsIn(app: string, command: string): string {
+  return app === '' ? command : `(cd "${app.slice(0, -1)}" && ${command})`
+}
+
+export function previousHookLine(app: string, command = COMMAND): string {
+  return `${runsIn(app, command)} || exit 1`
+}
+
 export function hookLine(app: string, command = COMMAND): string {
-  return app === '' ? `${command} || exit 1` : `(cd "${app.slice(0, -1)}" && ${command}) || exit 1`
+  const folder = app.slice(0, -1)
+
+  return app === ''
+    ? `${command} || exit 1`
+    : `git --literal-pathspecs diff --cached --quiet -- "${folder}" || [ ! -d "${folder}" ] || (cd "${folder}" && ${command}) || exit 1`
 }
 
 export function shownHook(project: Project, app: string, hook = '.git/hooks/pre-commit'): string {
@@ -29,6 +43,12 @@ export function written(
   return `✔ pre-commit ${shown} ${result}\n\nThe hook runs ${command} before every commit, \`git commit --no-verify\` skips it.\n`
 }
 
+export function syntaxCheck(file: string): { status: number | null; stderr: string } {
+  const { status, stderr } = spawnSync('sh', ['-n', file], { encoding: 'utf8' })
+
+  return { status, stderr }
+}
+
 export function notWritten(shown: string, reason: string): string {
   return `✘ pre-commit ${shown} not written, ${reason}\n`
 }
@@ -39,6 +59,19 @@ export const DISPATCHER = [
   'export PATH="node_modules/.bin:$PATH"',
   'sh -e "$s" "$@"',
   'exit $?',
+  '',
+].join('\n')
+
+export const HUSKY_4_RUNNER = '. "$(dirname "$0")/husky.sh"'
+
+export const HUSKY_4_BANNER = [
+  '#!/bin/sh',
+  '# husky',
+  '',
+  '# Created by Husky v4.3.8 (https://github.com/typicode/husky#readme)',
+  '#   At: 1/20/2021, 3:58:58 PM',
+  '#   From: /home/me/my-app (https://github.com/me/my-app#readme)',
+  '',
   '',
 ].join('\n')
 

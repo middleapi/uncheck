@@ -5,7 +5,7 @@ import { Command, Flag } from 'effect/unstable/cli'
 
 import { platformMessage, userError } from '../errors'
 import { readTextIfExists } from '../files'
-import { git, gitLocation } from '../git'
+import { git, gitLocation, refusesRepository } from '../git'
 import { detectExec, invokes } from '../pm'
 import { bold, dim, green, red } from '../style'
 import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from './uncheck'
@@ -20,8 +20,12 @@ const EXIT = ' || exit 1'
  * A line that enters a directory first, since git runs hooks at the top of the working tree, in a
  * subshell so the `cd` does not carry over to the next line.
  */
+const ENTERS_WHEN_STAGED =
+  /^git --literal-pathspecs diff --cached --quiet -- "([^"]*)" \|\| \[ ! -d "\1" \] \|\| \(cd "\1" && (.*)\)$/
 const ENTERS = /^\(cd "([^"]*)" && (.*)\)$/
 const OLD_ENTERS = /^cd "([^"]*)" && (.*)$/
+
+const CWD_FLAG = / --cwd=/
 
 /** Git runs a hook through its shebang, where a line of `sh` would be a syntax error. */
 const OTHER_INTERPRETER = /^#!(?!.*\b(?:ba|da|k|z|a)?sh\b)/
@@ -31,11 +35,26 @@ const NOT_TEXT = /[\0\uFFFD]/
 
 /** The comments and environment a hook sets up, such as its PATH, which the added line needs too. */
 const SETUP =
-  /^\s*(?:#|$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
+  /^\s*(?:$|\\?\.\s|(?:(?:source|export|set|unset)\s|(?:\[|test)\s[^;&|]*&&\s*(?:\\?\.|source)\s)[^;&|]*$|[A-Za-z_]\w*=\S*\s*$)/
 
-/** A setup line that runs on into the next, where the added line would join it. */
+/** husky 4 sources this runner, which always exits, so nothing after it runs. */
+const HUSKY_4_RUNNER = /^\.\s+"\$\(dirname "\$0"\)\/husky\.sh"\s*$/
+
+const INNERMOST_SUBSTITUTION = /\$\([^()]*\)/g
+
+// A `\"` outside quotes opens nothing, and a `"` between single quotes opens nothing either.
+const QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g
+
+const COMMENT = /(?:^|\s)#.*$/
+
+/**
+ * A line that runs on into the next, so a line added after it would join its command or block, and
+ * one removed after it would leave them incomplete.
+ */
 const CONTINUES =
-  /^(?!\s*#)(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$)/
+  /^(?:.*\\\s*$|(?:[^"]*"[^"]*")*[^"]*"[^"]*$|(?:[^']*'[^']*')*[^']*'[^']*$|(?:[^`]*`[^`]*`)*[^`]*`[^`]*$|.*[({]\s*$|.*<<|.*(?:&&|\||(?:^|[\s;])(?:if|then|elif|else|while|until|do))\s*$)/
+
+const INDENT = /^\s*/
 
 /**
  * `sh` still expands `$`, backticks and `\` between double quotes, `"` ends them, and a newline ends
@@ -43,23 +62,108 @@ const CONTINUES =
  */
 const UNQUOTABLE = /["$`\\\n]/
 
+// Without --literal-pathspecs, git reads a folder whose name starts with `:` as pathspec magic.
 function hookLine(inside: string, command: string): string {
-  return inside === '' ? `${command}${EXIT}` : `(cd "${inside}" && ${command})${EXIT}`
+  return inside === ''
+    ? `${command}${EXIT}`
+    : `git --literal-pathspecs diff --cached --quiet -- "${inside}" || [ ! -d "${inside}" ] || (cd "${inside}" && ${command})${EXIT}`
 }
 
 /**
  * The directory and command of a hook line that runs `uncheck staged`, or `undefined` when the line
  * is not one `prepare` writes. A line only counts as ours when it runs the command directly or
- * through a package manager, so a line that merely mentions it, or runs it some other way, is left
- * alone.
+ * through a package manager, so a line that merely mentions it, or runs it some other way, such as
+ * in another directory with `--cwd`, is left alone.
  */
 function ownLine(text: string): { readonly inside: string; readonly command: string } | undefined {
   const line = text.trim()
   const body = line.endsWith(EXIT) ? line.slice(0, -EXIT.length) : line
-  const enters = ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
+  const enters = ENTERS_WHEN_STAGED.exec(body) ?? ENTERS.exec(body) ?? OLD_ENTERS.exec(body)
   const command = enters?.[2] ?? body
 
-  return invokes(command, HOOK_COMMAND) ? { inside: enters?.[1] ?? '', command } : undefined
+  return invokes(command, HOOK_COMMAND) && !CWD_FLAG.test(command)
+    ? { inside: enters?.[1] ?? '', command }
+    : undefined
+}
+
+/**
+ * A `;`, `&` or `|` between quotes or in a command substitution does not end the command, and a
+ * quote in a comment opens nothing.
+ */
+function codeOf(text: string): string {
+  const substituted = text.replace(INNERMOST_SUBSTITUTION, '_')
+
+  return substituted === text
+    ? text.replace(QUOTED, (token) => (token.startsWith('\\') ? token : '""')).replace(COMMENT, '')
+    : codeOf(substituted)
+}
+
+function indentOf(text: string): string {
+  return INDENT.exec(text)![0]
+}
+
+// prepare never indents its lines nor continues another line into them, so such a line is the
+// user's, and dropping or moving it would break the block or command it is in.
+function standalone(texts: ReadonlyArray<string>, index: number): boolean {
+  const previous = texts
+    .slice(0, index)
+    .filter((text) => codeOf(text).trim() !== '')
+    .at(-1)
+
+  return (
+    indentOf(texts[index]!) === '' && (previous === undefined || !CONTINUES.test(codeOf(previous)))
+  )
+}
+
+function writtenByV003(text: string): boolean {
+  const own = ownLine(text)
+
+  return (
+    own !== undefined &&
+    text === (own.inside === '' ? own.command : `cd "${own.inside}" && ${own.command}`)
+  )
+}
+
+// Added after the commands of the hook, a line would set its exit status in their place, and would
+// never run after an `exec` or `exit`. Before the hook's setup it would miss the PATH a GUI client
+// lacks, and run twice with husky 8, whose sourced `_/husky.sh` runs the hook again.
+function beforeCommands(
+  texts: ReadonlyArray<string>,
+  added: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const at = texts.findIndex((text) => {
+    const code = codeOf(text)
+
+    return !SETUP.test(code) || HUSKY_4_RUNNER.test(text) || CONTINUES.test(code)
+  })
+
+  return at === -1
+    ? [...(texts.at(-1) === '' ? texts.slice(0, -1) : texts), ...added, '']
+    : [...texts.slice(0, at), ...added, ...texts.slice(at)]
+}
+
+/**
+ * Older versions appended their lines to the hook, where an `exec` or `exit` before them, or the
+ * runner of husky 4, skips them. Only the end of the hook is theirs: v0.0.3 also rewrote the user's
+ * lines in place, unindented, in blocks that would be left empty without them.
+ */
+function liftAppended(texts: ReadonlyArray<string>): ReadonlyArray<string> {
+  const runner = texts.findIndex((text) => HUSKY_4_RUNNER.test(text))
+  const tail = texts.reduce(
+    (start, text, index) => (text.trim() === '' || writtenByV003(text) ? start : index + 1),
+    0,
+  )
+  const from = runner === -1 ? tail : Math.min(tail, runner + 1)
+  const appended = texts.map(
+    (text, index) => index >= from && ownLine(text) !== undefined && standalone(texts, index),
+  )
+
+  return appended.includes(true)
+    ? beforeCommands(
+        texts.filter((_, index) => !appended[index]),
+        texts.filter((_, index) => appended[index]),
+      )
+    : texts
 }
 
 // `sh` reads a script while running it, so a hook rewritten in place makes a commit already running
@@ -137,17 +241,27 @@ export const prepare = Command.make(
 
     const cwd = path.resolve(directory)
 
-    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.option)
+    const repository = yield* gitLocation(cwd, ['hooks']).pipe(Effect.result)
 
-    // A `prepare` script runs on every install, including where there is no repository to hook.
-    if (Option.isNone(repository)) {
+    if (Result.isFailure(repository)) {
+      const { failure } = repository
+
+      if (failure._tag === 'GitFailed' && refusesRepository(failure)) {
+        const reason = failure.stderr.split('\n')[0]!.replace(/^fatal: /, '')
+
+        return yield* Console.log(
+          `${red('✘')} ${bold('pre-commit')} ${dim(`not written, git refuses the repository: ${reason}`)}`,
+        )
+      }
+
+      // A `prepare` script runs on every install, including where there is no repository to hook.
       return yield* Console.log(`${dim('○')} no git repository found, nothing to prepare`)
     }
 
     const {
       prefix,
       paths: [hooks],
-    } = repository.value
+    } = repository.success
     const inside = prefix.replace(/\/$/, '')
     const exec = yield* detectExec(cwd)
     const command = [
@@ -273,53 +387,53 @@ export const prepare = Command.make(
 )
 
 /**
- * Puts `line` into a hook, so running `prepare` again is idempotent: the line for this directory is
- * updated wherever it sits, duplicates of it are dropped, and everything else is kept, including the
- * commands of other packages in the same repository and whatever the user added.
+ * Puts `line` into a hook, so running `prepare` again is idempotent: the lines older versions
+ * appended are moved up first, every line for this directory is updated where it sits, keeping its
+ * indentation, except the standalone copies after the first standalone one, which are dropped, and
+ * everything else is kept, including the commands of other packages in the same repository and
+ * whatever the user added.
  */
 function rewrite(hook: string, line: string, inside: string): string {
   let placed = false
-  const lines = hook.split('\n').flatMap((text) => {
+  let placedStandalone = false
+  const lines = liftAppended(hook.split('\n')).flatMap((text, index, texts) => {
     const own = ownLine(text)
 
     if (own === undefined) {
       return [text]
     }
 
+    const indent = indentOf(text)
+
     if (own.inside !== inside) {
-      return [hookLine(own.inside, own.command)]
+      return [`${indent}${hookLine(own.inside, own.command)}`]
     }
 
-    if (placed) {
+    const isStandalone = standalone(texts, index)
+
+    if (isStandalone && placedStandalone) {
       return []
     }
 
     placed = true
+    placedStandalone ||= isStandalone
 
-    return [line]
+    return [`${indent}${line}`]
   })
 
   if (placed) {
     return lines.join('\n')
   }
 
-  // Added after the commands of the hook, the line would set its exit status in their place, and
-  // would never run after an `exec` or `exit`. Before the hook's setup it would miss the PATH a GUI
-  // client lacks, and run twice with husky 8, whose sourced `_/husky.sh` runs the hook again.
   const after = lines.reduce(
-    (last, text, index) => (ownLine(text) === undefined ? last : index + 1),
+    (last, text, index) =>
+      ownLine(text) !== undefined && standalone(lines, index) ? index + 1 : last,
     0,
   )
-  const at =
-    after > 0 ? after : lines.findIndex((text) => !SETUP.test(text) || CONTINUES.test(text))
 
-  if (at === -1) {
-    const kept = lines.join('\n')
-
-    return `${kept === '' || kept.endsWith('\n') ? kept : `${kept}\n`}${line}\n`
-  }
-
-  lines.splice(at, 0, line)
-
-  return lines.join('\n')
+  return (
+    after > 0
+      ? [...lines.slice(0, after), line, ...lines.slice(after)]
+      : beforeCommands(lines, [line])
+  ).join('\n')
 }

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import {
   CLI,
   cliError,
+  FULL_OXLINT,
   LAYOUTS,
   report,
   run,
@@ -19,7 +20,7 @@ function onlyOxlint(dir: string): string[] {
   return [
     `uncheck in ${dir}`,
     '○ sherif skipped, not selected by --only',
-    '▶ oxlint',
+    FULL_OXLINT,
     '✔ oxlint passed',
     '○ oxfmt skipped, not selected by --only',
     '○ tsc skipped, not selected by --only',
