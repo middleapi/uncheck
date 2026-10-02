@@ -54,7 +54,7 @@ npx uncheck init   # or pnpm dlx, yarn dlx, bunx
 3. **Whether to check every commit:** it adds the [`prepare` script](#run-it-before-every-commit) (`postinstall` with Yarn 2+) and writes the hook.
 4. **Which agents run uncheck** [after every turn](#run-it-after-every-agent-turn).
 
-It also adds a `check` script (`uncheck`) and a `fix` script (`uncheck --fix`), unless the project has scripts with those names. Running `init` again only sets up what is missing. A `prepare` script that already runs `uncheck prepare` keeps its hook, and agents that already run uncheck keep their flags.
+It also adds a `check` script (`uncheck`) and a `fix` script (`uncheck --fix`), unless the project has scripts with those names. Running `init` again only sets up what is missing. A `prepare` script that already runs `uncheck prepare` keeps its hook, and agents that already run uncheck keep their flags: change those in the `prepare` script or with `uncheck hooks install`.
 
 `npx uncheck init --yes` takes the default answers, which it needs without a terminal. It installs the missing tools, checks every commit, and sets up the agents whose folders the project has, such as `.claude`, that do not run uncheck yet. It writes no preset config.
 

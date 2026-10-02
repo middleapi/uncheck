@@ -112,7 +112,9 @@ export const init = Command.make(
 
     if (manifest === undefined) {
       return yield* userError(
-        `No package.json in ${cwd} to set up: create one first, for example with \`npm init\``,
+        (yield* fs.exists(manifestFile))
+          ? `${manifestFile} is not a JSON object, fix it and run uncheck init again`
+          : `No package.json in ${cwd} to set up: create one first, for example with \`npm init\``,
       )
     }
 
@@ -202,17 +204,17 @@ export const init = Command.make(
         )))
 
     const dir = yield* agentHookDir(cwd)
-    const offeredAgents = AGENTS.filter((agent) => dir === '' || agent.id !== 'copilot')
-    const unhookedAgents = yield* Effect.filter(offeredAgents, (agent) =>
-      Effect.zipWith(
-        fs.exists(path.join(cwd, path.dirname(agent.path))),
-        hasOwnHook(cwd, agent),
-        (used, hooked) => used && !hooked,
-      ),
+    const hookedAgents = yield* Effect.filter(AGENTS, (agent) => hasOwnHook(cwd, agent))
+    const offeredAgents = AGENTS.filter(
+      (agent) => !hookedAgents.includes(agent) && (dir === '' || agent.id !== 'copilot'),
     )
-    const agents: ReadonlyArray<AgentId> = yes
-      ? unhookedAgents.map((agent) => agent.id)
-      : yield* chooseAgents(offeredAgents, { preselected: unhookedAgents })
+    const usedAgents = yield* Effect.filter(offeredAgents, (agent) =>
+      fs.exists(path.join(cwd, path.dirname(agent.path))),
+    )
+    const agents: ReadonlyArray<AgentId> =
+      yes || offeredAgents.length === 0
+        ? usedAgents.map((agent) => agent.id)
+        : yield* chooseAgents(offeredAgents, { preselected: usedAgents })
 
     // A folder the agent hook cannot name would otherwise fail the run after the install.
     yield* agents.length > 0 ? validateAgentHookDir(dir) : Effect.void
@@ -292,6 +294,12 @@ export const init = Command.make(
           `${dim('○')} ${dim('postinstall also runs where this package is installed, turn it off while packing, for example with pinst')}`,
         )
       }
+    }
+
+    for (const agent of hookedAgents) {
+      yield* Console.log(
+        `${dim('○')} ${bold(agent.name)} ${dim(`${agent.path} already runs uncheck`)}`,
+      )
     }
 
     if (agents.length > 0) {

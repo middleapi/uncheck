@@ -65,8 +65,9 @@ describe('init --yes in a project without the tools', () => {
     const { exitCode, stdout } = await project.uncheck(['init', '--yes'], { env })
 
     expect(exitCode).toBe(0)
-    expect(stdout).toContain('✔ CodeBuddy .codebuddy/settings.json updated\n')
-    expect(stdout).not.toContain('Claude Code')
+    expect(stdout).toContain(
+      '○ Claude Code .claude/settings.json already runs uncheck\n✔ CodeBuddy .codebuddy/settings.json updated\n',
+    )
     expect(JSON.parse(project.read('.claude/settings.json'))).toEqual(fast)
     expect(JSON.parse(project.read('.codebuddy/settings.json'))).toEqual(
       claudeSettings(hookCommand('')),
@@ -174,6 +175,23 @@ describe('init refuses to start', () => {
       ),
     )
   })
+
+  it.each(['{ "name": "app", }\n', '[]\n'])(
+    'with a package.json that is not a JSON object: %j',
+    async (manifest) => {
+      const project = bareProject({ 'package.json': manifest })
+
+      const { exitCode, stdout, stderr } = await project.uncheck(['init', '--yes'])
+
+      expect(exitCode).toBe(1)
+      expect(stdout).toBe('')
+      expect(stderr).toBe(
+        cliError(
+          `${project.path('package.json')} is not a JSON object, fix it and run uncheck init again`,
+        ),
+      )
+    },
+  )
 
   it('without a terminal to ask in, unless told to take the defaults', async () => {
     const project = bareProject()
