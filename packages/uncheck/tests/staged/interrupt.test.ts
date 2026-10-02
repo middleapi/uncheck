@@ -60,6 +60,33 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
     expect(project.exists('.git/uncheck-unstaged')).toBe(false)
   })
 
+  it('puts the unstaged changes back over a clashing fix after Ctrl-C before the fixes are staged', async () => {
+    const project = stagePartially(create({ [file]: VERSIONS.committed }), file)
+    const clashing = VERSIONS.fixed.replace('const e = 1', 'const e = 3')
+
+    project.fake(
+      'oxfmt',
+      `require('node:fs').writeFileSync(${JSON.stringify(project.path(file))}, ${JSON.stringify(clashing)})\n${SLOW_CHECK}`,
+    )
+
+    const { exitCode, stdout } = await project.uncheckInTerminal(
+      ['staged', '--fix', '--only=oxfmt'],
+      { cwd: folder, waitFor: 'waiting', keys: ['\u0003'] },
+    )
+
+    expect(exitCode).toBe(130)
+    expect(report(stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      '○ unstaged changes of src/extra.ts set aside until the checks finish',
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
+    ])
+    expect(project.read(file)).toBe(VERSIONS.unstaged)
+    expect(inIndex(project, file)).toBe(VERSIONS.staged)
+    expect(project.exists('.git/uncheck-unstaged')).toBe(false)
+  })
+
   it('puts the unstaged changes back as they were after Ctrl-C kills `git commit --include` and its index', async () => {
     const other = `${app}src/other.ts`
     const project = stagePartially(

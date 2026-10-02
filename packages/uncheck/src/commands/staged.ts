@@ -92,7 +92,7 @@ export const staged = Command.make(
 
       const partial = yield* partiallyStaged(unstaged, files)
       const outcome = yield* Ref.make(RESTORED)
-      const fixed = yield* Ref.make<ReadonlyArray<string>>([])
+      const fixed = yield* Ref.make<ReadonlyArray<string> | undefined>(fix ? undefined : [])
       const summary = yield* Ref.make<ReadonlyArray<string>>([])
 
       // `git commit <paths>` runs the hook on a temporary index, and the index it leaves
@@ -139,7 +139,7 @@ export const staged = Command.make(
 
           const changed = yield* Ref.get(fixed)
 
-          if (changed.length === 0) {
+          if (changed === undefined || changed.length === 0) {
             return { failure, empty: false }
           }
 
@@ -384,7 +384,7 @@ const putBack = Effect.fn(function* (
   files: ReadonlyArray<string>,
   copies: ReadonlyArray<SetAside>,
   before: string,
-  fixed: Ref.Ref<ReadonlyArray<string>>,
+  fixed: Ref.Ref<ReadonlyArray<string> | undefined>,
   index: string | undefined,
 ) {
   const fs = yield* FileSystem.FileSystem
@@ -408,9 +408,14 @@ const putBack = Effect.fn(function* (
       return yield* restored
     }
 
+    const stagedFixes = yield* Ref.get(fixed)
     const merged = yield* Effect.forEach(
       copies,
-      (entry) => Effect.map(merge(aside, entry, before), (outcome) => ({ ...entry, ...outcome })),
+      (entry) =>
+        Effect.map(merge(aside, entry, before, stagedFixes !== undefined), (outcome) => ({
+          ...entry,
+          ...outcome,
+        })),
       { concurrency: 4 },
     )
     const conflicted = merged.filter(({ clean }) => !clean)
@@ -420,7 +425,7 @@ const putBack = Effect.fn(function* (
     }
 
     const isPartial = new Set(partial)
-    const fixedInFull = (yield* Ref.get(fixed)).filter((file) => !isPartial.has(file))
+    const fixedInFull = (stagedFixes ?? []).filter((file) => !isPartial.has(file))
     // A file saved since its fixes were staged holds an edit made during the run, which a
     // checkout or its unstaged copy would throw away.
     const editedSince = new Set(yield* differFromIndex(cwd, fixedInFull))
@@ -473,6 +478,7 @@ const merge = Effect.fn(function* (
   { cwd, prefix }: Aside,
   { file, target, copy, base }: SetAside,
   before: string,
+  fixesStaged: boolean,
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -489,9 +495,11 @@ const merge = Effect.fn(function* (
     `:0:${prefix}${file}`,
     `${before}:${prefix}${file}`,
   ])).split('\n')
+  // Until the fixes are staged, a fixed file differs from the index just as an edited one does.
   // hash-object turns the CRLF of a blob git keeps that way to LF, so only git can tell whether the
   // file still holds what is staged.
-  const edited = staged !== checked && (yield* differFromIndex(cwd, [file])).length > 0
+  const edited =
+    fixesStaged && staged !== checked && (yield* differFromIndex(cwd, [file])).length > 0
 
   // git keeps a CRLF blob as it is under text=auto, so merging what hash-object stores and writing it
   // back through the filters would turn every line ending of the file to LF.
