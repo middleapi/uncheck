@@ -152,6 +152,9 @@ describe('prepare in every package of a monorepo at once', () => {
     project.write({ [`${HOOK}.lock`]: '' })
 
     const running = folders.map((folder) => prepare(project, [], { cwd: folder, env }))
+    onTestFinished(async () => {
+      await Promise.allSettled(running)
+    })
     const endedEarly = Promise.race(running).then(({ stdout }) => {
       throw new Error(`A run ended while the lock was held:\n${stdout}`)
     })

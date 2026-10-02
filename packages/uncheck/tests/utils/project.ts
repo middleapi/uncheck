@@ -77,6 +77,8 @@ const PROJECT_MARKERS = [
   '.oxlintrc.jsonc',
   'oxlint.config.ts',
   'oxlint.config.mts',
+  '.eslintignore',
+  '.gitignore',
 ]
 
 for (let dir = realpathSync(tmpdir()); ; dir = dirname(dir)) {
@@ -175,9 +177,11 @@ export function environment(overrides: Env = {}): NodeJS.ProcessEnv {
     TERM: 'xterm-256color',
     GIT_CEILING_DIRECTORIES: ROOT,
     GIT_CONFIG_GLOBAL: GIT_CONFIG,
-    // git still reads ~/.config/git/ignore and attributes when GIT_CONFIG_GLOBAL points elsewhere.
+    // git still reads ~/.config/git/ignore and attributes when GIT_CONFIG_GLOBAL points elsewhere, and
+    // /etc/gitattributes under GIT_CONFIG_NOSYSTEM.
     XDG_CONFIG_HOME: join(ROOT, 'config'),
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_ATTR_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'uncheck',
     GIT_AUTHOR_EMAIL: 'uncheck@example.com',
     GIT_COMMITTER_NAME: 'uncheck',
