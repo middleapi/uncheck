@@ -1,5 +1,5 @@
 import type { Effect, FileSystem, Path, PlatformError } from 'effect'
-import type { ChildProcessSpawner } from 'effect/unstable/process'
+import type { ChildProcessSpawner } from 'effect/process'
 
 import type { CannotCheck, NothingToCheck } from './errors.ts'
 import type { ProjectFiles } from './files.ts'

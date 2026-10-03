@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 
 import { Console, Effect, FileSystem, Path, Predicate, Stdio } from 'effect'
-import { Argument, Command, Prompt } from 'effect/unstable/cli'
+import { Argument, Command, Prompt } from 'effect/cli'
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
 import { userError } from '../../errors.ts'

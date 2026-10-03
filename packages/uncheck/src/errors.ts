@@ -1,6 +1,6 @@
 import type { PlatformError } from 'effect'
 import { Data, Effect } from 'effect'
-import { CliError } from 'effect/unstable/cli'
+import { CliError } from 'effect/cli'
 
 import type { CheckOutcome } from './types.ts'
 

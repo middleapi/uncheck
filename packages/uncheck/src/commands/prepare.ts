@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 
 import { Console, Effect, FileSystem, Option, Path, Result, Schedule } from 'effect'
-import { Command, Flag } from 'effect/unstable/cli'
+import { Command, Flag } from 'effect/cli'
 
 import { platformMessage, userError } from '../errors.ts'
 import { readTextIfExists } from '../files.ts'

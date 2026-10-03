@@ -3,7 +3,7 @@ import process from 'node:process'
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Console, Effect } from 'effect'
-import { CliConfig, CliError, CliOutput, Command, GlobalFlag } from 'effect/unstable/cli'
+import { CliConfig, CliError, CliOutput, Command, GlobalFlag } from 'effect/cli'
 
 import pkg from '../package.json' with { type: 'json' }
 import { hooks } from './commands/hooks/index.ts'
