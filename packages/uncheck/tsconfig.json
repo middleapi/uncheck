@@ -1,6 +1,7 @@
 {
   "extends": "uncheck/tsconfig/middleapi/lib",
   "compilerOptions": {
+    "module": "ESNext",
     "types": ["node"]
   },
   "include": ["./package.json", "src"],

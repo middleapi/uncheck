@@ -1,9 +1,9 @@
 import type { Effect, FileSystem, Path, PlatformError } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
 
-import type { CannotCheck, NothingToCheck } from './errors'
-import type { ProjectFiles } from './files'
-import type { Bin } from './tool'
+import type { CannotCheck, NothingToCheck } from './errors.ts'
+import type { ProjectFiles } from './files.ts'
+import type { Bin } from './tool.ts'
 
 export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'tsc'
 

@@ -6,11 +6,11 @@ import { stripVTControlCharacters } from 'node:util'
 import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio, Stream } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
-import { StopBlocked, userError } from '../../errors'
-import { fileKind, isOutside, listChangedFiles, slashedRelative } from '../../files'
-import { git, refusesRepository } from '../../git'
-import { captureLines } from '../../tool'
-import { fixFlag, followLinks, runChecks, selectionFlags } from '../uncheck'
+import { StopBlocked, userError } from '../../errors.ts'
+import { fileKind, isOutside, listChangedFiles, slashedRelative } from '../../files.ts'
+import { git, refusesRepository } from '../../git.ts'
+import { captureLines } from '../../tool.ts'
+import { fixFlag, followLinks, runChecks, selectionFlags } from '../uncheck.ts'
 
 export const run = Command.make(
   'run',

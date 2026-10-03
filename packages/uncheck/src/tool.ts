@@ -4,9 +4,9 @@ import process from 'node:process'
 import { Console, Effect, Path, Predicate, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-import { ancestors, readJson } from './files'
-import { colors } from './style'
-import type { CheckCommand } from './types'
+import { ancestors, readJson } from './files.ts'
+import { colors } from './style.ts'
+import type { CheckCommand } from './types.ts'
 
 export interface Bin {
   readonly name: string

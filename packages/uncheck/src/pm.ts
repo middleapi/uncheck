@@ -2,7 +2,7 @@ import process from 'node:process'
 
 import { Effect, FileSystem, Option, Path } from 'effect'
 
-import { ancestors, fileKind, readJson } from './files'
+import { ancestors, fileKind, readJson } from './files.ts'
 
 // Hooks never get a terminal to ask in, so plain `npx` and `bunx` would download and run the latest
 // release whenever the project has none, and Yarn 1 wraps a run in lines of its own on stdout, where

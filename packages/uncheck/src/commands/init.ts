@@ -4,12 +4,12 @@ import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'eff
 import { Command, Flag, Prompt } from 'effect/unstable/cli'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-import { userError } from '../errors'
-import { ancestors, firstFile, isWorkspaceRoot, readJson } from '../files'
-import { detectExec, detectPackageManager } from '../pm'
-import { bold, dim, green, listed } from '../style'
-import { resolveBin } from '../tool'
-import type { AgentId } from './hooks/install'
+import { userError } from '../errors.ts'
+import { ancestors, firstFile, isWorkspaceRoot, readJson } from '../files.ts'
+import { detectExec, detectPackageManager } from '../pm.ts'
+import { bold, dim, green, listed } from '../style.ts'
+import { resolveBin } from '../tool.ts'
+import type { AgentId } from './hooks/install.ts'
 import {
   AGENTS,
   agentHookCommand,
@@ -18,9 +18,9 @@ import {
   hasOwnHook,
   validateAgentHookDir,
   writeAgentHooks,
-} from './hooks/install'
-import { writePreCommitHook } from './prepare'
-import { cwdFlag } from './uncheck'
+} from './hooks/install.ts'
+import { writePreCommitHook } from './prepare.ts'
+import { cwdFlag } from './uncheck.ts'
 
 const NO_SELECTION = { only: [], required: [], skipped: [] }
 

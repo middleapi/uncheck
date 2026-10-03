@@ -2,7 +2,7 @@ import type { PlatformError } from 'effect'
 import { Data, Effect } from 'effect'
 import { CliError } from 'effect/unstable/cli'
 
-import type { CheckOutcome } from './types'
+import type { CheckOutcome } from './types.ts'
 
 export class NothingToCheck extends Data.TaggedError('NothingToCheck')<{
   readonly reason: string

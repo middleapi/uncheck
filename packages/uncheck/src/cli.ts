@@ -5,12 +5,12 @@ import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Console, Effect } from 'effect'
 import { CliConfig, CliError, CliOutput, Command, GlobalFlag } from 'effect/unstable/cli'
 
-import pkg from '../package.json'
-import { hooks } from './commands/hooks'
-import { init } from './commands/init'
-import { prepare } from './commands/prepare'
-import { staged } from './commands/staged'
-import { uncheck } from './commands/uncheck'
+import pkg from '../package.json' with { type: 'json' }
+import { hooks } from './commands/hooks/index.ts'
+import { init } from './commands/init.ts'
+import { prepare } from './commands/prepare.ts'
+import { staged } from './commands/staged.ts'
+import { uncheck } from './commands/uncheck.ts'
 
 // Any failed write (a reader gone after `| head`, a closed terminal, a full disk) would otherwise end
 // the run before `staged` puts unstaged changes back, so output errors are ignored.

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "prepare": "pnpm run check prepare --pre-commit",
-    "check": "pnpm exec --filter=./packages/uncheck unbuild --stub && uncheck",
+    "check": "pnpm exec --filter=./packages/uncheck obuild --stub && uncheck",
     "fix": "pnpm run check --fix",
     "test": "pnpm run -r test && vitest run",
     "test:coverage": "pnpm run -r test && vitest run --coverage",
@@ -20,12 +20,12 @@
     "@vitest/coverage-v8": "^5.0.1",
     "bumpp": "^12.3.0",
     "changelogithub": "^15.0.5",
+    "obuild": "^0.4.43",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
     "pkg-pr-new": "^0.0.88",
     "sherif": "^1.13.0",
     "typescript": "^7.0.2",
-    "unbuild": "^3.6.1",
     "uncheck": "workspace:*",
     "vitest": "^5.0.1"
   },

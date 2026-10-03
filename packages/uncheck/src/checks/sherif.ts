@@ -2,10 +2,10 @@ import process from 'node:process'
 
 import { Effect, Path, Predicate } from 'effect'
 
-import { CannotCheck, NothingToCheck } from '../errors'
-import { isWorkspaceRoot, readJson } from '../files'
-import { resolveBin } from '../tool'
-import type { Check } from '../types'
+import { CannotCheck, NothingToCheck } from '../errors.ts'
+import { isWorkspaceRoot, readJson } from '../files.ts'
+import { resolveBin } from '../tool.ts'
+import type { Check } from '../types.ts'
 
 const WORKSPACE_FILES = new Set(['package.json', 'pnpm-workspace.yaml'])
 

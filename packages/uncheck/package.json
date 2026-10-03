@@ -49,7 +49,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "prepack": "unbuild"
+    "prepack": "obuild"
   },
   "devDependencies": {
     "@effect/platform-node": "^4.0.0-rc.116",
