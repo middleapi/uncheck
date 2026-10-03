@@ -1,6 +1,6 @@
 {
   "name": "uncheck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One command to lint, format check, typecheck and check monorepo consistency with oxlint, oxfmt, tsc and sherif",
   "keywords": [
     "git hooks",
