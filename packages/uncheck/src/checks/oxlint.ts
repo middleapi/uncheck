@@ -1,8 +1,8 @@
 import { Effect } from 'effect'
 
-import { NothingToCheck } from '../errors'
-import { argvBatches, resolveBin } from '../tool'
-import type { Check } from '../types'
+import { NothingToCheck } from '../errors.ts'
+import { argvBatches, resolveBin } from '../tool.ts'
+import type { Check } from '../types.ts'
 
 export const oxlint: Check = {
   name: 'oxlint',

@@ -3,12 +3,20 @@ import process from 'node:process'
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
 import { Command, Flag } from 'effect/unstable/cli'
 
-import { userError } from '../errors'
-import { inNodeModules } from '../files'
-import { git, gitBytes, GitFailed, gitLocation, gitPaths, rawDiff, refusesRepository } from '../git'
-import { dim, green, listFiles, red } from '../style'
-import { argvBatches, logLines } from '../tool'
-import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck'
+import { userError } from '../errors.ts'
+import { inNodeModules } from '../files.ts'
+import {
+  git,
+  gitBytes,
+  GitFailed,
+  gitLocation,
+  gitPaths,
+  rawDiff,
+  refusesRepository,
+} from '../git.ts'
+import { dim, green, listFiles, red } from '../style.ts'
+import { argvBatches, logLines } from '../tool.ts'
+import { checkPaths, cwdFlag, fixFlag, selectionFlags, validateSelection } from './uncheck.ts'
 
 /** What became of the unstaged hunks that were set aside while the checks ran. */
 interface Unstaged {

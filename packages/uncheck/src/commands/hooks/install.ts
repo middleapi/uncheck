@@ -4,13 +4,13 @@ import { Console, Effect, FileSystem, Path, Predicate, Stdio } from 'effect'
 import { Argument, Command, Prompt } from 'effect/unstable/cli'
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser'
 
-import { userError } from '../../errors'
-import { readJson, readTextIfExists } from '../../files'
-import { gitLocation } from '../../git'
-import { detectExec, invokes } from '../../pm'
-import { bold, dim, green } from '../../style'
-import type { CheckSelection } from '../uncheck'
-import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck'
+import { userError } from '../../errors.ts'
+import { readJson, readTextIfExists } from '../../files.ts'
+import { gitLocation } from '../../git.ts'
+import { detectExec, invokes } from '../../pm.ts'
+import { bold, dim, green } from '../../style.ts'
+import type { CheckSelection } from '../uncheck.ts'
+import { cwdFlag, selectionArgs, selectionFlags, validateSelection } from '../uncheck.ts'
 
 // Copilot (30 s) and CodeBuddy (60 s) kill a typecheck at their default timeout and end the turn as
 // if no hook ran.

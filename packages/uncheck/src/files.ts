@@ -4,8 +4,8 @@ import { Effect, FileSystem, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/unstable/process'
 import { Minimatch } from 'minimatch'
 
-import { userError } from './errors'
-import { gitPaths, rawDiff } from './git'
+import { userError } from './errors.ts'
+import { gitPaths, rawDiff } from './git.ts'
 
 export type ProjectFiles = Effect.Effect<
   ReadonlyArray<string>,

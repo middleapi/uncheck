@@ -1,7 +1,12 @@
-import { defineBuildConfig } from 'unbuild'
+import { defineBuildConfig } from 'obuild/config'
 
 export default defineBuildConfig({
-  rollup: {
-    inlineDependencies: true,
-  },
+  entries: [
+    {
+      type: 'bundle',
+      input: ['./src/bin.ts', './src/presets/oxfmt.ts', './src/presets/oxlint.ts'],
+      minifyLibs: true,
+      dts: { sourcemap: false },
+    },
+  ],
 })

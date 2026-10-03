@@ -1,7 +1,7 @@
 import { Command } from 'effect/unstable/cli'
 
-import { install } from './install'
-import { run } from './run'
+import { install } from './install.ts'
+import { run } from './run.ts'
 
 export const hooks = Command.make('hooks').pipe(
   Command.withDescription('Agent hooks: `install` writes the configs, `run` is what they execute'),

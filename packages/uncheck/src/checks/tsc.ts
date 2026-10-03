@@ -3,7 +3,7 @@ import { posix } from 'node:path'
 import { Cache, Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import { parse as parseJsonc } from 'jsonc-parser'
 
-import { CannotCheck, NothingToCheck } from '../errors'
+import { CannotCheck, NothingToCheck } from '../errors.ts'
 import {
   ancestors,
   fileKind,
@@ -12,11 +12,11 @@ import {
   listProjectFiles,
   readJson,
   resolveFolders,
-} from '../files'
-import { git } from '../git'
-import type { Bin } from '../tool'
-import { argvBatches, resolveBin } from '../tool'
-import type { Check } from '../types'
+} from '../files.ts'
+import { git } from '../git.ts'
+import type { Bin } from '../tool.ts'
+import { argvBatches, resolveBin } from '../tool.ts'
+import type { Check } from '../types.ts'
 
 /**
  * TypeScript replaces this token at the start of `files`, `include`, `exclude` and path-valued

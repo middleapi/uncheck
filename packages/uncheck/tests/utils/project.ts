@@ -58,8 +58,7 @@ export interface Run {
 }
 
 const PACKAGE = fileURLToPath(new URL('../..', import.meta.url))
-const REGISTER = fileURLToPath(new URL('register.ts', import.meta.url))
-export const CLI = [process.execPath, '--import', REGISTER, join(PACKAGE, 'src/bin.ts')] as const
+export const CLI = [process.execPath, join(PACKAGE, 'src/bin.ts')] as const
 
 /** What the CLI and the tools it runs read above a project, so one above the tests leaks into them all. */
 const PROJECT_MARKERS = [
