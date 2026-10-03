@@ -52,7 +52,7 @@
     "prepack": "obuild"
   },
   "devDependencies": {
-    "@effect/platform-node": "^4.0.0-rc.116",
+    "@effect/platform-node": "^4.0.0",
     "effect": "^4.0.0-rc.116",
     "jsonc-parser": "^3.3.1",
     "minimatch": "^10.2.6",
