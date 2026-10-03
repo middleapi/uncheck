@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import process from 'node:process'
 
 import { Console, Effect, Path, Predicate, Stream } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 import { ancestors, readJson } from './files.ts'
 import { colors } from './style.ts'

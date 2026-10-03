@@ -4,7 +4,7 @@ import process from 'node:process'
 import { stripVTControlCharacters } from 'node:util'
 
 import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio, Stream } from 'effect'
-import { Command, Flag } from 'effect/unstable/cli'
+import { Command, Flag } from 'effect/cli'
 
 import { StopBlocked, userError } from '../../errors.ts'
 import { fileKind, isOutside, listChangedFiles, slashedRelative } from '../../files.ts'

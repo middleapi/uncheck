@@ -4,9 +4,9 @@ import process from 'node:process'
 
 import type { PlatformError } from 'effect'
 import { Console, Duration, Effect, Fiber, FileSystem, Semaphore } from 'effect'
-import type { CliError } from 'effect/unstable/cli'
-import { Argument, Command, Flag } from 'effect/unstable/cli'
-import type { ChildProcessSpawner } from 'effect/unstable/process'
+import type { CliError } from 'effect/cli'
+import { Argument, Command, Flag } from 'effect/cli'
+import type { ChildProcessSpawner } from 'effect/process'
 
 import { oxfmt } from '../checks/oxfmt.ts'
 import { oxlint } from '../checks/oxlint.ts'

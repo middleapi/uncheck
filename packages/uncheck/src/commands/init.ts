@@ -1,8 +1,8 @@
 import process from 'node:process'
 
 import { Console, Effect, FileSystem, Option, Path, Predicate, Stdio } from 'effect'
-import { Command, Flag, Prompt } from 'effect/unstable/cli'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { Command, Flag, Prompt } from 'effect/cli'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 import { userError } from '../errors.ts'
 import { ancestors, firstFile, isWorkspaceRoot, readJson } from '../files.ts'

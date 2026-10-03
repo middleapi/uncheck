@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 
 import { Data, Effect, Stream } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 export class GitFailed extends Data.TaggedError('GitFailed')<{
   readonly args: ReadonlyArray<string>

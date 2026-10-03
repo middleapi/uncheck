@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs'
 
 import { Effect, FileSystem, Path, Predicate } from 'effect'
-import type { ChildProcessSpawner } from 'effect/unstable/process'
+import type { ChildProcessSpawner } from 'effect/process'
 import { Minimatch } from 'minimatch'
 
 import { userError } from './errors.ts'

@@ -1,7 +1,7 @@
 import process from 'node:process'
 
 import { Console, Effect, FileSystem, Path, Ref } from 'effect'
-import { Command, Flag } from 'effect/unstable/cli'
+import { Command, Flag } from 'effect/cli'
 
 import { userError } from '../errors.ts'
 import { inNodeModules } from '../files.ts'
