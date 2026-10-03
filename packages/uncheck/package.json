@@ -56,8 +56,8 @@
     "effect": "^4.0.0",
     "jsonc-parser": "^3.3.1",
     "minimatch": "^10.2.6",
-    "oxfmt": "^0.68.0",
-    "oxlint": "^1.83.0",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
     "sherif": "^1.13.0",
     "typescript": "^7.0.2"
   },
