@@ -1,9 +1,11 @@
 {
   "name": "uncheck",
   "version": "0.1.1",
-  "description": "One command to lint, format check, typecheck and check monorepo consistency with oxlint, oxfmt, tsc and sherif",
+  "description": "One command to lint, format check, typecheck, find unused code and check monorepo consistency with oxlint, oxfmt, tsc, knip and sherif",
   "keywords": [
+    "dead code",
     "git hooks",
+    "knip",
     "lint-staged",
     "monorepo",
     "oxc",
@@ -14,7 +16,9 @@
     "tsc",
     "typecheck",
     "uncheck",
-    "unified check command"
+    "unified check command",
+    "unused dependencies",
+    "unused exports"
   ],
   "license": "MIT",
   "repository": {
@@ -55,6 +59,7 @@
     "@effect/platform-node": "^4.0.0",
     "effect": "^4.0.0",
     "jsonc-parser": "^3.3.1",
+    "knip": "^6.39.0",
     "minimatch": "^10.2.6",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
@@ -62,12 +67,16 @@
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
+    "knip": ">=6.0.0",
     "oxfmt": "*",
     "oxlint": ">=1.60.0",
     "sherif": ">=1.10.0",
     "typescript": "*"
   },
   "peerDependenciesMeta": {
+    "knip": {
+      "optional": true
+    },
     "oxfmt": {
       "optional": true
     },

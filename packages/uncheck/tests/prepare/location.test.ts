@@ -297,6 +297,7 @@ describe('prepare with --cwd naming a symlink to a package', () => {
       '▶ oxlint --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '○ unstaged changes of src/extra.ts restored',
       '✔ all checks passed (oxlint)',

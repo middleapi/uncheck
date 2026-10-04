@@ -20,6 +20,7 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '○ oxlint skipped, disabled with --skip=oxlint',
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✔ all checks passed (oxfmt)',
     ])
@@ -40,8 +41,9 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, no tsconfig.json covers the given files',
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc no tsconfig.json covers the given files',
     ])
 
     const required = await stopHook(project, app, CLAUDE_CODE_STOP, {
@@ -55,6 +57,7 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '✘ tsc no tsconfig.json covers the given files',
       '✘ 1 of 1 checks failed: tsc',
     ])

@@ -41,6 +41,7 @@ describe.each(LAYOUTS)('uncheck staged with many files in a $name', ({ create, a
       '▶ oxfmt --no-error-on-unmatched-pattern [143 files]',
       '▶ oxfmt --no-error-on-unmatched-pattern [14 files]',
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ staged the fixes to [150 files]',
       '○ unstaged changes of [150 files] restored',

@@ -121,6 +121,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       '✘ oxlint failed',
       FULL_OXFMT,
       '✘ oxfmt failed',
+      '○ knip skipped, not installed',
       tsc,
       '✘ tsc failed',
       `✘ 3 of ${checks.length} checks failed: oxlint, oxfmt, tsc`,
@@ -147,6 +148,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       `▶ oxlint --no-error-on-unmatched-pattern ${app}src/log.ts ${app}src/warn.ts`,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
@@ -169,6 +171,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       '✘ oxlint failed',
       FULL_OXFMT_FIX,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
     ])

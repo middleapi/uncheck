@@ -23,6 +23,7 @@ function onlyOxlint(dir: string): string[] {
     FULL_OXLINT,
     '✔ oxlint passed',
     '○ oxfmt skipped, not selected by --only',
+    '○ knip skipped, not selected by --only',
     '○ tsc skipped, not selected by --only',
     '✔ all checks passed (oxlint)',
   ]

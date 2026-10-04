@@ -116,6 +116,7 @@ describe.each(LAYOUTS)('uncheck staged interrupted in a $name', ({ create, app, 
       '○ oxlint skipped, not selected by --only',
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/other.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       tsc,
       '○ unstaged changes of src/extra.ts restored',
     ])

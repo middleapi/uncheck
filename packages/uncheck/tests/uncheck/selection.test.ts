@@ -24,6 +24,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       tsc,
       '✔ tsc passed',
       '✔ all checks passed (oxlint, tsc)',
@@ -42,6 +43,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✔ all checks passed (${checks.filter((name) => name !== 'oxfmt' && name !== 'tsc').join(', ')})`,
     ])
@@ -59,6 +61,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not installed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
@@ -72,6 +75,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       FULL_OXLINT,
       '✔ oxlint passed',
       '✘ oxfmt not installed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✘ 1 of 2 checks failed: oxfmt',
     ])
@@ -94,6 +98,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '✔ oxlint passed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
@@ -107,6 +112,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '--skip=sherif',
       '--skip=oxlint',
       '--skip=oxfmt',
+      '--skip=knip',
       '--skip=tsc',
     ])
 
@@ -115,8 +121,9 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '○ sherif skipped, disabled with --skip=sherif',
       '○ oxlint skipped, disabled with --skip=oxlint',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
+      '○ knip skipped, disabled with --skip=knip',
       '○ tsc skipped, disabled with --skip=tsc',
-      '✘ nothing to check: sherif disabled with --skip=sherif, oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
+      '✘ nothing to check: sherif disabled with --skip=sherif, oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, knip disabled with --skip=knip, tsc disabled with --skip=tsc',
     ])
     expect(exitCode).toBe(1)
   })
@@ -130,7 +137,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       `uncheck in ${project.dir}`,
       ...SKIPPED_BESIDE_TSC,
       NOT_COVERED,
-      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc no tsconfig.json covers the given files',
     ])
     expect(exitCode).toBe(1)
   })
@@ -148,7 +155,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       `uncheck in ${project.dir}`,
       ...SKIPPED_BESIDE_TSC,
       NOT_COVERED,
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc no tsconfig.json covers the given files',
     ])
     expect(exitCode).toBe(0)
   })
@@ -188,7 +195,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
         `uncheck in ${project.dir}`,
         ...SKIPPED_BESIDE_TSC,
         `○ tsc skipped, ${tscReason}`,
-        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${tscReason}`,
+        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc ${tscReason}`,
       ])
       expect(exitCode).toBe(expectedExitCode)
     },
@@ -206,8 +213,9 @@ describe('uncheck check selection', () => {
       '○ sherif skipped, not installed',
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, no tsconfig.json found',
-      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, knip not installed, tsc no tsconfig.json found',
     ])
     expect(exitCode).toBe(1)
   })
@@ -235,8 +243,9 @@ describe('uncheck check selection', () => {
         '○ sherif skipped, not installed',
         '○ oxlint skipped, not installed',
         '○ oxfmt skipped, not installed',
+        '○ knip skipped, not installed',
         '○ tsc skipped, no tsconfig.json found',
-        '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+        '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, knip not installed, tsc no tsconfig.json found',
       ])
       expect(exitCode).toBe(1)
     },
@@ -276,7 +285,7 @@ describe('uncheck check selection', () => {
     expect(stdout).toContain('USAGE')
     expect(stderr).toBe(
       cliError(
-        'Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "tsc"',
+        'Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "knip" | "tsc"',
       ),
     )
     expect(exitCode).toBe(1)

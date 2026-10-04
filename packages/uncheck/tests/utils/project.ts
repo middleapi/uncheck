@@ -18,9 +18,11 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 
+/** The tools a project gets unless a test picks its own. */
 export const TOOLS = ['sherif', 'oxlint', 'oxfmt', 'typescript'] as const
 
-export type Tool = (typeof TOOLS)[number]
+/** knip would report most of the projects' devDependencies as unused, so tests install it themselves. */
+export type Tool = (typeof TOOLS)[number] | 'knip'
 
 export type Files = Readonly<Record<string, string | object | null>>
 
@@ -653,4 +655,5 @@ export const SKIPPED_FOR_DELETIONS = [
   '○ sherif skipped, no package.json among the given files',
   '○ oxlint skipped, only deleted files',
   '○ oxfmt skipped, only deleted files',
+  '○ knip skipped, not installed',
 ]

@@ -21,7 +21,7 @@
   </a>
 </div>
 
-One command to lint, format check and type check your project, and keep a monorepo consistent. `uncheck` runs the oxlint, oxfmt, tsc and sherif you installed, so you, your git hooks and your coding agents all run the same check.
+One command to lint, format check and type check your project, find unused code, and keep a monorepo consistent. `uncheck` runs the oxlint, oxfmt, knip, tsc and sherif you installed, so you, your git hooks and your coding agents all run the same check.
 
 ```sh
 npx uncheck init    # set up your project, step by step
@@ -63,7 +63,7 @@ uncheck init in /home/me/my-app
 Run npm run check to check the project, and npm run fix to fix what can be fixed.
 ```
 
-That's it! TypeScript is up to you: tsc joins in once you install it and add a `tsconfig.json`. `init` keeps any `check` or `fix` scripts you already have, and running it again only sets up what's missing.
+That's it! TypeScript and knip are up to you: tsc joins in once you install it and add a `tsconfig.json`, and knip once you install it. `init` keeps any `check` or `fix` scripts you already have, and running it again only sets up what's missing.
 
 <details>
 <summary>Set up without questions</summary>
@@ -87,6 +87,7 @@ uncheck in /home/me/my-app
 ▶ oxfmt --check --no-error-on-unmatched-pattern
 Format issues found in above 2 files. Run without `--check` to fix.
 ✘ oxfmt failed 65ms
+○ knip skipped, not installed
 ▶ tsc -p tsconfig.json --noEmit
 src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.
 ✘ tsc failed 384ms
@@ -97,12 +98,13 @@ src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'numbe
 
 A check runs only when your project uses its tool, with the version and config you already have:
 
-| Check    | Checks               | Runs when                                                                                                  |
-| -------- | -------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `sherif` | monorepo consistency | [sherif](https://github.com/QuiiBz/sherif) is installed (needs 1.10+), at the [workspace root](#monorepos) |
-| `oxlint` | lint rules           | [oxlint](https://oxc.rs) is installed (needs 1.60+)                                                        |
-| `oxfmt`  | formatting           | [oxfmt](https://oxc.rs) is installed                                                                       |
-| `tsc`    | types                | the project has a `tsconfig.json`                                                                          |
+| Check    | Checks                                 | Runs when                                                                                                  |
+| -------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `sherif` | monorepo consistency                   | [sherif](https://github.com/QuiiBz/sherif) is installed (needs 1.10+), at the [workspace root](#monorepos) |
+| `oxlint` | lint rules                             | [oxlint](https://oxc.rs) is installed (needs 1.60+)                                                        |
+| `oxfmt`  | formatting                             | [oxfmt](https://oxc.rs) is installed                                                                       |
+| `knip`   | unused files, exports and dependencies | [knip](https://knip.dev) is installed (needs 6+), in a folder with a `package.json`                        |
+| `tsc`    | types                                  | the project has a `tsconfig.json`                                                                          |
 
 uncheck exits with code 1 when a check fails, when no check could run, or when there's a `tsconfig.json` but no TypeScript, so a broken setup never passes quietly.
 
@@ -112,7 +114,7 @@ uncheck exits with code 1 when a check fails, when no check could run, or when t
 npx uncheck --fix   # or npm run fix
 ```
 
-This applies oxlint's fixes, rewrites the formatting with oxfmt, and applies [sherif's fixes](#monorepos), after which sherif runs your install. Type errors are yours to fix.
+This applies oxlint's fixes, rewrites the formatting with oxfmt, and applies [sherif's fixes](#monorepos), after which sherif runs your install. Type errors are yours to fix, and so is what knip finds: `knip --fix` rewrites exports and dependencies across the whole project, so uncheck leaves it to you to run and review.
 
 ### Pick the checks
 
@@ -140,7 +142,7 @@ Every tool gets the same file list, so they never disagree about what a path mea
 - Folders and globs match the files git knows about: tracked, or new and not ignored.
 - A path that exists is never read as a glob, so `'app/[id]/page.tsx'` just works.
 - A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
-- tsc checks only the projects that include those files, and the projects that depend on them. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among them.
+- tsc checks only the projects that include those files, and the projects that depend on them. knip checks the whole project, unless every file is an image, a font or audio. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among them.
 
 ## Check every commit
 
@@ -167,6 +169,7 @@ uncheck staged in /home/me/my-app
 ✔ oxlint passed 111ms
 ▶ oxfmt --no-error-on-unmatched-pattern src/y.ts
 ✔ oxfmt passed 106ms
+○ knip skipped, not installed
 ○ tsc skipped, no tsconfig.json found
 ✔ staged the fixes to src/y.ts
 
@@ -187,7 +190,7 @@ Your work stays safe. After `git add -p`, the unstaged part of a file is set asi
 
 Good to know:
 
-- **tsc checks whole projects as they are on disk**, so it can report errors in files you didn't stage, or pass thanks to one you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook fast and limited to what you staged.
+- **tsc and knip check whole projects as they are on disk**, so they can report problems in files you didn't stage, such as a scratch file knip finds unused, or pass thanks to one you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook fast and limited to what you staged.
 - **Yarn 2+** doesn't run `prepare`, so use `postinstall` (`init` does this for you). In a package you publish, turn `postinstall` off while packing, for example with [pinst](https://github.com/typicode/pinst).
 - **Production installs** that skip devDependencies (`npm ci --omit=dev`, `NODE_ENV=production`) still run the script, but without uncheck. Append `|| exit 0` so they pass: `"prepare": "uncheck prepare --pre-commit || exit 0"`.
 
@@ -223,7 +226,7 @@ In a script, name them instead: `npx uncheck hooks install claude cursor`.
 
 When the agent finishes a turn, the hook checks the files changed since the last commit and fixes what oxlint and oxfmt can. If problems remain, it sends the agent back to fix them, but never twice in a row, so an agent can't get stuck in a loop. Outside git, or before the first commit, it checks and fixes the whole folder.
 
-- **Too slow or noisy?** tsc checks whole projects, so it can flag type errors the agent didn't cause. Leave type checks to CI: `npx uncheck hooks install --only=oxlint --only=oxfmt`. Install again to change the flags.
+- **Too slow or noisy?** tsc and knip check whole projects, so they can flag problems the agent didn't cause. Leave them to CI: `npx uncheck hooks install --only=oxlint --only=oxfmt`. Install again to change the flags.
 - **Avoid double runs.** Cursor and Copilot CLI also run the hooks in `.claude/settings.json`. If you set up `claude`, add `cursor` or `copilot` only where they don't read that file.
 - **Your config is kept.** Other hooks and settings stay, but comments in the file are lost.
 
@@ -232,6 +235,8 @@ When the agent finishes a turn, the hook checks the files changed since the last
 Run both `init` and uncheck at the workspace root: the folder whose `package.json` has `workspaces` or whose `pnpm-workspace.yaml` lists `packages`. One run checks every package.
 
 **sherif** checks the workspace as a whole, so it runs only at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). It only reports in the hooks and when `CI` is set, so run `npx uncheck --fix` locally to apply its fixes. Leave out `"fix": true`, or every run that only reports fails.
+
+**knip** analyzes the workspace as a whole and reads its config at the root. In a package, uncheck runs it from the workspace root with `--workspace`, so it reports only on that package.
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`, so a config with another name, like `tsconfig.app.json`, is checked when a reference leads to it. Projects linked by `references` are built together with one `tsc -b`, and the rest are checked with `tsc -p --noEmit`.
 

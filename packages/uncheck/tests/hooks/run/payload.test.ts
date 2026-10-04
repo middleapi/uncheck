@@ -43,6 +43,7 @@ describe.each(LAYOUTS)('hooks run reads the payload in a $name', ({ create, app 
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts',
         '✘ oxfmt failed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',

@@ -4,6 +4,7 @@ import { monorepoWithMismatchedVersions } from './utils'
 const OTHERS_NOT_SELECTED = [
   '○ oxlint skipped, not selected by --only',
   '○ oxfmt skipped, not selected by --only',
+  '○ knip skipped, not selected by --only',
   '○ tsc skipped, not selected by --only',
 ]
 
@@ -12,7 +13,7 @@ function sherifSkipped(dir: string, reason: string): string[] {
     `uncheck in ${dir}`,
     `○ sherif skipped, ${reason}`,
     ...OTHERS_NOT_SELECTED,
-    `✘ nothing to check: sherif ${reason}, oxlint not selected by --only, oxfmt not selected by --only, tsc not selected by --only`,
+    `✘ nothing to check: sherif ${reason}, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc not selected by --only`,
   ]
 }
 
@@ -28,6 +29,7 @@ describe.each(LAYOUTS)('uncheck sherif in a $name', ({ create, app }) => {
       FULL_OXLINT,
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
@@ -113,6 +115,7 @@ describe('uncheck sherif in a single repo', () => {
       '✔ oxlint passed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
       '✘ 1 of 4 checks failed: sherif',

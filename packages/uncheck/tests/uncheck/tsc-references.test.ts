@@ -524,6 +524,7 @@ describe('tsc project references with the real compiler in a single repo', () =>
       '✔ oxlint passed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',
       '✘ 1 of 3 checks failed: tsc',

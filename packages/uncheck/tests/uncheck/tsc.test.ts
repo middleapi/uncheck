@@ -35,7 +35,7 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       `uncheck in ${project.path(app, '.')}`,
       ...SKIPPED_BESIDE_TSC,
       `○ tsc skipped, ${uncoveredFolder}`,
-      `✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${uncoveredFolder}`,
+      `✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc ${uncoveredFolder}`,
     ])
   })
 
@@ -214,7 +214,7 @@ describe('tsc with the real compiler in a single repo', () => {
       `uncheck in ${project.path('scripts')}`,
       ...SKIPPED_BESIDE_TSC,
       '○ tsc skipped, no tsconfig.json covers this folder',
-      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers this folder',
+      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc no tsconfig.json covers this folder',
     ])
   })
 

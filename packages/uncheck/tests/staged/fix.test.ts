@@ -22,6 +22,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       tsc,
       '✔ tsc passed',
       '✔ staged the fixes to src/index.ts',
@@ -172,8 +173,9 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, only deleted files',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt only deleted files, tsc not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt only deleted files, knip not selected by --only, tsc not selected by --only',
     ])
 
     project.write({ [`${app}src/link.ts`]: null })
@@ -229,6 +231,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ staged the fixes to src/extra.ts',
       '✔ all checks passed (oxlint, oxfmt)',
@@ -261,6 +264,7 @@ describe.each(LAYOUTS)('uncheck staged --fix in a $name', ({ create, app, tsc })
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern !x.ts -x.ts routes/[id]/page.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ staged the fixes to !x.ts -x.ts routes/[id]/page.ts',
       '✔ all checks passed (oxlint, oxfmt)',

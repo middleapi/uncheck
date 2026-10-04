@@ -13,22 +13,30 @@ export interface Bin {
   readonly entry: string
 }
 
+interface PnpApi {
+  readonly resolveToUnqualified: (request: string, issuer: string) => string | null
+}
+
 /**
  * Locates the `binName` executable of `pkg` the way Node resolves packages from `cwd`: the nearest
  * `node_modules/<pkg>`, whose manifest is read directly so its `exports` map does not matter, and,
- * under Yarn PnP, first wherever its resolver finds `<pkg>/package.json`.
+ * under Yarn PnP, first in the folder its resolver finds for `pkg`.
  */
 export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName: string = pkg) {
   const path = yield* Path.Path
 
   for (const dir of ancestors(path, cwd)) {
-    // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts.
+    // Yarn PnP installs have no node_modules, only the resolver it loads into processes it starts. Its
+    // own API finds the folder of a package whose `exports` leave out package.json, as knip's do.
     const resolved =
       process.versions.pnp === undefined
         ? undefined
-        : yield* Effect.try(() =>
-            createRequire(path.join(dir, 'package.json')).resolve(`${pkg}/package.json`),
-          ).pipe(Effect.orElseSucceed(() => undefined))
+        : yield* Effect.try(() => {
+            const issuer = path.join(dir, 'package.json')
+            const pnpapi: PnpApi = createRequire(issuer)('pnpapi')
+
+            return path.join(pnpapi.resolveToUnqualified(pkg, issuer)!, 'package.json')
+          }).pipe(Effect.orElseSucceed(() => undefined))
     const manifestPath = resolved ?? path.join(dir, 'node_modules', pkg, 'package.json')
     const manifest = yield* readJson(manifestPath)
 

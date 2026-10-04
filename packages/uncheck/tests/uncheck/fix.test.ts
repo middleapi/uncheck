@@ -27,6 +27,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       '✔ oxlint passed',
       FULL_OXFMT_FIX,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       tsc,
       '✔ tsc passed',
       `✔ all checks passed (${checks.join(', ')})`,
@@ -80,6 +81,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       FULL_OXLINT,
       '✘ oxlint failed',
       '✘ oxfmt not installed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 2 of ${checks.length - 1} checks failed: oxlint, oxfmt`,
       '  rerun with `--fix` to apply oxlint fixes',
@@ -102,6 +104,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       FULL_OXLINT_FIX,
       '✘ oxlint failed',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✘ 1 of 1 checks failed: oxlint',
     ])
@@ -154,6 +157,7 @@ describe('uncheck --fix in a monorepo', () => {
       '✔ sherif passed',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (sherif)',
     ])
@@ -189,6 +193,7 @@ describe('uncheck --fix in a monorepo', () => {
       '✔ oxlint passed',
       FULL_OXFMT_FIX,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✘ 1 of 3 checks failed: sherif',
     ])
@@ -211,6 +216,7 @@ describe('uncheck --fix in a monorepo', () => {
       '✘ sherif failed',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✘ 1 of 1 checks failed: sherif',
     ])

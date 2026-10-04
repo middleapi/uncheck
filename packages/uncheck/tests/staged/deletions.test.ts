@@ -42,6 +42,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
       '✔ oxlint passed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern scripts/utils.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 3 checks failed: tsc',
@@ -88,8 +89,9 @@ describe('uncheck staged with deleted files in a single repo', () => {
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, only deleted files',
       '○ oxfmt skipped, only deleted files',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
-      '○ nothing to check: sherif not selected by --only, oxlint only deleted files, oxfmt only deleted files, tsc not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint only deleted files, oxfmt only deleted files, knip not selected by --only, tsc not selected by --only',
     ])
     expect(exitCode).toBe(0)
   })

@@ -78,6 +78,7 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
       '✘ oxlint failed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
       '  rerun with `--fix` to apply oxlint fixes',
@@ -172,6 +173,7 @@ describe('uncheck output', () => {
       '○ oxlint skipped, not selected by --only',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])

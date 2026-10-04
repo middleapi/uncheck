@@ -66,6 +66,7 @@ describe.each(LAYOUTS)(
         '▶ oxlint --no-error-on-unmatched-pattern src/extra.ts',
         '✘ oxlint failed',
         '○ oxfmt skipped, not selected by --only',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         strandedLine,
         '✘ 1 of 1 checks failed: oxlint',

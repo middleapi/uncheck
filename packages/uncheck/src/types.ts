@@ -5,7 +5,7 @@ import type { CannotCheck, NothingToCheck } from './errors.ts'
 import type { ProjectFiles } from './files.ts'
 import type { Bin } from './tool.ts'
 
-export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'tsc'
+export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'knip' | 'tsc'
 
 export interface CheckOutcome {
   readonly name: CheckName

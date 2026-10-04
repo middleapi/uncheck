@@ -73,6 +73,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '✔ oxlint passed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       tsc,
       '✔ tsc passed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
@@ -97,6 +98,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '✘ oxlint failed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts',
       '✘ oxfmt failed',
+      '○ knip skipped, not installed',
       tsc,
       '✘ tsc failed',
       '✘ 3 of 3 checks failed: oxlint, oxfmt, tsc',
@@ -124,6 +126,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ oxlint skipped, disabled with --skip=oxlint',
       '▶ oxfmt --check --no-error-on-unmatched-pattern README.md src/extra.ts',
       '✘ oxfmt failed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✘ 1 of 1 checks failed: oxfmt',
       '  rerun with `--fix` to apply oxfmt fixes',
@@ -139,8 +142,9 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, no tsconfig.json covers the given files',
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, knip not selected by --only, tsc no tsconfig.json covers the given files',
     ])
 
     const required = await project.uncheck(['staged', '--only=tsc', '--require=tsc'], {
@@ -153,6 +157,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
+      '○ knip skipped, not selected by --only',
       '✘ tsc no tsconfig.json covers the given files',
       '✘ 1 of 1 checks failed: tsc',
     ])
@@ -177,6 +182,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ oxlint skipped, not selected by --only',
       '▶ oxfmt --no-error-on-unmatched-pattern [4 files]',
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ staged the fixes to [4 files]',
       '✔ all checks passed (oxfmt)',
@@ -201,8 +207,9 @@ describe('uncheck staged without tools', () => {
       '○ sherif skipped, not installed',
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, no tsconfig.json found',
-      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, knip not installed, tsc no tsconfig.json found',
     ])
   })
 })
@@ -243,6 +250,7 @@ describe('uncheck staged in a package of a monorepo', () => {
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts',
         '✘ oxfmt failed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
@@ -284,6 +292,7 @@ describe('uncheck staged in a package of a monorepo', () => {
       '✘ oxlint failed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern packages/app/package.json packages/app/src/index.ts',
       '✘ oxfmt failed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✘ 3 of 3 checks failed: sherif, oxlint, oxfmt',
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
@@ -300,6 +309,7 @@ describe('uncheck staged in a package of a monorepo', () => {
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json packages/app/src/index.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, disabled with --skip=tsc',
       '✔ staged the fixes to packages/app/src/index.ts',
       '✘ 1 of 3 checks failed: sherif',

@@ -3,17 +3,22 @@ import { layoutChecks } from './utils'
 
 const ONLY_FILE_CHECKS = ['--only=oxlint', '--only=oxfmt']
 
-const YARN_PNP_RESOLVER = `const Module = require('node:module');
+// Yarn's runtime is itself the pnpapi module, whose resolver finds a package's folder whatever its
+// `exports` allow.
+const YARN_PNP_RUNTIME = `const Module = require('node:module');
 const path = require('node:path');
 
 process.versions.pnp = '3';
 
+exports.resolveToUnqualified = (request) => {
+  if (request !== 'oxlint' && request !== 'knip') throw new Error(request + ' is not a dependency');
+  return path.join(__dirname, '.yarn/unplugged', request) + '/';
+};
+
 const resolveFilename = Module._resolveFilename;
 
 Module._resolveFilename = function (request, ...rest) {
-  return request === 'oxlint/package.json'
-    ? path.join(__dirname, '.yarn/unplugged/oxlint/package.json')
-    : resolveFilename.call(this, request, ...rest);
+  return request === 'pnpapi' ? __filename : resolveFilename.call(this, request, ...rest);
 };
 `
 
@@ -30,6 +35,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       ...sherif,
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
+      '○ knip skipped, not installed',
       tsc,
       '✔ tsc passed',
       `✔ all checks passed (${checks.filter((name) => name === 'sherif' || name === 'tsc').join(', ')})`,
@@ -58,6 +64,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '○ oxlint skipped, not selected by --only',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
@@ -82,8 +89,9 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '○ sherif skipped, not selected by --only',
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
-      '✘ nothing to check: sherif not selected by --only, oxlint not installed, oxfmt not installed, tsc not selected by --only',
+      '✘ nothing to check: sherif not selected by --only, oxlint not installed, oxfmt not installed, knip not selected by --only, tsc not selected by --only',
     ])
     expect(exitCode).toBe(1)
   })
@@ -100,19 +108,26 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '✔ oxlint passed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(exitCode).toBe(0)
   })
 
-  it('finds a tool through the resolver of Yarn PnP', async () => {
+  it('finds a tool through the resolver of Yarn PnP, even one whose exports hide package.json', async () => {
     const project = create(
       {
         '.gitignore': 'node_modules\ndist\n*.tsbuildinfo\n.yarn\n.pnp.cjs\n',
-        '.pnp.cjs': YARN_PNP_RESOLVER,
+        '.pnp.cjs': YARN_PNP_RUNTIME,
         '.yarn/unplugged/oxlint/package.json': { name: 'oxlint', bin: { oxlint: 'bin.js' } },
         '.yarn/unplugged/oxlint/bin.js': "console.log('oxlint from the Yarn cache');\n",
+        '.yarn/unplugged/knip/package.json': {
+          name: 'knip',
+          bin: { knip: 'bin.js' },
+          exports: { '.': './bin.js' },
+        },
+        '.yarn/unplugged/knip/bin.js': "console.log('knip from the Yarn cache');\n",
       },
       { tools: ['oxfmt', 'typescript'] },
     )
@@ -124,6 +139,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
     expect(stdout).toContain(
       '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\noxlint from the Yarn cache\n',
     )
+    expect(stdout).toContain('▶ knip\nknip from the Yarn cache\n')
     expect(report(stdout)).toEqual([
       `uncheck in ${project.dir}`,
       '○ sherif skipped, not installed',
@@ -131,9 +147,11 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '✔ oxlint passed',
       FULL_OXFMT,
       '✔ oxfmt passed',
+      '▶ knip',
+      '✔ knip passed',
       tsc,
       '✔ tsc passed',
-      '✔ all checks passed (oxlint, oxfmt, tsc)',
+      '✔ all checks passed (oxlint, oxfmt, knip, tsc)',
     ])
     expect(exitCode).toBe(0)
   })

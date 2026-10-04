@@ -55,6 +55,7 @@ describe.each(LAYOUTS)(
         '✔ oxlint passed',
         '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
         '✔ oxfmt passed',
+        '○ knip skipped, not installed',
         tsc,
         '✔ tsc passed',
         '✔ all checks passed (oxlint, oxfmt, tsc)',
@@ -90,6 +91,7 @@ describe.each(LAYOUTS)(
         '✔ oxlint passed',
         '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
         '✔ oxfmt passed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✔ all checks passed (oxlint, oxfmt)',
       ])
@@ -131,6 +133,7 @@ describe.each(LAYOUTS)(
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --no-error-on-unmatched-pattern src/new.ts',
         '✔ oxfmt passed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✔ all checks passed (oxfmt)',
       ])
@@ -156,6 +159,7 @@ describe.each(LAYOUTS)(
         '○ oxlint skipped, not selected by --only',
         '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
         '✔ oxfmt passed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✔ all checks passed (oxfmt)',
       ])
@@ -177,6 +181,7 @@ describe.each(LAYOUTS)(
         '✔ oxlint passed',
         FULL_OXFMT,
         '✘ oxfmt failed',
+        '○ knip skipped, not installed',
         tsc,
         '✔ tsc passed',
         '✘ 1 of 3 checks failed: oxfmt',
@@ -200,6 +205,7 @@ describe.each(LAYOUTS)(
         '○ oxlint skipped, not selected by --only',
         FULL_OXFMT,
         '✘ oxfmt failed',
+        '○ knip skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
@@ -249,6 +255,7 @@ describe('hooks run with deleted files in a single repo', () => {
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern scripts/utils.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 3 checks failed: tsc',
@@ -284,6 +291,7 @@ describe('hooks run with a changed package.json in a monorepo', () => {
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '○ tsc skipped, no tsconfig.json covers the given files',
       '✘ 1 of 3 checks failed: sherif',
     ])

@@ -246,6 +246,7 @@ describe('uncheck selecting files by path in a monorepo package', () => {
       '✔ oxlint passed',
       '▶ oxfmt --check --no-error-on-unmatched-pattern package.json src/extra.ts src/index.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       '▶ tsc -b tsconfig.json',
       '✔ tsc passed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',

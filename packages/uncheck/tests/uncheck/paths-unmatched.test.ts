@@ -70,6 +70,7 @@ describe.each(LAYOUTS)('uncheck with unmatched paths in a $name', ({ create, app
       '✔ oxlint passed',
       `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}src/index.ts`,
       '✔ oxfmt passed',
+      '○ knip skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
     ])

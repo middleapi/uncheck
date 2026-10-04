@@ -63,6 +63,7 @@ describe.each(LAYOUTS)(
       '✔ oxlint passed',
       '▶ oxfmt --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxfmt passed',
+      '○ knip skipped, not installed',
       tsc,
       ...outcome,
     ]

@@ -75,6 +75,7 @@ export const SKIPPED_BESIDE_TSC = [
   '○ sherif skipped, not selected by --only',
   '○ oxlint skipped, not selected by --only',
   '○ oxfmt skipped, not selected by --only',
+  '○ knip skipped, not selected by --only',
 ]
 
 export function tscOnlyReport(
