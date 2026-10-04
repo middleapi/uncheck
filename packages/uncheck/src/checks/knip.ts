@@ -109,15 +109,13 @@ const enclosingWorkspace = Effect.fn(function* (
   if (
     manifest.knip !== undefined ||
     Option.isSome(yield* firstFile(KNIP_CONFIGS.map((name) => path.join(cwd, name)))) ||
-    (yield* workspaceAt(cwd, manifest)) !== undefined
+    (yield* workspaceAt(cwd)) !== undefined
   ) {
     return undefined
   }
 
   for (const dir of ancestors(path, cwd).slice(1)) {
-    const rootManifest = yield* readJson(path.join(dir, 'package.json'))
-    // knip only runs where a package.json is.
-    const workspace = rootManifest === undefined ? undefined : yield* workspaceAt(dir, rootManifest)
+    const workspace = yield* workspaceAt(dir)
 
     if (workspace === undefined) {
       continue
@@ -151,8 +149,15 @@ interface Workspace {
 }
 
 /** The workspace `dir` is the root of as knip sees it, taking pnpm-workspace.yaml before package.json. */
-const workspaceAt = Effect.fn(function* (dir: string, manifest: Readonly<Record<string, unknown>>) {
+const workspaceAt = Effect.fn(function* (dir: string) {
   const path = yield* Path.Path
+
+  const manifest = yield* readJson(path.join(dir, 'package.json'))
+
+  // knip only runs where a package.json is.
+  if (manifest === undefined) {
+    return undefined
+  }
 
   const yaml = yield* readText(path.join(dir, 'pnpm-workspace.yaml'))
   const config = yield* knipConfig(dir, manifest)
