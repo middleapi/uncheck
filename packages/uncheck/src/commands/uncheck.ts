@@ -373,6 +373,6 @@ export const uncheck = Command.make(
   ({ paths, ...settings }) => runChecks(paths, settings),
 ).pipe(
   Command.withDescription(
-    'Check a workspace (sherif), lint (oxlint), format check (oxfmt), find unused files, exports and dependencies (knip) and typecheck (tsc) a project with one command. Each check runs only when the project uses that tool.',
+    'Check a workspace (sherif), lint (oxlint), format check (oxfmt) and typecheck (tsc) a project, and find its unused files, exports and dependencies (knip), with one command. Each check runs only when the project uses that tool.',
   ),
 )

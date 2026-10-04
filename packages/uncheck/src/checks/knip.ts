@@ -5,13 +5,7 @@ import { parse as parseJsonc } from 'jsonc-parser'
 import { Minimatch } from 'minimatch'
 
 import { NothingToCheck } from '../errors.ts'
-import {
-  firstFile,
-  foldersAboveInRepository,
-  inNodeModules,
-  readJson,
-  slashedRelative,
-} from '../files.ts'
+import { ancestors, firstFile, inNodeModules, readJson, slashedRelative } from '../files.ts'
 import { resolveBin } from '../tool.ts'
 import type { Check } from '../types.ts'
 
@@ -101,9 +95,10 @@ const KNIP_CONFIGS = [
 ]
 
 /**
- * The nearest workspace root above `cwd` in its repository, when that root lists `cwd` among its
- * packages, unless `cwd` is a workspace root itself or has a knip config, which knip reads only when
- * it runs there.
+ * The nearest workspace root above `cwd`, when that root lists `cwd` among its packages, unless
+ * `cwd` is a workspace root itself or has a knip config, which knip reads only when it runs there. A
+ * root has to list the package, so unlike a tsconfig.json it may be above the repository, as that of
+ * a git submodule is.
  */
 const enclosingWorkspace = Effect.fn(function* (
   cwd: string,
@@ -119,7 +114,7 @@ const enclosingWorkspace = Effect.fn(function* (
     return undefined
   }
 
-  for (const dir of yield* foldersAboveInRepository(cwd)) {
+  for (const dir of ancestors(path, cwd).slice(1)) {
     const rootManifest = yield* readJson(path.join(dir, 'package.json'))
     // knip only runs where a package.json is.
     const workspace = rootManifest === undefined ? undefined : yield* workspaceAt(dir, rootManifest)

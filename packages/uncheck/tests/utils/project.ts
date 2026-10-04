@@ -655,5 +655,4 @@ export const SKIPPED_FOR_DELETIONS = [
   '○ sherif skipped, no package.json among the given files',
   '○ oxlint skipped, only deleted files',
   '○ oxfmt skipped, only deleted files',
-  '○ knip skipped, not installed',
 ]

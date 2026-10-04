@@ -169,6 +169,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
     expect(report(stderr)).toEqual([
       `uncheck staged in ${project.path('packages/app')}`,
       ...SKIPPED_FOR_DELETIONS,
+      '○ knip skipped, not installed',
       TSC_WITH_REFERENCES,
       '✔ tsc passed',
       '✔ all checks passed (tsc)',

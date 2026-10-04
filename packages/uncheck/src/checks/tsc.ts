@@ -8,7 +8,6 @@ import {
   ancestors,
   fileKind,
   firstFile,
-  foldersAboveInRepository,
   isOutside,
   listProjectFiles,
   readJson,
@@ -378,10 +377,17 @@ const ignoredByGit = Effect.fn(function* (
 
 const tsconfigAboveInRepository = Effect.fn(function* (cwd: string) {
   const path = yield* Path.Path
-
-  return yield* firstFile(
-    (yield* foldersAboveInRepository(cwd)).map((dir) => path.join(dir, 'tsconfig.json')),
+  const dirs = ancestors(path, cwd)
+  // A tsconfig.json above the repository, say in the home folder, belongs to another project.
+  const top = yield* Effect.findFirst(dirs, (dir) =>
+    Effect.map(fileKind(path.join(dir, '.git')), (kind) => kind !== undefined),
   )
+  const searched = Option.match(top, {
+    onNone: () => [],
+    onSome: (dir) => dirs.slice(1, dirs.indexOf(dir) + 1),
+  })
+
+  return yield* firstFile(searched.map((dir) => path.join(dir, 'tsconfig.json')))
 })
 
 /**

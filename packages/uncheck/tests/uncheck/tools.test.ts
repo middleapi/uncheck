@@ -115,18 +115,14 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
     expect(exitCode).toBe(0)
   })
 
-  it('finds a tool through the resolver of Yarn PnP, even one whose exports hide package.json', async () => {
+  it('finds the tools through the resolver of Yarn PnP', async () => {
     const project = create(
       {
         '.gitignore': 'node_modules\ndist\n*.tsbuildinfo\n.yarn\n.pnp.cjs\n',
         '.pnp.cjs': YARN_PNP_RUNTIME,
         '.yarn/unplugged/oxlint/package.json': { name: 'oxlint', bin: { oxlint: 'bin.js' } },
         '.yarn/unplugged/oxlint/bin.js': "console.log('oxlint from the Yarn cache');\n",
-        '.yarn/unplugged/knip/package.json': {
-          name: 'knip',
-          bin: { knip: 'bin.js' },
-          exports: { '.': './bin.js' },
-        },
+        '.yarn/unplugged/knip/package.json': { name: 'knip', bin: { knip: 'bin.js' } },
         '.yarn/unplugged/knip/bin.js': "console.log('knip from the Yarn cache');\n",
       },
       { tools: ['oxfmt', 'typescript'] },

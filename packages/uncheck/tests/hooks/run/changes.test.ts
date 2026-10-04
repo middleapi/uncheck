@@ -113,6 +113,7 @@ describe.each(LAYOUTS)(
       expect(report(deleted.stderr)).toEqual([
         `uncheck in ${project.path(app, '.')}`,
         ...SKIPPED_FOR_DELETIONS,
+        '○ knip skipped, not installed',
         tsc,
         '✔ tsc passed',
         '✔ all checks passed (tsc)',
@@ -230,6 +231,7 @@ describe('hooks run with deleted files in a single repo', () => {
       expect(report(stderr)).toEqual([
         `uncheck in ${project.dir}`,
         ...SKIPPED_FOR_DELETIONS,
+        '○ knip skipped, not installed',
         '▶ tsc -p tsconfig.json --noEmit',
         '✘ tsc failed',
         '✘ 1 of 1 checks failed: tsc',

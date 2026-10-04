@@ -19,6 +19,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
     expect(report(stdout)).toEqual([
       `uncheck staged in ${project.dir}`,
       ...SKIPPED_FOR_DELETIONS,
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',
@@ -63,6 +64,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
       expect(report(stdout)).toEqual([
         `uncheck staged in ${project.dir}`,
         ...SKIPPED_FOR_DELETIONS,
+        '○ knip skipped, not installed',
         '▶ tsc -p tsconfig.json --noEmit',
         '✔ tsc passed',
         '✔ all checks passed (tsc)',
@@ -107,6 +109,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
     expect(report(stdout)).toEqual([
       `uncheck staged in ${project.dir}`,
       ...SKIPPED_FOR_DELETIONS,
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
       '✔ all checks passed (tsc)',
@@ -128,6 +131,7 @@ describe('uncheck staged with deleted files in a monorepo', () => {
     expect(report(stdout)).toEqual([
       `uncheck staged in ${project.dir}`,
       ...SKIPPED_FOR_DELETIONS,
+      '○ knip skipped, not installed',
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',

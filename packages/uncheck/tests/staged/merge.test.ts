@@ -135,6 +135,7 @@ describe('uncheck staged during a merge in a single repo', () => {
     expect(report(stdout)).toEqual([
       `uncheck staged in ${project.dir}`,
       ...SKIPPED_FOR_DELETIONS,
+      '○ knip skipped, not installed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
       '✘ 1 of 1 checks failed: tsc',
