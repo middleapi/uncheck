@@ -21,6 +21,7 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts src/index.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxfmt)',
     ])
     expect(project.read(`${app}src/extra.ts`)).toBe('export const extra = 1;\n')
@@ -41,7 +42,8 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, no tsconfig.json covers the given files',
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files, fallow not selected by --only',
     ])
 
     const required = await stopHook(project, app, CLAUDE_CODE_STOP, {
@@ -56,6 +58,7 @@ describe.each(LAYOUTS)('hooks run passes the check selection on in a $name', ({ 
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '✘ tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 1 checks failed: tsc',
     ])
   })

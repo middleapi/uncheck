@@ -298,6 +298,7 @@ describe('prepare with --cwd naming a symlink to a package', () => {
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '○ unstaged changes of src/extra.ts restored',
       '✔ all checks passed (oxlint)',
     ])

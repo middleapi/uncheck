@@ -56,7 +56,7 @@ function sendBackReason(stderr: string): string {
 describe.each(LAYOUTS)(
   'hooks run sends each agent back its own way in a $name',
   ({ create, app, tsc }) => {
-    const checks = (project: Project, ...outcome: ReadonlyArray<string>) => [
+    const checks = (project: Project, outcome: string, summary: string) => [
       `uncheck in ${project.path(app, '.')}`,
       '○ sherif skipped, no package.json among the given files',
       '▶ oxlint --fix --no-error-on-unmatched-pattern src/index.ts',
@@ -64,7 +64,9 @@ describe.each(LAYOUTS)(
       '▶ oxfmt --no-error-on-unmatched-pattern src/index.ts',
       '✔ oxfmt passed',
       tsc,
-      ...outcome,
+      outcome,
+      '○ fallow skipped, not installed',
+      summary,
     ]
     const failure = (project: Project) =>
       checks(project, '✘ tsc failed', '✘ 1 of 3 checks failed: tsc')

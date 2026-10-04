@@ -137,6 +137,7 @@ describe('uncheck staged during a merge in a single repo', () => {
       ...SKIPPED_FOR_DELETIONS,
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 1 checks failed: tsc',
     ])
     expect(stdout).toContain(UTILS_NOT_FOUND)

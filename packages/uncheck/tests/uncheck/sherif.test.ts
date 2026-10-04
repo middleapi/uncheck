@@ -5,6 +5,7 @@ const OTHERS_NOT_SELECTED = [
   '○ oxlint skipped, not selected by --only',
   '○ oxfmt skipped, not selected by --only',
   '○ tsc skipped, not selected by --only',
+  '○ fallow skipped, not selected by --only',
 ]
 
 function sherifSkipped(dir: string, reason: string): string[] {
@@ -12,7 +13,7 @@ function sherifSkipped(dir: string, reason: string): string[] {
     `uncheck in ${dir}`,
     `○ sherif skipped, ${reason}`,
     ...OTHERS_NOT_SELECTED,
-    `✘ nothing to check: sherif ${reason}, oxlint not selected by --only, oxfmt not selected by --only, tsc not selected by --only`,
+    `✘ nothing to check: sherif ${reason}, oxlint not selected by --only, oxfmt not selected by --only, tsc not selected by --only, fallow not selected by --only`,
   ]
 }
 
@@ -29,6 +30,7 @@ describe.each(LAYOUTS)('uncheck sherif in a $name', ({ create, app }) => {
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
     expect(exitCode).toBe(0)
@@ -115,6 +117,7 @@ describe('uncheck sherif in a single repo', () => {
       '✔ oxfmt passed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 4 checks failed: sherif',
     ])
     expect(exitCode).toBe(1)

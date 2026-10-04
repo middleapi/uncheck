@@ -526,6 +526,7 @@ describe('tsc project references with the real compiler in a single repo', () =>
       '✔ oxfmt passed',
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 3 checks failed: tsc',
     ])
     expect(stdout).toContain(

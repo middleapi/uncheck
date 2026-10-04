@@ -29,6 +29,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       `✔ all checks passed (${checks.join(', ')})`,
     ])
     expect(exitCode).toBe(0)
@@ -81,6 +82,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       '✘ oxlint failed',
       '✘ oxfmt not installed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       `✘ 2 of ${checks.length - 1} checks failed: oxlint, oxfmt`,
       '  rerun with `--fix` to apply oxlint fixes',
     ])
@@ -103,6 +105,7 @@ describe.each(LAYOUTS)('uncheck --fix in a $name', ({ create, app, tsc }) => {
       '✘ oxlint failed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 1 checks failed: oxlint',
     ])
     expect(exitCode).toBe(1)
@@ -155,6 +158,7 @@ describe('uncheck --fix in a monorepo', () => {
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (sherif)',
     ])
     expect(exitCode).toBe(0)
@@ -190,6 +194,7 @@ describe('uncheck --fix in a monorepo', () => {
       FULL_OXFMT_FIX,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       '✘ 1 of 3 checks failed: sherif',
     ])
     expect(exitCode).toBe(1)
@@ -212,6 +217,7 @@ describe('uncheck --fix in a monorepo', () => {
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 1 checks failed: sherif',
     ])
     expect(exitCode).toBe(1)

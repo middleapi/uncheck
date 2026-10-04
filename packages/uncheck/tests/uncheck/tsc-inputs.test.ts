@@ -297,7 +297,8 @@ describe('tsc inputs across the packages of a monorepo', () => {
       `uncheck staged in ${project.dir}`,
       ...SKIPPED_BESIDE_TSC,
       NOT_COVERED,
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files, fallow not selected by --only',
     ])
   })
 })

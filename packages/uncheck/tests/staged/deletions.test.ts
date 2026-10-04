@@ -21,6 +21,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
       ...SKIPPED_FOR_DELETIONS,
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 1 checks failed: tsc',
     ])
     expect(stdout).toContain(UTILS_NOT_FOUND)
@@ -44,6 +45,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
       '✔ oxfmt passed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 3 checks failed: tsc',
     ])
     expect(stdout).toContain(UTILS_NOT_FOUND)
@@ -64,6 +66,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
         ...SKIPPED_FOR_DELETIONS,
         '▶ tsc -p tsconfig.json --noEmit',
         '✔ tsc passed',
+        '○ fallow skipped, not installed',
         '✔ all checks passed (tsc)',
       ])
       expect(exitCode).toBe(0)
@@ -89,7 +92,8 @@ describe('uncheck staged with deleted files in a single repo', () => {
       '○ oxlint skipped, only deleted files',
       '○ oxfmt skipped, only deleted files',
       '○ tsc skipped, not selected by --only',
-      '○ nothing to check: sherif not selected by --only, oxlint only deleted files, oxfmt only deleted files, tsc not selected by --only',
+      '○ fallow skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint only deleted files, oxfmt only deleted files, tsc not selected by --only, fallow not selected by --only',
     ])
     expect(exitCode).toBe(0)
   })
@@ -107,6 +111,7 @@ describe('uncheck staged with deleted files in a single repo', () => {
       ...SKIPPED_FOR_DELETIONS,
       '▶ tsc -p tsconfig.json --noEmit',
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (tsc)',
     ])
     expect(exitCode).toBe(0)
@@ -128,6 +133,7 @@ describe('uncheck staged with deleted files in a monorepo', () => {
       ...SKIPPED_FOR_DELETIONS,
       '▶ tsc -b tsconfig.json',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 1 checks failed: tsc',
     ])
     expect(project.normalize(stdout)).toContain(

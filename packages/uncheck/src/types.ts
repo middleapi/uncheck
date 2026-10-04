@@ -5,7 +5,7 @@ import type { CannotCheck, NothingToCheck } from './errors.ts'
 import type { ProjectFiles } from './files.ts'
 import type { Bin } from './tool.ts'
 
-export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'tsc'
+export type CheckName = 'sherif' | 'oxlint' | 'oxfmt' | 'tsc' | 'fallow'
 
 export interface CheckOutcome {
   readonly name: CheckName
@@ -18,6 +18,8 @@ export interface CheckCommand {
   readonly bin: Bin
   readonly args: ReadonlyArray<string>
   readonly files?: ReadonlyArray<string>
+  /** Put before each of `files`, for a tool that takes them as the values of an option. */
+  readonly filePrefix?: string
   /** Runs alongside the other `parallel` commands of its check, after the rest. */
   readonly parallel?: boolean
 }

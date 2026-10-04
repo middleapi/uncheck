@@ -21,7 +21,7 @@
   </a>
 </div>
 
-One command to lint, format check and type check your project, and keep a monorepo consistent. `uncheck` runs the oxlint, oxfmt, tsc and sherif you installed, so you, your git hooks and your coding agents all run the same check.
+One command to lint, format check and type check your project, keep a monorepo consistent and find unused code. `uncheck` runs the oxlint, oxfmt, tsc, sherif and fallow you installed, so you, your git hooks and your coding agents all run the same check.
 
 ```sh
 npx uncheck init    # set up your project, step by step
@@ -63,14 +63,14 @@ uncheck init in /home/me/my-app
 Run npm run check to check the project, and npm run fix to fix what can be fixed.
 ```
 
-That's it! TypeScript is up to you: tsc joins in once you install it and add a `tsconfig.json`. `init` keeps any `check` or `fix` scripts you already have, and running it again only sets up what's missing.
+That's it! TypeScript and [fallow](#find-unused-code) are up to you: tsc joins in once you install it and add a `tsconfig.json`, and fallow once you install it. `init` keeps any `check` or `fix` scripts you already have, and running it again only sets up what's missing.
 
 <details>
 <summary>Set up without questions</summary>
 
 Without a terminal, `npx uncheck init --yes` takes the default answers: it installs the missing tools, checks every commit, and sets up the agents whose config folders exist. It writes no preset config.
 
-Or set up by hand: `npm i -D uncheck oxlint oxfmt typescript` (plus `sherif` in a monorepo), then add the scripts `"check": "uncheck"`, `"fix": "uncheck --fix"` and [`prepare`](#check-every-commit).
+Or set up by hand: `npm i -D uncheck oxlint oxfmt typescript` (plus `sherif` in a monorepo, and `fallow` to find unused code), then add the scripts `"check": "uncheck"`, `"fix": "uncheck --fix"` and [`prepare`](#check-every-commit).
 
 </details>
 
@@ -90,6 +90,7 @@ Format issues found in above 2 files. Run without `--check` to fix.
 ▶ tsc -p tsconfig.json --noEmit
 src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.
 ✘ tsc failed 384ms
+○ fallow skipped, not installed
 
 ✘ 2 of 3 checks failed: oxfmt, tsc
   rerun with `--fix` to apply oxfmt fixes
@@ -103,6 +104,7 @@ A check runs only when your project uses its tool, with the version and config y
 | `oxlint` | lint rules           | [oxlint](https://oxc.rs) is installed (needs 1.60+)                                                        |
 | `oxfmt`  | formatting           | [oxfmt](https://oxc.rs) is installed                                                                       |
 | `tsc`    | types                | the project has a `tsconfig.json`                                                                          |
+| `fallow` | unused code          | [fallow](https://github.com/fallow-rs/fallow) is installed (needs 3.25+)                                   |
 
 uncheck exits with code 1 when a check fails, when no check could run, or when there's a `tsconfig.json` but no TypeScript, so a broken setup never passes quietly.
 
@@ -112,7 +114,7 @@ uncheck exits with code 1 when a check fails, when no check could run, or when t
 npx uncheck --fix   # or npm run fix
 ```
 
-This applies oxlint's fixes, rewrites the formatting with oxfmt, and applies [sherif's fixes](#monorepos), after which sherif runs your install. Type errors are yours to fix.
+This applies oxlint's fixes, rewrites the formatting with oxfmt, and applies [sherif's fixes](#monorepos), after which sherif runs your install. Type errors and [unused code](#find-unused-code) are yours to fix.
 
 ### Pick the checks
 
@@ -124,6 +126,13 @@ npx uncheck --cwd packages/app           # run in another folder
 ```
 
 You can repeat `--only`, `--skip` and `--require`, and the [commit](#check-every-commit) and [agent](#check-every-agent-turn) hooks take them too. Run `npx uncheck <command> --help` to see every flag.
+
+### Find unused code
+
+Install [fallow](https://github.com/fallow-rs/fallow) (`npm i -D fallow`) and uncheck runs `fallow dead-code`: unused files, exports and dependencies, circular dependencies and more, as the rules in your fallow config say. Run `npx fallow` yourself for its duplication and complexity reports too.
+
+- **It reads the whole project,** from the nearest [workspace root](#monorepos), or else `package.json`, at or above the folder uncheck runs in, so it sees every entry point. It then reports only on that folder.
+- **It only reports, even with `--fix`.** fallow's fixes delete what it takes for unused, and it can miss a use, like a package that only another tool loads. Preview them with `npx fallow fix --dry-run`, and tell fallow about such uses in its config.
 
 ### Check specific files
 
@@ -141,6 +150,7 @@ Every tool gets the same file list, so they never disagree about what a path mea
 - A path that exists is never read as a glob, so `'app/[id]/page.tsx'` just works.
 - A path that matches nothing fails the run, unless you pass `--no-error-on-unmatched-pattern`.
 - tsc checks only the projects that include those files, and the projects that depend on them. sherif runs only when a `package.json` or `pnpm-workspace.yaml` is among them.
+- fallow still reads the whole project, but reports only the unused code in those files, not unused dependencies.
 
 ## Check every commit
 
@@ -168,6 +178,7 @@ uncheck staged in /home/me/my-app
 ▶ oxfmt --no-error-on-unmatched-pattern src/y.ts
 ✔ oxfmt passed 106ms
 ○ tsc skipped, no tsconfig.json found
+○ fallow skipped, not installed
 ✔ staged the fixes to src/y.ts
 
 ✔ all checks passed (oxlint, oxfmt)
@@ -187,7 +198,7 @@ Your work stays safe. After `git add -p`, the unstaged part of a file is set asi
 
 Good to know:
 
-- **tsc checks whole projects as they are on disk**, so it can report errors in files you didn't stage, or pass thanks to one you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook fast and limited to what you staged.
+- **tsc and fallow read whole projects as they are on disk**, so tsc can report errors in files you didn't stage, and both can pass thanks to one you forgot to `git add`. `--only=oxlint --only=oxfmt` keeps the hook fast and limited to what you staged.
 - **Yarn 2+** doesn't run `prepare`, so use `postinstall` (`init` does this for you). In a package you publish, turn `postinstall` off while packing, for example with [pinst](https://github.com/typicode/pinst).
 - **Production installs** that skip devDependencies (`npm ci --omit=dev`, `NODE_ENV=production`) still run the script, but without uncheck. Append `|| exit 0` so they pass: `"prepare": "uncheck prepare --pre-commit || exit 0"`.
 
@@ -232,6 +243,8 @@ When the agent finishes a turn, the hook checks the files changed since the last
 Run both `init` and uncheck at the workspace root: the folder whose `package.json` has `workspaces` or whose `pnpm-workspace.yaml` lists `packages`. One run checks every package.
 
 **sherif** checks the workspace as a whole, so it runs only at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). It only reports in the hooks and when `CI` is set, so run `npx uncheck --fix` locally to apply its fixes. Leave out `"fix": true`, or every run that only reports fails.
+
+**fallow** always runs at the workspace root, with `--root` when uncheck runs in a package, so it sees the entry points of every package. Keep its config, such as `.fallowrc.json`, at the root.
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`, so a config with another name, like `tsconfig.app.json`, is checked when a reference leads to it. Projects linked by `references` are built together with one `tsc -b`, and the rest are checked with `tsc -p --noEmit`.
 

@@ -75,6 +75,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(project.git('status', '--porcelain')).toBe(
@@ -99,6 +100,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '✘ oxfmt failed',
       tsc,
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 3 of 3 checks failed: oxlint, oxfmt, tsc',
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
     ])
@@ -125,6 +127,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '▶ oxfmt --check --no-error-on-unmatched-pattern README.md src/extra.ts',
       '✘ oxfmt failed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       '✘ 1 of 1 checks failed: oxfmt',
       '  rerun with `--fix` to apply oxfmt fixes',
     ])
@@ -140,7 +143,8 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, no tsconfig.json covers the given files',
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files, fallow not selected by --only',
     ])
 
     const required = await project.uncheck(['staged', '--only=tsc', '--require=tsc'], {
@@ -154,6 +158,7 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '○ oxlint skipped, not selected by --only',
       '○ oxfmt skipped, not selected by --only',
       '✘ tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 1 checks failed: tsc',
     ])
   })
@@ -178,10 +183,51 @@ describe.each(LAYOUTS)('uncheck staged in a $name', ({ create, app, tsc }) => {
       '▶ oxfmt --no-error-on-unmatched-pattern [4 files]',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ staged the fixes to [4 files]',
       '✔ all checks passed (oxfmt)',
     ])
     expect(inIndex(project, `${app}src/d.ts`)).toBe('export const d = 1;\n')
+  })
+
+  it('reports only the unused code fallow finds in the staged files, and skips a commit that only deletes', async () => {
+    const orphan = 'export const orphan = 1;\n'
+    const project = create({ [`${app}lib/old.ts`]: orphan }, { tools: ['fallow'] }).stage({
+      [`${app}src/orphan.ts`]: orphan,
+    })
+    const notSelected = [
+      '○ sherif skipped, not selected by --only',
+      '○ oxlint skipped, not selected by --only',
+      '○ oxfmt skipped, not selected by --only',
+      '○ tsc skipped, not selected by --only',
+    ]
+
+    const added = await project.uncheck(['staged', '--only=fallow'], { cwd: folder })
+
+    expect(added.stdout).toContain(`Unused files (1)\n  ${app}src/orphan.ts\n`)
+    expect(report(added.stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      ...notSelected,
+      app === ''
+        ? '▶ fallow dead-code --quiet --file=src/orphan.ts'
+        : `▶ fallow dead-code --quiet --root=../.. --file=${app}src/orphan.ts`,
+      '✘ fallow failed',
+      '✘ 1 of 1 checks failed: fallow',
+    ])
+    expect(added.exitCode).toBe(1)
+
+    project.git('reset', '--quiet')
+    project.git('rm', '--quiet', '--', `${app}lib/old.ts`)
+
+    const deleted = await project.uncheck(['staged', '--only=fallow'], { cwd: folder })
+
+    expect(report(deleted.stdout)).toEqual([
+      `uncheck staged in ${project.path(folder)}`,
+      ...notSelected,
+      '○ fallow skipped, only deleted files',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc not selected by --only, fallow only deleted files',
+    ])
+    expect(deleted.exitCode).toBe(0)
   })
 })
 
@@ -202,7 +248,8 @@ describe('uncheck staged without tools', () => {
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, no tsconfig.json found',
-      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+      '○ fallow skipped, not installed',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found, fallow not installed',
     ])
   })
 })
@@ -244,6 +291,7 @@ describe('uncheck staged in a package of a monorepo', () => {
         '▶ oxfmt --check --no-error-on-unmatched-pattern src/index.ts',
         '✘ oxfmt failed',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
       ])
@@ -285,6 +333,7 @@ describe('uncheck staged in a package of a monorepo', () => {
       '▶ oxfmt --check --no-error-on-unmatched-pattern packages/app/package.json packages/app/src/index.ts',
       '✘ oxfmt failed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       '✘ 3 of 3 checks failed: sherif, oxlint, oxfmt',
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
     ])
@@ -301,6 +350,7 @@ describe('uncheck staged in a package of a monorepo', () => {
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json packages/app/src/index.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       '✔ staged the fixes to packages/app/src/index.ts',
       '✘ 1 of 3 checks failed: sherif',
     ])

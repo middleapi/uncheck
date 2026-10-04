@@ -25,6 +25,7 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(exitCode).toBe(0)
@@ -99,6 +100,7 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(exitCode).toBe(0)
@@ -124,6 +126,7 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
       `▶ oxfmt --check --no-error-on-unmatched-pattern ${app}README.md ${app}notes.txt`,
       '✔ oxfmt passed',
       NOT_COVERED,
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(exitCode).toBe(0)
@@ -184,6 +187,7 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
       `▶ oxfmt --check --no-error-on-unmatched-pattern ${name(300)}`,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 2 checks failed: oxlint',
       '  rerun with `--fix` to apply oxlint fixes',
     ])
@@ -209,6 +213,7 @@ describe.each(LAYOUTS)('uncheck handing files to the tools in a $name', ({ creat
       '▶ oxfmt --check --no-error-on-unmatched-pattern !notes.ts -draft.ts',
       '✘ oxfmt failed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✘ 2 of 2 checks failed: oxlint, oxfmt',
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
     ])

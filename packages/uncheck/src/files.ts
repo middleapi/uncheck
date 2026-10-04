@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs'
 
-import { Effect, FileSystem, Path, Predicate } from 'effect'
+import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
 import type { ChildProcessSpawner } from 'effect/process'
 import { Minimatch } from 'minimatch'
 
@@ -262,6 +262,23 @@ export function ancestors(path: Path.Path, from: string): string[] {
 
   return dirs
 }
+
+/**
+ * `from` and the folders above it up to the top of its git repository, or `from` alone outside one:
+ * a file above the repository, say in the home folder, belongs to another project.
+ */
+export const foldersInRepository = Effect.fn(function* (from: string) {
+  const path = yield* Path.Path
+  const dirs = ancestors(path, from)
+  const top = yield* Effect.findFirst(dirs, (dir) =>
+    Effect.map(fileKind(path.join(dir, '.git')), (kind) => kind !== undefined),
+  )
+
+  return Option.match(top, {
+    onNone: () => dirs.slice(0, 1),
+    onSome: (dir) => dirs.slice(0, dirs.indexOf(dir) + 1),
+  })
+})
 
 export const fileKind = Effect.fn(function* (target: string) {
   const fs = yield* FileSystem.FileSystem

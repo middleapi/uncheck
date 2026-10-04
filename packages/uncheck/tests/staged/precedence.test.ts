@@ -30,8 +30,9 @@ describe.each(LAYOUTS)(
 
       expect(stderr).toBe(cliError(conflictError('src/extra.ts')))
       expect(exitCode).toBe(1)
-      expect(report(stdout).slice(-3)).toEqual([
+      expect(report(stdout).slice(-4)).toEqual([
         '✘ tsc failed',
+        '○ fallow skipped, not selected by --only',
         '✔ staged the fixes to src/extra.ts',
         '✘ 1 of 2 checks failed: tsc',
       ])
@@ -67,6 +68,7 @@ describe.each(LAYOUTS)(
         '✘ oxlint failed',
         '○ oxfmt skipped, not selected by --only',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         strandedLine,
         '✘ 1 of 1 checks failed: oxlint',
         '  rerun with `--fix` to apply oxlint fixes',
@@ -92,8 +94,9 @@ describe.each(LAYOUTS)(
 
       expect(stderr).toBe(cliError(EMPTY_COMMIT_ERROR))
       expect(exitCode).toBe(1)
-      expect(report(stdout).slice(-3)).toEqual([
+      expect(report(stdout).slice(-4)).toEqual([
         '✘ tsc failed',
+        '○ fallow skipped, not selected by --only',
         '✔ staged the fixes to src/extra.ts',
         '✘ 1 of 2 checks failed: tsc',
       ])

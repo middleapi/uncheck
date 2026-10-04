@@ -71,6 +71,8 @@ export function selectedReport(stdout: string): string[] {
 
 export const NOT_COVERED = '○ tsc skipped, no tsconfig.json covers the given files'
 
+const FALLOW_NOT_SELECTED = '○ fallow skipped, not selected by --only'
+
 export const SKIPPED_BESIDE_TSC = [
   '○ sherif skipped, not selected by --only',
   '○ oxlint skipped, not selected by --only',
@@ -87,8 +89,8 @@ export function tscOnlyReport(
     ...SKIPPED_BESIDE_TSC,
     ...plan,
     ...(outcome === 'passed'
-      ? ['✔ tsc passed', '✔ all checks passed (tsc)']
-      : ['✘ tsc failed', '✘ 1 of 1 checks failed: tsc']),
+      ? ['✔ tsc passed', FALLOW_NOT_SELECTED, '✔ all checks passed (tsc)']
+      : ['✘ tsc failed', FALLOW_NOT_SELECTED, '✘ 1 of 1 checks failed: tsc']),
   ]
 }
 

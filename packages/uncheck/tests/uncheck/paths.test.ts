@@ -248,6 +248,7 @@ describe('uncheck selecting files by path in a monorepo package', () => {
       '✔ oxfmt passed',
       '▶ tsc -b tsconfig.json',
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
   })

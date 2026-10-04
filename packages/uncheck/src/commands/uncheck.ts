@@ -8,6 +8,7 @@ import type { CliError } from 'effect/cli'
 import { Argument, Command, Flag } from 'effect/cli'
 import type { ChildProcessSpawner } from 'effect/process'
 
+import { fallow } from '../checks/fallow.ts'
 import { oxfmt } from '../checks/oxfmt.ts'
 import { oxlint } from '../checks/oxlint.ts'
 import { sherif } from '../checks/sherif.ts'
@@ -19,7 +20,7 @@ import { bold, dim, green, listed, listFiles, red } from '../style.ts'
 import { captureLines, execute, logLines } from '../tool.ts'
 import type { Check, CheckCommand, CheckName, CheckOutcome } from '../types.ts'
 
-const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc]
+const CHECKS: ReadonlyArray<Check> = [sherif, oxlint, oxfmt, tsc, fallow]
 
 const FIXES_DONE_AFTER = CHECKS.reduce(
   (count, check, index) => (check.fixes === false ? count : index + 1),
@@ -338,8 +339,9 @@ const runCommands = Effect.fn(function* (commands: ReadonlyArray<CheckCommand>, 
 })
 
 function runCommand(command: CheckCommand, cwd: string) {
-  const { bin, args, files } = command
-  const shown = files === undefined ? args : [...args, listFiles(files)]
+  const { bin, args, files, filePrefix = '' } = command
+  const shown =
+    files === undefined ? args : [...args, listFiles(files.map((file) => `${filePrefix}${file}`))]
 
   return Console.log(`${dim('▶')} ${bold(bin.name)} ${dim(shown.join(' '))}`.trimEnd()).pipe(
     Effect.andThen(execute(command, cwd)),
@@ -372,6 +374,6 @@ export const uncheck = Command.make(
   ({ paths, ...settings }) => runChecks(paths, settings),
 ).pipe(
   Command.withDescription(
-    'Check a workspace (sherif), lint (oxlint), format check (oxfmt) and typecheck (tsc) a project with one command. Each check runs only when the project uses that tool.',
+    'Check a workspace (sherif), lint (oxlint), format check (oxfmt), typecheck (tsc) and find unused code (fallow) in a project with one command. Each check runs only when the project uses that tool.',
   ),
 )

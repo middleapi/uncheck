@@ -13,7 +13,8 @@ import { CODE_WITH_VAR, layoutChecks } from './utils'
 
 const STANDALONE_TSCONFIG = { compilerOptions: compilerOptions({ noEmit: true }) }
 
-const PRINT_FORCE_COLOR = "console.log('the tool sees FORCE_COLOR=' + process.env.FORCE_COLOR);\n"
+const PRINT_COLOR_SETTINGS =
+  "console.log('the tool sees FORCE_COLOR=' + process.env.FORCE_COLOR + ' CLICOLOR_FORCE=' + process.env.CLICOLOR_FORCE);\n"
 
 const STANDALONE_PROJECTS = [1, 2, 3, 4, 5].map((index) => `project-${index}`)
 
@@ -79,6 +80,7 @@ describe.each(LAYOUTS)('uncheck output in a $name', ({ create, app, tsc }) => {
       FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
       '  rerun with `--fix` to apply oxlint fixes',
     ])
@@ -150,7 +152,7 @@ describe('uncheck output', () => {
   })
 
   it('styles its lines and asks tools for colors when FORCE_COLOR is set', async () => {
-    const project = singleRepo().fake('oxfmt', PRINT_FORCE_COLOR)
+    const project = singleRepo().fake('oxfmt', PRINT_COLOR_SETTINGS)
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxfmt'], {
       env: { FORCE_COLOR: '1' },
@@ -160,7 +162,7 @@ describe('uncheck output', () => {
       `${paint('dim', '○')} ${paint('bold', 'sherif')} ${paint('dim', 'skipped, not selected by --only')}\n`,
     )
     expect(stdout).toContain(
-      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check --no-error-on-unmatched-pattern')}\nthe tool sees FORCE_COLOR=1\n`,
+      `${paint('dim', '▶')} ${paint('bold', 'oxfmt')} ${paint('dim', '--check --no-error-on-unmatched-pattern')}\nthe tool sees FORCE_COLOR=1 CLICOLOR_FORCE=1\n`,
     )
     expect(stdout).toContain(
       `${paint('green', '✔')} ${paint('bold', 'oxfmt')} ${paint('green', 'passed')} `,
@@ -173,6 +175,7 @@ describe('uncheck output', () => {
       FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
     expect(exitCode).toBe(0)
@@ -194,22 +197,22 @@ describe('uncheck output', () => {
   })
 
   it('asks tools for colors when it prints to a terminal', async () => {
-    const project = singleRepo().fake('oxlint', PRINT_FORCE_COLOR)
+    const project = singleRepo().fake('oxlint', PRINT_COLOR_SETTINGS)
 
     const { exitCode, stdout } = await project.uncheckInTerminal(['--only=oxlint'])
 
-    expect(stdout).toContain('\nthe tool sees FORCE_COLOR=1\n')
+    expect(stdout).toContain('\nthe tool sees FORCE_COLOR=1 CLICOLOR_FORCE=1\n')
     expect(report(stdout).at(-1)).toBe('✔ all checks passed (oxlint)')
     expect(exitCode).toBe(0)
   })
 
   it('leaves tools without colors when it prints to a pipe', async () => {
-    const project = singleRepo().fake('oxlint', PRINT_FORCE_COLOR)
+    const project = singleRepo().fake('oxlint', PRINT_COLOR_SETTINGS)
 
     const { exitCode, stdout } = await project.uncheck(['--only=oxlint'])
 
     expect(stdout).toContain(
-      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nthe tool sees FORCE_COLOR=undefined\n',
+      '▶ oxlint --ignore-pattern=node_modules --no-error-on-unmatched-pattern\nthe tool sees FORCE_COLOR=undefined CLICOLOR_FORCE=undefined\n',
     )
     expect(stdout).not.toContain('\u001B[')
     expect(exitCode).toBe(0)

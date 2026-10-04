@@ -18,9 +18,11 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 
+/** The tools a test project gets unless it names its own. */
 export const TOOLS = ['sherif', 'oxlint', 'oxfmt', 'typescript'] as const
 
-export type Tool = (typeof TOOLS)[number]
+/** fallow would report the code most test projects leave unused, so only its own tests add it. */
+export type Tool = (typeof TOOLS)[number] | 'fallow'
 
 export type Files = Readonly<Record<string, string | object | null>>
 

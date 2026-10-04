@@ -32,6 +32,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '○ oxfmt skipped, not installed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       `✔ all checks passed (${checks.filter((name) => name === 'sherif' || name === 'tsc').join(', ')})`,
     ])
     expect(exitCode).toBe(0)
@@ -59,6 +60,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
     expect(exitCode).toBe(0)
@@ -83,7 +85,8 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, not selected by --only',
-      '✘ nothing to check: sherif not selected by --only, oxlint not installed, oxfmt not installed, tsc not selected by --only',
+      '○ fallow skipped, not selected by --only',
+      '✘ nothing to check: sherif not selected by --only, oxlint not installed, oxfmt not installed, tsc not selected by --only, fallow not selected by --only',
     ])
     expect(exitCode).toBe(1)
   })
@@ -101,6 +104,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(exitCode).toBe(0)
@@ -133,6 +137,7 @@ describe.each(LAYOUTS)('uncheck finding tools in a $name', ({ create, app, tsc }
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(exitCode).toBe(0)

@@ -26,6 +26,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '○ oxfmt skipped, not selected by --only',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint, tsc)',
     ])
     expect(exitCode).toBe(0)
@@ -43,6 +44,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '✔ oxlint passed',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       `✔ all checks passed (${checks.filter((name) => name !== 'oxfmt' && name !== 'tsc').join(', ')})`,
     ])
     expect(exitCode).toBe(0)
@@ -60,6 +62,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '✔ oxlint passed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
     expect(skipped.exitCode).toBe(0)
@@ -73,6 +76,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '✔ oxlint passed',
       '✘ oxfmt not installed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 2 checks failed: oxfmt',
     ])
     expect(required.exitCode).toBe(1)
@@ -95,6 +99,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       FULL_OXFMT,
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
     expect(exitCode).toBe(0)
@@ -108,6 +113,7 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '--skip=oxlint',
       '--skip=oxfmt',
       '--skip=tsc',
+      '--skip=fallow',
     ])
 
     expect(report(stdout)).toEqual([
@@ -116,7 +122,8 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       '○ oxlint skipped, disabled with --skip=oxlint',
       '○ oxfmt skipped, disabled with --skip=oxfmt',
       '○ tsc skipped, disabled with --skip=tsc',
-      '✘ nothing to check: sherif disabled with --skip=sherif, oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc',
+      '○ fallow skipped, disabled with --skip=fallow',
+      '✘ nothing to check: sherif disabled with --skip=sherif, oxlint disabled with --skip=oxlint, oxfmt disabled with --skip=oxfmt, tsc disabled with --skip=tsc, fallow disabled with --skip=fallow',
     ])
     expect(exitCode).toBe(1)
   })
@@ -130,7 +137,8 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       `uncheck in ${project.dir}`,
       ...SKIPPED_BESIDE_TSC,
       NOT_COVERED,
-      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
+      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files, fallow not selected by --only',
     ])
     expect(exitCode).toBe(1)
   })
@@ -148,7 +156,8 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
       `uncheck in ${project.dir}`,
       ...SKIPPED_BESIDE_TSC,
       NOT_COVERED,
-      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files',
+      '○ fallow skipped, not selected by --only',
+      '○ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers the given files, fallow not selected by --only',
     ])
     expect(exitCode).toBe(0)
   })
@@ -188,7 +197,8 @@ describe.each(LAYOUTS)('uncheck check selection in a $name', ({ create, app, tsc
         `uncheck in ${project.dir}`,
         ...SKIPPED_BESIDE_TSC,
         `○ tsc skipped, ${tscReason}`,
-        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${tscReason}`,
+        '○ fallow skipped, not selected by --only',
+        `${mark} nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${tscReason}, fallow not selected by --only`,
       ])
       expect(exitCode).toBe(expectedExitCode)
     },
@@ -207,7 +217,8 @@ describe('uncheck check selection', () => {
       '○ oxlint skipped, not installed',
       '○ oxfmt skipped, not installed',
       '○ tsc skipped, no tsconfig.json found',
-      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+      '○ fallow skipped, not installed',
+      '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found, fallow not installed',
     ])
     expect(exitCode).toBe(1)
   })
@@ -236,7 +247,8 @@ describe('uncheck check selection', () => {
         '○ oxlint skipped, not installed',
         '○ oxfmt skipped, not installed',
         '○ tsc skipped, no tsconfig.json found',
-        '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found',
+        '○ fallow skipped, not installed',
+        '✘ nothing to check: sherif not installed, oxlint not installed, oxfmt not installed, tsc no tsconfig.json found, fallow not installed',
       ])
       expect(exitCode).toBe(1)
     },
@@ -276,7 +288,7 @@ describe('uncheck check selection', () => {
     expect(stdout).toContain('USAGE')
     expect(stderr).toBe(
       cliError(
-        'Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "tsc"',
+        'Invalid value for flag --only: "eslint". Expected: "sherif" | "oxlint" | "oxfmt" | "tsc" | "fallow"',
       ),
     )
     expect(exitCode).toBe(1)

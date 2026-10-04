@@ -28,6 +28,7 @@ function blockedByLint(dir: string, tsc: string, file = 'src/ignore.ts'): string
     '✔ oxfmt passed',
     tsc,
     '✔ tsc passed',
+    '○ fallow skipped, not installed',
     '✘ 1 of 3 checks failed: oxlint',
   ]
 }
@@ -42,6 +43,7 @@ function fixedAndStaged(dir: string, tsc: string): string[] {
     '✔ oxfmt passed',
     tsc,
     '✔ tsc passed',
+    '○ fallow skipped, not installed',
     '✔ staged the fixes to src/spaced.ts',
     '✔ all checks passed (oxlint, oxfmt, tsc)',
   ]
@@ -169,6 +171,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
       ...SKIPPED_FOR_DELETIONS,
       TSC_WITH_REFERENCES,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (tsc)',
     ])
     expect(project.git('log', '--format=%s')).toBe('remove\ninit\n')
@@ -191,6 +194,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
       '✔ oxfmt passed',
       TSC_WITH_REFERENCES,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✔ all checks passed (oxlint, oxfmt, tsc)',
     ])
     expect(project.git('log', '--format=%s')).toBe('rename\ninit\n')
@@ -226,6 +230,7 @@ describe('committing with the prepared hook of several packages in a monorepo', 
       '▶ oxfmt --no-error-on-unmatched-pattern src/ignore.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, no tsconfig.json covers the given files',
+      '○ fallow skipped, not installed',
       '✘ 1 of 2 checks failed: oxlint',
     ])
     expect(project.git('log', '--format=%s')).toBe('init\n')

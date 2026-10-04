@@ -57,6 +57,7 @@ describe.each(LAYOUTS)(
         '✔ oxfmt passed',
         tsc,
         '✔ tsc passed',
+        '○ fallow skipped, not installed',
         '✔ all checks passed (oxlint, oxfmt, tsc)',
       ])
       expect(project.read(`${app}src/index.ts`)).toBe(`${index}export const later = 2;\n`)
@@ -91,6 +92,7 @@ describe.each(LAYOUTS)(
         '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
         '✔ oxfmt passed',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         '✔ all checks passed (oxlint, oxfmt)',
       ])
       expect(project.read(`${app}src/extra.ts`)).toBe('export const extra = 1;\n')
@@ -113,6 +115,7 @@ describe.each(LAYOUTS)(
         ...SKIPPED_FOR_DELETIONS,
         tsc,
         '✔ tsc passed',
+        '○ fallow skipped, not installed',
         '✔ all checks passed (tsc)',
       ])
       expect(project.read(`${app}src/i.ts`)).toBe(UNFORMATTED)
@@ -132,6 +135,7 @@ describe.each(LAYOUTS)(
         '▶ oxfmt --no-error-on-unmatched-pattern src/new.ts',
         '✔ oxfmt passed',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         '✔ all checks passed (oxfmt)',
       ])
       expect(project.read(`${app}src/new.ts`)).toBe('export const fresh = 1;\n')
@@ -157,6 +161,7 @@ describe.each(LAYOUTS)(
         '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
         '✔ oxfmt passed',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         '✔ all checks passed (oxfmt)',
       ])
     })
@@ -179,6 +184,7 @@ describe.each(LAYOUTS)(
         '✘ oxfmt failed',
         tsc,
         '✔ tsc passed',
+        '○ fallow skipped, not installed',
         '✘ 1 of 3 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
       ])
@@ -201,10 +207,39 @@ describe.each(LAYOUTS)(
         FULL_OXFMT,
         '✘ oxfmt failed',
         '○ tsc skipped, not selected by --only',
+        '○ fallow skipped, not selected by --only',
         '✘ 1 of 1 checks failed: oxfmt',
         '  rerun with `--fix` to apply oxfmt fixes',
       ])
       expect(stderr).toContain('src/legacy.ts')
+    })
+
+    it('hands fallow the changed files from the root of the project', async () => {
+      const orphan = 'export const orphan = 1;\n'
+      const project = create({ [`${app}lib/old.ts`]: orphan }, { tools: ['fallow'] }).write({
+        [`${app}src/orphan.ts`]: orphan,
+      })
+
+      const { exitCode, stdout, stderr } = await stopHook(project, app, CLAUDE_CODE_STOP, {
+        args: ['--fix', '--only=fallow'],
+      })
+
+      expect(exitCode).toBe(2)
+      expect(stdout).toBe('')
+      expect(stderr).toContain(`Unused files (1)\n  ${app}src/orphan.ts\n`)
+      expect(report(stderr)).toEqual([
+        `uncheck in ${project.path(app, '.')}`,
+        '○ sherif skipped, not selected by --only',
+        '○ oxlint skipped, not selected by --only',
+        '○ oxfmt skipped, not selected by --only',
+        '○ tsc skipped, not selected by --only',
+        app === ''
+          ? '▶ fallow dead-code --quiet --file=src/orphan.ts'
+          : `▶ fallow dead-code --quiet --root=../.. --file=${app}src/orphan.ts`,
+        '✘ fallow failed',
+        '✘ 1 of 1 checks failed: fallow',
+      ])
+      expect(project.read(`${app}src/orphan.ts`)).toBe(orphan)
     })
   },
 )
@@ -226,6 +261,7 @@ describe('hooks run with deleted files in a single repo', () => {
         ...SKIPPED_FOR_DELETIONS,
         '▶ tsc -p tsconfig.json --noEmit',
         '✘ tsc failed',
+        '○ fallow skipped, not installed',
         '✘ 1 of 1 checks failed: tsc',
       ])
       expect(stderr).toContain(UTILS_NOT_FOUND)
@@ -251,6 +287,7 @@ describe('hooks run with deleted files in a single repo', () => {
       '✔ oxfmt passed',
       '▶ tsc -p tsconfig.json --noEmit',
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 3 checks failed: tsc',
     ])
     expect(stderr).toContain(UTILS_NOT_FOUND)
@@ -285,6 +322,7 @@ describe('hooks run with a changed package.json in a monorepo', () => {
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/package.json',
       '✔ oxfmt passed',
       '○ tsc skipped, no tsconfig.json covers the given files',
+      '○ fallow skipped, not installed',
       '✘ 1 of 3 checks failed: sherif',
     ])
     expect(stderr).toContain('multiple-dependency-versions')

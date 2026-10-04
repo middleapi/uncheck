@@ -35,6 +35,7 @@ function expectSentBackByOxfmt({ exitCode, stdout, stderr }: Run, dir: string): 
     '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
     '✘ oxfmt failed',
     '○ tsc skipped, not selected by --only',
+    '○ fallow skipped, not selected by --only',
     '✘ 1 of 1 checks failed: oxfmt',
     '  rerun with `--fix` to apply oxfmt fixes',
   ])
@@ -57,6 +58,7 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
     expect(project.read(`${app}src/extra.ts`)).toBe(FORMATTED)
@@ -127,6 +129,7 @@ describe.each(LAYOUTS)('hooks run finds the project in a $name', ({ create, app,
         '○ oxfmt skipped, not selected by --only',
         tsc,
         '✘ tsc failed',
+        '○ fallow skipped, not selected by --only',
         '✘ 1 of 1 checks failed: tsc',
       ])
     },
@@ -240,6 +243,7 @@ describe('hooks run in a monorepo', () => {
       '▶ oxfmt --no-error-on-unmatched-pattern packages/app/src/extra.ts packages/core/src/extra.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
     expect(project.read('packages/app/src/extra.ts')).toBe(FORMATTED)
@@ -273,6 +277,7 @@ describe('hooks run in a monorepo', () => {
       '▶ oxfmt --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxfmt)',
     ])
     expect(project.read('packages/app/src/extra.ts')).toBe(FORMATTED)

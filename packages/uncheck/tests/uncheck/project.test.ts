@@ -25,6 +25,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       `✔ all checks passed (${checks.join(', ')})`,
     ])
     expect(exitCode).toBe(0)
@@ -47,6 +48,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
       '✔ oxfmt passed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length} checks failed: oxlint`,
       '  rerun with `--fix` to apply oxlint fixes',
     ])
@@ -68,6 +70,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
       '✘ oxfmt failed',
       tsc,
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length} checks failed: oxfmt`,
       '  rerun with `--fix` to apply oxfmt fixes',
     ])
@@ -91,6 +94,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
       '✔ oxfmt passed',
       tsc,
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length} checks failed: tsc`,
     ])
     expect(exitCode).toBe(1)
@@ -110,6 +114,7 @@ describe.each(LAYOUTS)('uncheck in a $name', ({ create, app, tsc }) => {
       FULL_OXFMT,
       '✔ oxfmt passed',
       `✘ tsc found ${tsconfigs} tsconfig.json but typescript is not installed`,
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length} checks failed: tsc`,
     ])
     expect(exitCode).toBe(1)
@@ -133,6 +138,7 @@ describe('uncheck in a monorepo', () => {
       '✔ oxfmt passed',
       '▶ tsc -b tsconfig.json',
       '✔ tsc passed',
+      '○ fallow skipped, not installed',
       '✘ 1 of 4 checks failed: sherif',
       '  rerun with `--fix` to apply sherif fixes',
     ])

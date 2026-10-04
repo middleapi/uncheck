@@ -123,6 +123,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       '✘ oxfmt failed',
       tsc,
       '✘ tsc failed',
+      '○ fallow skipped, not installed',
       `✘ 3 of ${checks.length} checks failed: oxlint, oxfmt, tsc`,
       '  rerun with `--fix` to apply oxlint and oxfmt fixes',
     ])
@@ -148,6 +149,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       '✔ oxlint passed',
       '○ oxfmt skipped, not selected by --only',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '✔ all checks passed (oxlint)',
     ])
     expect(exitCode).toBe(0)
@@ -170,6 +172,7 @@ describe.each(LAYOUTS)('uncheck with the middleapi presets in a $name', ({ creat
       FULL_OXFMT_FIX,
       '✔ oxfmt passed',
       '○ tsc skipped, disabled with --skip=tsc',
+      '○ fallow skipped, not installed',
       `✘ 1 of ${checks.length - 1} checks failed: oxlint`,
     ])
     expect(exitCode).toBe(1)

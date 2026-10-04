@@ -35,7 +35,8 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       `uncheck in ${project.path(app, '.')}`,
       ...SKIPPED_BESIDE_TSC,
       `○ tsc skipped, ${uncoveredFolder}`,
-      `✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${uncoveredFolder}`,
+      '○ fallow skipped, not selected by --only',
+      `✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc ${uncoveredFolder}, fallow not selected by --only`,
     ])
   })
 
@@ -94,6 +95,7 @@ describe.each(LAYOUTS)('tsc in a $name', ({ create, app, tsc }) => {
       `uncheck in ${project.path(app, '.')}`,
       ...SKIPPED_BESIDE_TSC,
       '✘ tsc found 2 tsconfig.json but typescript is not installed',
+      '○ fallow skipped, not selected by --only',
       '✘ 1 of 1 checks failed: tsc',
     ])
     expect(await tscPlan(project, app, ['scripts/release.ts'])).toEqual([
@@ -214,7 +216,8 @@ describe('tsc with the real compiler in a single repo', () => {
       `uncheck in ${project.path('scripts')}`,
       ...SKIPPED_BESIDE_TSC,
       '○ tsc skipped, no tsconfig.json covers this folder',
-      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers this folder',
+      '○ fallow skipped, not selected by --only',
+      '✘ nothing to check: sherif not selected by --only, oxlint not selected by --only, oxfmt not selected by --only, tsc no tsconfig.json covers this folder, fallow not selected by --only',
     ])
   })
 

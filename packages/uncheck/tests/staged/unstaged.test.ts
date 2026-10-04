@@ -42,6 +42,7 @@ describe.each(LAYOUTS)('uncheck staged with unstaged changes in a $name', ({ cre
       '▶ oxfmt --check --no-error-on-unmatched-pattern src/extra.ts',
       '✔ oxfmt passed',
       '○ tsc skipped, not selected by --only',
+      '○ fallow skipped, not selected by --only',
       '○ unstaged changes of src/extra.ts restored',
       '✔ all checks passed (oxlint, oxfmt)',
     ])
@@ -416,6 +417,7 @@ describe.each(LAYOUTS)(
           '✔ oxlint passed',
           '○ oxfmt skipped, not selected by --only',
           '○ tsc skipped, not selected by --only',
+          '○ fallow skipped, not selected by --only',
           strandedLine,
           '✔ all checks passed (oxlint)',
         ])

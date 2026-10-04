@@ -54,20 +54,28 @@ export const resolveBin = Effect.fn(function* (pkg: string, cwd: string, binName
 /** Windows caps a whole command line, node and the tool path included, at 32,767 characters. */
 const MAX_ARGV_LENGTH = 30_000
 
-/** No arguments make no batch: a tool or git command run without paths acts on every file. */
-export function argvBatches(args: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> {
+/**
+ * No arguments make no batch: a tool or git command run without paths acts on every file. `prefix`
+ * is what each argument gets in front of it, as `CheckCommand.filePrefix`.
+ */
+export function argvBatches(
+  args: ReadonlyArray<string>,
+  prefix = '',
+): ReadonlyArray<ReadonlyArray<string>> {
   const batches: string[][] = []
   let length = 0
 
   for (const arg of args) {
     // Room for the separator and the quotes around an argument with a space.
-    if (batches.length === 0 || length + arg.length + 3 > MAX_ARGV_LENGTH) {
+    const room = prefix.length + arg.length + 3
+
+    if (batches.length === 0 || length + room > MAX_ARGV_LENGTH) {
       batches.push([])
       length = 0
     }
 
     batches[batches.length - 1]!.push(arg)
-    length += arg.length + 3
+    length += room
   }
 
   return batches
@@ -79,15 +87,22 @@ function asFileArgument(file: string): string {
 }
 
 /** Output goes through `Console` so it stays in order with uncheck's own lines and can be captured. */
-export const execute = Effect.fn(function* ({ bin, args, files = [] }: CheckCommand, cwd: string) {
+export const execute = Effect.fn(function* (
+  { bin, args, files = [], filePrefix }: CheckCommand,
+  cwd: string,
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const fileArgs = files.map((file) =>
+    filePrefix === undefined ? asFileArgument(file) : `${filePrefix}${file}`,
+  )
 
   const handle = yield* spawner.spawn(
-    ChildProcess.make(process.execPath, [bin.entry, ...args, ...files.map(asFileArgument)], {
+    ChildProcess.make(process.execPath, [bin.entry, ...args, ...fileArgs], {
       cwd,
       stdin: 'ignore',
-      // A piped tool cannot see the terminal, so tell it when colors are wanted.
-      env: colors ? { FORCE_COLOR: '1' } : {},
+      // A piped tool cannot see the terminal, so tell it when colors are wanted. Node tools read
+      // FORCE_COLOR, and Rust ones like sherif and fallow CLICOLOR_FORCE.
+      env: colors ? { FORCE_COLOR: '1', CLICOLOR_FORCE: '1' } : {},
       extendEnv: true,
     }),
   )
