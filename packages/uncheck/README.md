@@ -236,7 +236,7 @@ Run both `init` and uncheck at the workspace root: the folder whose `package.jso
 
 **sherif** checks the workspace as a whole, so it runs only at the root. Configure it in the `sherif` field of the root `package.json`, [as sherif documents](https://github.com/QuiiBz/sherif). It only reports in the hooks and when `CI` is set, so run `npx uncheck --fix` locally to apply its fixes. Leave out `"fix": true`, or every run that only reports fails.
 
-**knip** analyzes the workspace as a whole and reads its config at the root. In a package, uncheck runs it from the workspace root with `--workspace`, so it reports only on that package.
+**knip** analyzes the workspace as a whole and reads its config at the root. In a package, uncheck runs it from the workspace root with `--workspace`, so it reports only on that package, with paths from the root. A package your knip config lists in `ignoreWorkspaces` is skipped, and one with a knip config of its own is checked on its own, as `knip` run there would.
 
 **TypeScript.** uncheck finds every `tsconfig.json` and follows their `references`, so a config with another name, like `tsconfig.app.json`, is checked when a reference leads to it. Projects linked by `references` are built together with one `tsc -b`, and the rest are checked with `tsc -p --noEmit`.
 

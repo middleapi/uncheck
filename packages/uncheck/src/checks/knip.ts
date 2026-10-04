@@ -1,10 +1,17 @@
 import { posix } from 'node:path'
 
-import { Effect, FileSystem, Path, Predicate } from 'effect'
+import { Effect, FileSystem, Option, Path, Predicate } from 'effect'
+import { parse as parseJsonc } from 'jsonc-parser'
 import { Minimatch } from 'minimatch'
 
 import { NothingToCheck } from '../errors.ts'
-import { foldersAboveInRepository, readJson, slashedRelative } from '../files.ts'
+import {
+  firstFile,
+  foldersAboveInRepository,
+  inNodeModules,
+  readJson,
+  slashedRelative,
+} from '../files.ts'
 import { resolveBin } from '../tool.ts'
 import type { Check } from '../types.ts'
 
@@ -54,12 +61,14 @@ export const knip: Check = {
       )
     }
 
+    const manifest = yield* readJson(path.join(cwd, 'package.json'))
+
     // knip reads package.json only in the folder it runs in, and fails without one.
-    if ((yield* readJson(path.join(cwd, 'package.json'))) === undefined) {
+    if (manifest === undefined) {
       return yield* Effect.fail(new NothingToCheck({ reason: 'no package.json found' }))
     }
 
-    const root = yield* enclosingWorkspace(cwd)
+    const root = yield* enclosingWorkspace(cwd, manifest)
 
     // knip takes no files, since only the whole project shows what nothing uses. In a package of a
     // workspace it would take the package for a project of its own, and the dependencies installed
@@ -79,69 +88,150 @@ export const knip: Check = {
   }),
 }
 
+/** Where knip looks for its config in a folder, in its order, over the `knip` field of package.json. */
+const KNIP_CONFIGS = [
+  'knip.json',
+  'knip.jsonc',
+  '.knip.json',
+  '.knip.jsonc',
+  'knip.ts',
+  'knip.js',
+  'knip.config.ts',
+  'knip.config.js',
+]
+
 /**
  * The nearest workspace root above `cwd` in its repository, when that root lists `cwd` among its
- * packages, unless `cwd` is a workspace root itself.
+ * packages, unless `cwd` is a workspace root itself or has a knip config, which knip reads only when
+ * it runs there.
  */
-const enclosingWorkspace = Effect.fn(function* (cwd: string) {
+const enclosingWorkspace = Effect.fn(function* (
+  cwd: string,
+  manifest: Readonly<Record<string, unknown>>,
+) {
   const path = yield* Path.Path
 
-  if ((yield* workspacePatterns(cwd)) !== undefined) {
+  if (
+    manifest.knip !== undefined ||
+    Option.isSome(yield* firstFile(KNIP_CONFIGS.map((name) => path.join(cwd, name)))) ||
+    (yield* workspaceAt(cwd, manifest)) !== undefined
+  ) {
     return undefined
   }
 
   for (const dir of yield* foldersAboveInRepository(cwd)) {
-    const patterns = yield* workspacePatterns(dir)
+    const rootManifest = yield* readJson(path.join(dir, 'package.json'))
+    // knip only runs where a package.json is.
+    const workspace = rootManifest === undefined ? undefined : yield* workspaceAt(dir, rootManifest)
 
-    if (patterns !== undefined) {
-      return isPackageOf(patterns, slashedRelative(path, dir, cwd)) ? dir : undefined
+    if (workspace === undefined) {
+      continue
     }
+
+    const folder = slashedRelative(path, dir, cwd)
+
+    // knip looks for the package.json of its packages outside node_modules.
+    if (
+      inNodeModules(folder) ||
+      !matches(workspace.packages.map(manifestGlob), `${folder}/package.json`)
+    ) {
+      return undefined
+    }
+
+    if (matches(workspace.ignored, folder)) {
+      return yield* Effect.fail(new NothingToCheck({ reason: "listed in knip's ignoreWorkspaces" }))
+    }
+
+    return dir
   }
 
   return undefined
 })
 
-/** The package globs of a workspace root, from pnpm-workspace.yaml before package.json as knip reads them. */
-const workspacePatterns = Effect.fn(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem
+interface Workspace {
+  /** The globs of the package manager, then those knip's config sets up. */
+  readonly packages: ReadonlyArray<string>
+  /** The folders knip's config leaves out, apart from those it only leaves out with --production. */
+  readonly ignored: ReadonlyArray<string>
+}
+
+/** The workspace `dir` is the root of as knip sees it, taking pnpm-workspace.yaml before package.json. */
+const workspaceAt = Effect.fn(function* (dir: string, manifest: Readonly<Record<string, unknown>>) {
   const path = yield* Path.Path
 
-  const manifest = yield* readJson(path.join(dir, 'package.json'))
-
-  // knip only runs where a package.json is.
-  if (manifest === undefined) {
-    return undefined
+  const yaml = yield* readText(path.join(dir, 'pnpm-workspace.yaml'))
+  const config = yield* knipConfig(dir, manifest)
+  const { workspaces } = manifest
+  const listed: ReadonlyArray<unknown> = [
+    ...(pnpmPackages(yaml) ??
+      (Array.isArray(workspaces)
+        ? workspaces
+        : Predicate.hasProperty(workspaces, 'packages') && Array.isArray(workspaces.packages)
+          ? workspaces.packages
+          : [])),
+    // The root is always one of knip's workspaces.
+    ...(Predicate.isObject(config.workspaces)
+      ? Object.keys(config.workspaces).filter((name) => name !== '.')
+      : []),
+  ]
+  const packages = listed.filter(Predicate.isString)
+  const workspace: Workspace = {
+    packages,
+    ignored: (Array.isArray(config.ignoreWorkspaces) ? config.ignoreWorkspaces : [])
+      .filter(Predicate.isString)
+      .filter((glob) => !glob.endsWith('!')),
   }
 
-  const yaml = yield* fs
-    .readFileString(path.join(dir, 'pnpm-workspace.yaml'))
-    .pipe(Effect.orElseSucceed(() => ''))
-  const { workspaces } = manifest
-  const listed =
-    pnpmPackages(yaml) ??
-    (Array.isArray(workspaces)
-      ? workspaces
-      : Predicate.hasProperty(workspaces, 'packages') && Array.isArray(workspaces.packages)
-        ? workspaces.packages
-        : [])
-  const patterns: ReadonlyArray<string> = listed.filter(Predicate.isString)
-
-  return patterns.length > 0 ? patterns : undefined
+  return packages.length > 0 ? workspace : undefined
 })
 
-/** Whether `folder` holds a package `patterns` list, matching its package.json as knip does. */
-function isPackageOf(patterns: ReadonlyArray<string>, folder: string): boolean {
-  const manifest = `${folder}/package.json`
-  const matches = (pattern: string) =>
-    new Minimatch(posix.join(pattern, 'package.json'), {
-      nocomment: true,
-      nonegate: true,
-      platform: 'linux',
-    }).match(manifest)
+/** The config knip reads in `dir`: its first config file over the `knip` field of package.json. */
+const knipConfig = Effect.fn(function* (dir: string, manifest: Readonly<Record<string, unknown>>) {
+  const path = yield* Path.Path
+
+  const file = Option.getOrUndefined(
+    yield* firstFile(KNIP_CONFIGS.map((name) => path.join(dir, name))),
+  )
+  // Only knip can run a config in code, so beside one the field is all there is to read.
+  const text = file !== undefined && /\.jsonc?$/.test(file) ? yield* readText(file) : ''
+  // knip takes comments and trailing commas in either kind of file, and merges the two like this.
+  const config: Readonly<Record<string, unknown>> = Object.assign(
+    {},
+    manifest.knip,
+    parseJsonc(text, undefined, { allowTrailingComma: true }),
+  )
+
+  return config
+})
+
+/** The text of `file`, or none when it is missing or cannot be read. */
+function readText(file: string) {
+  return FileSystem.FileSystem.use((fs) => fs.readFileString(file)).pipe(
+    Effect.orElseSucceed(() => ''),
+  )
+}
+
+/** The glob of the package.json of the packages `glob` lists, as knip writes it, `!` and all. */
+function manifestGlob(glob: string): string {
+  // knip drops the first `./` wherever it is.
+  const listed = glob.replace('./', '')
+  const negation = listed.startsWith('!') ? '!' : ''
+
+  return `${negation}${posix.join(listed.slice(negation.length), 'package.json')}`
+}
+
+/**
+ * Whether `target` matches one of `globs` and none of the `!` ones, as picomatch matches it for
+ * knip, which takes a glob equal to the path as matching too.
+ */
+function matches(globs: ReadonlyArray<string>, target: string): boolean {
+  const matchesGlob = (glob: string) =>
+    glob === target ||
+    new Minimatch(glob, { nocomment: true, nonegate: true, platform: 'linux' }).match(target)
 
   return (
-    patterns.some((pattern) => !pattern.startsWith('!') && matches(pattern)) &&
-    !patterns.some((pattern) => pattern.startsWith('!') && matches(pattern.slice(1)))
+    globs.some((glob) => !glob.startsWith('!') && matchesGlob(glob)) &&
+    !globs.some((glob) => glob.startsWith('!') && matchesGlob(glob.slice(1)))
   )
 }
 

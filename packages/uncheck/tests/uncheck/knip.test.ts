@@ -14,6 +14,14 @@ const NOT_SELECTED_REASONS =
 
 const ORPHAN = 'export const orphan = 1;\n'
 
+const APP_MANIFEST = {
+  name: '@repo/app',
+  version: '1.0.0',
+  private: true,
+  type: 'module',
+  dependencies: { '@repo/core': 'workspace:*' },
+}
+
 interface KnipProjectOptions extends Pick<ProjectOptions, 'git'> {
   /** Merged into the top package.json. */
   readonly manifest?: object
@@ -212,6 +220,24 @@ describe('uncheck knip in a single repo', () => {
     )
     expect(exitCode).toBe(0)
   })
+  it("checks a folder that knip's config sets up as a workspace from the root", async () => {
+    const project = withKnip(singleRepo, {
+      'knip.json': { workspaces: { '.': {}, 'tools/gen': {} } },
+      'tools/gen/package.json': { name: 'gen', private: true, type: 'module' },
+      'tools/gen/index.js': 'export const generated = 1;\n',
+    })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=knip'], { cwd: 'tools/gen' })
+
+    expect(report(stdout)).toEqual(
+      knipReport(
+        `uncheck in ${project.path('tools/gen')}`,
+        '▶ knip --directory=../.. --workspace=tools/gen',
+        'passed',
+      ),
+    )
+    expect(exitCode).toBe(0)
+  })
 })
 
 const IN_WORKSPACE = '▶ knip --directory=../.. --workspace=packages/app'
@@ -312,6 +338,102 @@ describe('uncheck knip in a monorepo', () => {
     })
 
     const { stdout } = await project.uncheck(['--only=knip'], { cwd: 'packages/app' })
+
+    expect(report(stdout)).toContain('▶ knip')
+  })
+
+  it.each([
+    ['a knip.json', { 'packages/app/knip.json': {} }],
+    [
+      'a knip field in its package.json',
+      { 'packages/app/package.json': { ...APP_MANIFEST, knip: {} } },
+    ],
+  ])('runs knip on its own in a package with %s, which knip reads only there', async (_, files) => {
+    const project = withKnip(monorepo, files)
+
+    const { stdout } = await project.uncheck(['--only=knip'], { cwd: 'packages/app' })
+
+    expect(report(stdout)).toContain('▶ knip')
+  })
+
+  it("skips knip in a package that knip's config leaves out", async () => {
+    const project = withKnip(monorepo, { 'knip.json': { ignoreWorkspaces: ['packages/app'] } })
+    const reason = "listed in knip's ignoreWorkspaces"
+
+    const { exitCode, stdout } = await project.uncheck(['--only=knip'], { cwd: 'packages/app' })
+
+    expect(report(stdout)).toEqual([
+      `uncheck in ${project.path('packages/app')}`,
+      ...OTHERS_NOT_SELECTED,
+      `○ knip skipped, ${reason}`,
+      TSC_NOT_SELECTED,
+      `✘ nothing to check: ${NOT_SELECTED_REASONS}, knip ${reason}, tsc not selected by --only`,
+    ])
+    expect(exitCode).toBe(1)
+  })
+
+  it.each([
+    [
+      'leaves it out only with --production',
+      { 'knip.json': { ignoreWorkspaces: ['packages/app!'] } },
+      {},
+    ],
+    [
+      'leaves out all packages but it, in a file with comments',
+      {
+        'knip.jsonc':
+          '{\n  // but app\n  "ignoreWorkspaces": ["packages/core", "!packages/app"],\n}\n',
+      },
+      {},
+    ],
+    [
+      'file leaves it in over the knip field of package.json',
+      { 'knip.json': { ignoreWorkspaces: [] } },
+      { knip: { ignoreWorkspaces: ['packages/app'] } },
+    ],
+    ['is code, which only knip can run', { 'knip.ts': 'export default {}\n' }, {}],
+  ])("checks a package when knip's config %s", async (_, files, manifest) => {
+    const project = withKnip(monorepo, files, { manifest })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=knip'], { cwd: 'packages/app' })
+
+    expect(report(stdout)).toEqual(
+      knipReport(`uncheck in ${project.path('packages/app')}`, IN_WORKSPACE, 'passed'),
+    )
+    expect(exitCode).toBe(0)
+  })
+
+  it('checks a package whose folder name is a glob, as knip takes a glob equal to the path', async () => {
+    const project = withKnip(monorepo, {
+      'pnpm-workspace.yaml':
+        "packages:\n  - packages/app\n  - packages/core\n  - 'packages/[legacy]'\n",
+      'packages/[legacy]/package.json': { name: 'legacy', private: true, type: 'module' },
+      'packages/[legacy]/index.js': 'export const legacy = 1;\n',
+    })
+
+    const { exitCode, stdout } = await project.uncheck(['--only=knip'], {
+      cwd: 'packages/[legacy]',
+    })
+
+    expect(report(stdout)).toEqual(
+      knipReport(
+        `uncheck in ${project.path('packages/[legacy]')}`,
+        '▶ knip --directory=../.. --workspace=packages/[legacy]',
+        'passed',
+      ),
+    )
+    expect(exitCode).toBe(0)
+  })
+
+  it('runs knip on its own under node_modules, where knip finds no packages', async () => {
+    const project = withKnip(monorepo, {
+      'pnpm-workspace.yaml': "packages:\n  - 'packages/**'\n",
+      'packages/app/node_modules/dep/package.json': { name: 'dep', private: true },
+    })
+
+    const { stdout } = await project.uncheck(['--only=knip'], {
+      cwd: 'packages/app/node_modules/dep',
+    })
 
     expect(report(stdout)).toContain('▶ knip')
   })
