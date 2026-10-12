@@ -52,12 +52,12 @@
     "prepack": "obuild"
   },
   "devDependencies": {
-    "@effect/platform-node": "^4.0.0",
-    "effect": "^4.0.0",
+    "@effect/platform-node": "^4.0.2",
+    "effect": "^4.0.2",
     "jsonc-parser": "^3.3.1",
     "minimatch": "^10.2.6",
-    "oxfmt": "^0.71.0",
-    "oxlint": "^1.86.0",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
     "sherif": "^1.13.0",
     "typescript": "^7.0.2"
   },
