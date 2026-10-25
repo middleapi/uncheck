@@ -378,6 +378,18 @@ Like what we build over at [middleapi](https://github.com/middleapi)? You can he
 
 With thanks to [40 past sponsors](https://htmlpreview.github.io/?https://github.com/middleapi/static/blob/main/sponsors.svg) who helped get us here.
 
+## Open Source Programs
+
+[middleapi](https://github.com/middleapi) is supported by these open source programs:
+
+<table>
+  <tr>
+   <td align="center"><a href="https://claude.com/contact-sales/claude-for-oss" target="_blank" rel="noopener" title="Claude for Open Source"><img src="https://cdn.simpleicons.org/claude" width="64" alt="Claude"/><br />Claude</a></td>
+   <td align="center"><a href="https://pullfrog.com/for-oss" target="_blank" rel="noopener" title="Pullfrog for OSS"><img src="https://avatars.githubusercontent.com/in/1768019?s=128&amp;v=4" width="64" alt="Pullfrog"/><br />Pullfrog</a></td>
+   <td align="center"><a href="https://macroscope.com/open-source" target="_blank" rel="noopener" title="Macroscope for Open Source"><img src="https://avatars.githubusercontent.com/in/900172?s=128&amp;v=4" width="64" alt="Macroscope"/><br />Macroscope</a></td>
+  </tr>
+</table>
+
 ## License
 
 Distributed under the MIT License. See [LICENCE](https://github.com/middleapi/uncheck/blob/main/LICENCE) for more information.
