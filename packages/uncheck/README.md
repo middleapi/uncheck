@@ -5,7 +5,7 @@
       <img alt="codecov" src="https://codecov.io/gh/middleapi/uncheck/branch/main/graph/badge.svg">
   </a>
   <a href="https://www.npmjs.com/package/uncheck">
-    <img alt="weekly downloads" src="https://img.shields.io/npm/dw/uncheck?logo=npm" />
+    <img alt="monthly downloads" src="https://img.shields.io/npm/dm/uncheck?logo=npm" />
   </a>
   <a href="https://app.codspeed.io/middleapi/uncheck?utm_source=badge">
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed" />
